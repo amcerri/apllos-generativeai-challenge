@@ -1,0 +1,3 @@
+data/docs/*.pdf
+data/docs/*.docx
+data/raw/analytics/*.csv
