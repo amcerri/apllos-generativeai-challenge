@@ -1,0 +1,85 @@
+# -----------------------------------------------------------------------------
+# Version control
+# -----------------------------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+.github/
+
+# -----------------------------------------------------------------------------
+# OS / Editors
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+__pypackages__/
+
+# -----------------------------------------------------------------------------
+# Builds / packaging / tooling caches
+# -----------------------------------------------------------------------------
+build/
+dist/
+*.egg-info/
+*.whl
+.cache/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.pytype/
+
+# Coverage / reports
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Logs
+logs/
+*.log
+
+# -----------------------------------------------------------------------------
+# Environment files (provide .env at runtime, not at build time)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# -----------------------------------------------------------------------------
+# Docker / Compose / local ops
+# -----------------------------------------------------------------------------
+backups/
+.backups/
+
+# -----------------------------------------------------------------------------
+# Project data (large / local-only)
+# -----------------------------------------------------------------------------
+# Exclude all data by default to keep images lean. Scripts and runtime mount
+# these paths via volumes (see Makefile) rather than baking data into images.
+data/**
+
+# If you keep placeholders, uncomment these lines to allow them:
+#!data/.gitkeep
+#!data/raw/.gitkeep
+#!data/docs/.gitkeep
+
+# Temporary scratch space under data
+# (kept separate in case you decide to COPY specific subtrees later)
+# data/**/tmp/**
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+*.ipynb_checkpoints
+.pre-commit-config.yaml
