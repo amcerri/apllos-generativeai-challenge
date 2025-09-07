@@ -1,0 +1,65 @@
+# Model catalog and defaults (environment variables may override values at runtime)
+version: 1
+
+defaults:
+  provider: openai
+  api_base: ${OPENAI_API_BASE:-}
+  request_timeout_ms: 30000
+  max_retries: 3
+
+models:
+  # Router: lightweight classifier that produces RouterDecision
+  router:
+    provider: ${ROUTER_PROVIDER:-openai}
+    name: ${ROUTER_MODEL:-gpt-4.1-mini}
+    parameters:
+      temperature: 0.0
+      max_tokens: 400
+
+  # Analytics planner: reasoning model that synthesizes safe SQL
+  analytics_planner:
+    primary:
+      provider: ${ANALYTICS_PROVIDER:-openai}
+      name: ${ANALYTICS_PLANNER_MODEL:-o3}
+      parameters:
+        temperature: 0.0
+        max_tokens: 800
+    fallback:
+      provider: ${ANALYTICS_PROVIDER:-openai}
+      name: ${ANALYTICS_PLANNER_MODEL_FALLBACK:-o4-mini}
+      parameters:
+        temperature: 0.0
+        max_tokens: 800
+
+  # Knowledge: answerer used after retrieval; mini is a budget mode
+  knowledge_answerer:
+    primary:
+      provider: ${KNOWLEDGE_PROVIDER:-openai}
+      name: ${KNOWLEDGE_MODEL:-gpt-4.1}
+      parameters:
+        temperature: 0.2
+        max_tokens: 900
+    mini:
+      provider: ${KNOWLEDGE_PROVIDER:-openai}
+      name: ${KNOWLEDGE_MODEL_MINI:-gpt-4.1-mini}
+      parameters:
+        temperature: 0.2
+        max_tokens: 700
+
+  # Commerce: extraction with structured outputs (JSON)
+  commerce_extractor:
+    provider: ${COMMERCE_PROVIDER:-openai}
+    name: ${COMMERCE_MODEL:-gpt-4.1}
+    parameters:
+      temperature: 0.1
+      max_tokens: 900
+    output:
+      format: json_schema
+
+  # Embeddings: pgvector ingestion & retrieval
+  embeddings:
+    provider: ${EMBEDDINGS_PROVIDER:-openai}
+    name: ${EMBEDDINGS_MODEL:-text-embedding-3-small}
+    parameters:
+      dimensions: 1536   # default dims for text-embedding-3-small
+      batch_size: 256
