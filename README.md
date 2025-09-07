@@ -2,8 +2,6 @@
 
 LangGraph-based engineering assistant that routes user requests to specialized agents — **analytics**, **knowledge**, **commerce**, and **triage** — and responds to end users in **pt-BR**. The runtime supports persistence (checkpointer), optional human-in-the-loop interruptions, and structured logging + (optional) tracing.
 
-> This repo is built **file-by-file** following an explicit order. We only commit at the **end of each phase**.
-
 ---
 
 ## Overview
@@ -116,8 +114,6 @@ pytest -q
 ## Code & prompts conventions
 - **Language**: source code in **English**; runtime answers to users in **pt-BR**.
 - **Style**: PEP-8, PEP-257 docstrings, full type hints.
-- **Prompts**: versioned under `app/prompts/{routing,analytics,knowledge,commerce}`; few-shot, contrastive, and minimal.
-- **Git workflow**: branches as `<type>/<area>-<scope>/<short-task-slug>`; **Conventional Commits**; **commit only at the end of each phase** in this POC.
 
 ---
 
@@ -125,8 +121,3 @@ pytest -q
 - Analytics: allowlist-only SQL, read-only, no DDL/DML, no `SELECT *`, enforced LIMITs.
 - Knowledge (RAG): citations required; use `no_context=true` with follow-ups when retrieval signal is weak.
 - Commerce: normalize amounts/currencies/dates; validate line sum ≈ subtotal; flag risks/warnings.
-
----
-
-## License
-MIT
