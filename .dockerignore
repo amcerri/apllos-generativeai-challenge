@@ -69,6 +69,10 @@ backups/
 # these paths via volumes (see Makefile) rather than baking data into images.
 data/**
 
+# --- allowlist for image context ---
+# We ignore `data/` broadly, but we want sample SQL assets included in the image.
+!data/samples/**
+
 # If you keep placeholders, uncomment these lines to allow them:
 #!data/.gitkeep
 #!data/raw/.gitkeep

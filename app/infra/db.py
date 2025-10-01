@@ -16,6 +16,9 @@ Integration
     - Call `configure_from_config(cfg)` at bootstrap.
     - Obtain the engine via `get_engine()` or a connection with
       `open_connection(readonly=True)`.
+    - If no URL is provided in config, falls back to env var 
+      
+      DATABASE_URL.
 
 Usage
     >>> from app.infra.db import configure_from_config, get_engine, open_connection
@@ -34,7 +37,13 @@ import logging
 import os
 from collections.abc import Mapping
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, TYPE_CHECKING, Iterator
+
+if TYPE_CHECKING:  # pragma: no cover - typing-only import
+    try:
+        from sqlalchemy.engine import Connection as _SAConnection  # type: ignore
+    except Exception:  # SQLAlchemy may be absent at type-check time
+        _SAConnection = Any  # type: ignore
 
 # Optional SQLAlchemy import
 _sa: Any | None = None
@@ -46,6 +55,15 @@ _sa = _imported_sa
 
 _log = logging.getLogger(__name__)
 _ENGINE: Any | None = None
+
+__all__ = [
+    "engine_is_configured",
+    "get_engine",
+    "close_engine",
+    "configure_engine",
+    "configure_from_config",
+    "open_connection",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +143,7 @@ def configure_engine(
     create_kwargs: dict[str, Any] = {
         "echo": resolved_echo,
         "connect_args": connect_args,
+        "pool_pre_ping": True,  # avoid stale connections
     }
     if pool_size is not None:
         create_kwargs["pool_size"] = int(pool_size)
@@ -157,20 +176,24 @@ def configure_from_config(cfg: Mapping[str, Any]) -> Any:
 
     db = cfg.get("database", {}) if isinstance(cfg.get("database"), Mapping) else {}
     url = str(db.get("url", "")).strip()
+    if not url:
+        url = os.getenv("DATABASE_URL", "").strip()
     pool_size = db.get("pool_size")
     pool_timeout_sec = db.get("pool_timeout_sec")
+    echo_opt = db.get("echo")  # bool or str; let configure_engine resolve if None
+    readonly_default = bool(db.get("readonly_default", True))
 
     return configure_engine(
         url=url,
         pool_size=int(pool_size) if isinstance(pool_size, int) else None,
         pool_timeout_sec=int(pool_timeout_sec) if isinstance(pool_timeout_sec, int) else None,
-        echo=None,
-        readonly_default=True,
+        echo=echo_opt if isinstance(echo_opt, bool) else None,
+        readonly_default=readonly_default,
     )
 
 
 @contextmanager
-def open_connection(*, readonly: bool = True):
+def open_connection(*, readonly: bool = True) -> Iterator["_SAConnection"]:
     """Yield a DB-API connection from the configured engine.
 
     For Postgres, `readonly=True` attempts to enforce read-only at session level

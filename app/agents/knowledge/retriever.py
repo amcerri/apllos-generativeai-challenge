@@ -42,12 +42,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Final
 
 import sqlalchemy as sa
+from sqlalchemy.engine import Engine
 
 try:  # Optional logger
     from app.infra.logging import get_logger
@@ -134,7 +136,7 @@ class KnowledgeRetriever:
         distance: str = "cosine",
         candidate_factor: int = 4,
     ) -> None:
-        self.table = table or self.DEFAULT_TABLE
+        self.table = _validate_table_name(table or self.DEFAULT_TABLE)
         self.model = model or self.DEFAULT_MODEL
         self.distance = distance
         self.candidate_factor = max(1, int(candidate_factor))
@@ -154,15 +156,18 @@ class KnowledgeRetriever:
         If there are zero hits ≥ `min_score`, `no_context` will be True.
         """
 
+        top_k_i = max(1, int(top_k))
+        min_score_f = min(1.0, max(0.0, float(min_score)))
+
         if not (query or "").strip():
             return RetrievalResult(hits=[], elapsed_ms=0.0, used_filters={}, no_context=True)
 
-        with start_span("agent.knowledge.retrieve", {"top_k": top_k, "min_score": min_score}):
+        with start_span("agent.knowledge.retrieve", {"top_k": top_k_i, "min_score": min_score_f}):
             t0 = monotonic()
             qvec = _embed_query(query, model=self.model)
             engine = _get_engine()
 
-            limit = max(1, int(top_k) * self.candidate_factor)
+            limit = max(1, top_k_i * self.candidate_factor)
             where_sql, where_params = _build_where(filters or {})
 
             if self.distance != "cosine":
@@ -171,9 +176,9 @@ class KnowledgeRetriever:
             # Similarity: 1 - cosine_distance (assuming normalized vectors)
             sql = (
                 f"SELECT doc_id, chunk_id, title, content, source, metadata, "
-                f"(1 - (embedding <=> :qvec)) AS score "
+                f"(1 - (embedding <=> CAST(:qvec AS vector))) AS score "
                 f"FROM {self.table} {where_sql} "
-                f"ORDER BY embedding <=> :qvec ASC "
+                f"ORDER BY embedding <=> CAST(:qvec AS vector) ASC "
                 f"LIMIT :limit"
             )
 
@@ -200,8 +205,8 @@ class KnowledgeRetriever:
                     dedup[h.doc_id] = h
 
             hits2 = sorted(dedup.values(), key=lambda h: h.score, reverse=True)
-            hits2 = [h for h in hits2 if h.score >= float(min_score)]
-            hits2 = hits2[: max(1, int(top_k))]
+            hits2 = [h for h in hits2 if h.score >= min_score_f]
+            hits2 = hits2[: top_k_i]
 
             elapsed = (monotonic() - t0) * 1000.0
             return RetrievalResult(
@@ -216,8 +221,20 @@ class KnowledgeRetriever:
 # DB / Embeddings / Filters helpers
 # ---------------------------------------------------------------------------
 
+_TABLE_RE = re.compile(r"^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)?$")
 
-def _get_engine():
+def _validate_table_name(name: str) -> str:
+    """
+    Ensure the table identifier is safe for interpolation in a raw SQL text.
+
+    Accepts simple identifiers or schema-qualified names (schema.table).
+    """
+    if not _TABLE_RE.match(name):
+        raise ValueError("invalid table name")
+    return name
+
+
+def _get_engine() -> Engine:
     try:
         from app.infra.db import get_engine  # local import keeps optional dep
     except Exception as exc:  # pragma: no cover - optional
@@ -225,7 +242,7 @@ def _get_engine():
     return get_engine()
 
 
-def _execute(engine: Any, sql: str, params: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _execute(engine: Engine, sql: str, params: Mapping[str, Any]) -> list[dict[str, Any]]:
     with engine.connect() as conn:
         result = conn.execute(sa.text(sql), params)
         return [dict(r) for r in result.mappings()]
@@ -249,13 +266,13 @@ def _embed_query(text: str, *, model: str) -> Sequence[float]:
     return _hash_embed(text)
 
 
-def _hash_embed(text: str, *, dim: int = 256) -> list[float]:
+def _hash_embed(text: str, *, dim: int = 1536) -> list[float]:
     vec = [0.0] * dim
     for tok in re.findall(r"[\w\-]+", text.lower()):
-        h = hash(tok) % dim
-        vec[h] += 1.0
-    # L2 normalize
-    norm2 = sum(v * v for v in vec) ** 0.5 or 1.0
+        d = hashlib.sha256(tok.encode("utf-8")).digest()
+        idx = int.from_bytes(d[:4], "big") % dim
+        vec[idx] += 1.0
+    norm2 = (sum(v * v for v in vec) ** 0.5) or 1.0
     return [v / norm2 for v in vec]
 
 

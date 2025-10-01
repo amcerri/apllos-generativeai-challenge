@@ -37,9 +37,9 @@ Usage
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, TypeVar
+from typing import Any, TypeVar, Final
 
-__all__ = [
+__all__: Final[list[str]] = [
     "is_non_empty_str",
     "ensure_non_empty_str",
     "is_positive_int",

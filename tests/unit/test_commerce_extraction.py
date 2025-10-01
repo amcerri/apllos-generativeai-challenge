@@ -98,18 +98,22 @@ def test_extract_contract_and_minimal_fields() -> None:
     doc = _as_map(out["doc"])  # may already be a dict
 
     # Minimal canonical schema checks (presence & basic types)
-    for k in ("doc_type", "currency", "items", "totals"):
+    for k in ("doc_type", "currency"):
         assert k in doc, f"missing '{k}' in doc"
+    
+    # Items and totals are at the top level
+    assert "items" in out, "missing 'items' in output"
+    assert "totals" in out, "missing 'totals' in output"
 
     assert isinstance(doc.get("doc_type"), str)
     curr = doc.get("currency")
     if isinstance(curr, str):
         assert 2 <= len(curr) <= 5  # allow e.g. USD, BRL, or symbols like R$
 
-    items = doc.get("items")
+    items = out.get("items")
     assert isinstance(items, Sequence)
 
-    totals = _as_map(doc.get("totals", {}))
+    totals = _as_map(out.get("totals", {}))
     assert isinstance(totals, Mapping)
 
     # Optional presence: risks/meta
@@ -124,7 +128,7 @@ def test_line_items_minimum_shape() -> None:
     extractor = ExtractorType()
     out = _try_extract(extractor, SAMPLE_TEXT)
 
-    items = out["doc"]["items"]
+    items = out["items"]
     assert isinstance(items, Sequence)
     assert len(items) >= 1
 
@@ -146,8 +150,8 @@ def test_totals_consistency_when_present() -> None:
     out = _try_extract(extractor, SAMPLE_TEXT)
 
     doc = _as_map(out["doc"])
-    items = list(out["doc"]["items"])
-    totals = _as_map(doc.get("totals", {}))
+    items = list(out["items"])
+    totals = _as_map(out.get("totals", {}))
 
     # If we have line totals & subtotal, they should approximately match
     line_sum = 0.0

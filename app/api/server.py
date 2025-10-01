@@ -138,6 +138,18 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
     with start_span("api.server.build"):
         app = FastAPI(title="POC Multi-Agent Assistant", version="0.1.0")
 
+        @app.get("/", tags=["infra"], include_in_schema=False)
+        def index() -> dict[str, str]:
+            """Basic landing page to avoid 404 on `/` in local/dev runs."""
+            return {
+                "service": "POC Multi-Agent Assistant",
+                "docs": "/docs",
+                "openapi": "/openapi.json",
+                "graph": "/graph",
+                "health": "/health",
+                "ready": "/ready",
+            }
+
         # CORS (optional, default enabled)
         if allow_cors and "CORSMiddleware" in globals() and CORSMiddleware is not None:
             app.add_middleware(

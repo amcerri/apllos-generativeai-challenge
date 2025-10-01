@@ -28,6 +28,7 @@ Usage
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -43,6 +44,13 @@ _PostgresSaver = _imported_PostgresSaver
 
 # Global holder (configured at runtime)
 _CHECKPOINTER: Any | None = None
+
+__all__ = [
+    "is_configured",
+    "get_checkpointer",
+    "configure_postgres",
+    "configure_from_config",
+]
 
 
 class _NoopSaver:
@@ -137,10 +145,16 @@ def configure_from_config(cfg: Mapping[str, Any]) -> Any:
     cp = cfg.get("checkpointer", {}) if isinstance(cfg.get("checkpointer"), Mapping) else {}
     db = cfg.get("database", {}) if isinstance(cfg.get("database"), Mapping) else {}
 
-    enabled = bool(cp.get("enabled", True))
-    backend = str(cp.get("backend", "postgres")).strip().lower()
-    table = str(cp.get("table", "checkpoints")).strip() or "checkpoints"
-    url = str(db.get("url", "")).strip()
+    # Environment overrides (take precedence if present)
+    env_enabled = os.getenv("CHECKPOINTER_ENABLED")
+    if env_enabled is not None:
+        enabled = env_enabled.strip().lower() not in {"0", "false", "no", "off"}
+    else:
+        enabled = bool(cp.get("enabled", True))
+
+    backend = str(os.getenv("CHECKPOINTER_BACKEND", cp.get("backend", "postgres"))).strip().lower()
+    table = str(os.getenv("CHECKPOINTER_TABLE", cp.get("table", "checkpoints"))).strip() or "checkpoints"
+    url = (str(db.get("url", "")).strip() or os.getenv("DATABASE_URL", "").strip())
 
     if not enabled:
         _log.info("checkpointer disabled in config; using Noop")

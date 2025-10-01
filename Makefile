@@ -1,159 +1,174 @@
-# Makefile — Docker-first developer experience for apllos-generativeai-challenge
-# Usage: `make help` to list all targets.
-
-SHELL := bash
-.DEFAULT_GOAL := help
-
 # -----------------------------------------------------------------------------
-# Project settings
+# Makefile — Developer UX for DB, Docker and Runtime (LangGraph/Studio/API)
 # -----------------------------------------------------------------------------
-PROJECT_NAME       ?= apllos-generativeai-challenge
-NETWORK            ?= $(PROJECT_NAME)-net
-ENV_FILE           ?= .env
-ENV_ARGS          := $(if $(wildcard $(ENV_FILE)),--env-file $(ENV_FILE),)
+# Conventions:
+# - `##` comments are displayed on `make help`.
+# - Docker Compose controls Postgres services (`db`) and app (`app`).
 
-# -----------------------------------------------------------------------------
-# Images & containers
-# -----------------------------------------------------------------------------
-# Database (Postgres + pgvector)
-DB_IMAGE           ?= pgvector/pgvector:pg16
-DB_CONTAINER       ?= $(PROJECT_NAME)-postgres
-DB_VOLUME          ?= $(PROJECT_NAME)-pgdata
-DB_PORT            ?= 5432
-DB_USER            ?= app
-DB_PASSWORD        ?= app
-DB_NAME            ?= app
+# ----- Core tools & project metadata -----------------------------------------
+SHELL          := /bin/bash
+PROJECT        ?= $(notdir $(CURDIR))
+DOCKER         ?= docker
+COMPOSE        ?= docker compose
+COMPOSE_FILE   ?= docker-compose.yml
+PY             ?= python
 
-# Application image (built from Dockerfile when available)
-APP_IMAGE          ?= $(PROJECT_NAME)-app:dev
-APP_CONTAINER      ?= $(PROJECT_NAME)-app
-APP_PORT           ?= 2024
-STUDIO_PORT        ?= 2025
+# ----- Images, containers, ports ---------------------------------------------
+APP_IMAGE      ?= apllos/app:latest
+APP_CONTAINER  ?= apllos-app
+APP_SERVICE    ?= app
+DB_SERVICE     ?= db
+DB_CONTAINER   ?= $(DB_SERVICE)
+APP_PORT       ?= 2024
+STUDIO_PORT    ?= 2025
+POSTGRES_PORT  ?= 5432
 
-# Host paths to mount into containers (created lazily)
-DATA_DIR           ?= $(CURDIR)/data
-ANALYTICS_DIR      ?= $(DATA_DIR)/raw/analytics
-DOCS_DIR           ?= $(DATA_DIR)/docs
-BACKUPS_DIR        ?= $(CURDIR)/backups
+# ----- Paths used by scripts --------------------------------------------------
+ANALYTICS_DIR  ?= $(CURDIR)/data/raw/analytics
+DOCS_DIR       ?= $(CURDIR)/data/docs
 
-DOCKER             ?= docker
-COMPOSE            ?= docker compose
+# ----- Environment injection --------------------------------------------------
+ENV_FILE ?= .env
+# Se .env existir, injeta automaticamente via --env-file
+ENV_ARGS := $(shell [ -f $(ENV_FILE) ] && echo --env-file $(ENV_FILE))
 
-# Colors for pretty help
-CYAN  := \033[36m
-GREEN := \033[32m
-RESET := \033[0m
+# ----- DB credentials (container defaults) -----------------------------------
+DB_USER     ?= app
+DB_PASSWORD ?= app
+DB_NAME     ?= app
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
+# ----- Connection strings -----------------------------------------------------
+# Para containers via compose (hostname = nome do serviço)
+DSN_COMPOSE ?= postgresql+psycopg://$(DB_USER):$(DB_PASSWORD)@$(DB_SERVICE):$(POSTGRES_PORT)/$(DB_NAME)
+# Para docker run (macOS/Windows) conectando no DB do host
+DSN_HOST    ?= postgresql+psycopg://$(DB_USER):$(DB_PASSWORD)@host.docker.internal:$(POSTGRES_PORT)/$(DB_NAME)
+
+# ----- Seed SQL files ---------------------------------------------------------
+DB_SEED_SCHEMA := data/samples/schema.sql
+DB_SEED_DATA   := data/samples/seed.sql
+
+# =============================================================================
+# Help
+# =============================================================================
+## Show this help
 .PHONY: help
-help: ## Show this help
-	@echo -e "$(CYAN)Available targets$(RESET)"
-	@awk 'BEGIN {FS = ":.*##"}; /^[a-zA-Z0-9_.-]+:.*##/ {printf "  $(GREEN)%-26s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort
+help:
+	@printf "\nAvailable targets:\n\n"; \
+	awk '\
+	  BEGIN { FS=":.*" } \
+	  /^## / { desc=substr($$0,4); next } \
+	  /^[a-zA-Z0-9_.-]+:($$|[^=])/ && $$1 != ".PHONY" { \
+	    if (desc) { printf "  \033[36m%-22s\033[0m %s\n", $$1, desc; desc=""; } \
+	  }' $(MAKEFILE_LIST) | sort
 
+# =============================================================================
+# Directories
+# =============================================================================
+## Create local data directories expected by scripts
 .PHONY: dirs
-dirs: ## Create local data/ and backups/ folders if missing
-	@mkdir -p "$(ANALYTICS_DIR)" "$(DOCS_DIR)" "$(BACKUPS_DIR)"
+dirs:
+	@mkdir -p data/raw/analytics data/docs data/samples
 
-.PHONY: docker-info
-docker-info: ## Show Docker and Compose versions
-	@$(DOCKER) version
-	@$(COMPOSE) version
+# =============================================================================
+# Docker Compose wrappers (db + app)
+# =============================================================================
+## docker compose up -d (builds if needed)
+.PHONY: compose-up
+compose-up:
+	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
+	@$(COMPOSE) -f $(COMPOSE_FILE) up -d --build
 
-.PHONY: network
-network: ## Create the shared Docker network if absent
-	@$(DOCKER) network inspect $(NETWORK) >/dev/null 2>&1 || $(DOCKER) network create $(NETWORK)
-	@echo "Network: $(NETWORK)"
+## docker compose down (all services)
+.PHONY: compose-down
+compose-down:
+	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
+	@$(COMPOSE) -f $(COMPOSE_FILE) down
 
-# -----------------------------------------------------------------------------
-# Database lifecycle (Postgres + pgvector)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Database lifecycle (service `db`)
+# =============================================================================
+## Start Postgres service via Docker Compose
 .PHONY: db-start
-db-start: dirs network ## Start Postgres (pgvector) container in background
-	@$(DOCKER) volume inspect $(DB_VOLUME) >/dev/null 2>&1 || $(DOCKER) volume create $(DB_VOLUME) >/dev/null
-	@$(DOCKER) run -d --name $(DB_CONTAINER) \
-	  --restart unless-stopped \
-	  --network $(NETWORK) \
-	  -p $(DB_PORT):5432 \
-	  -v $(DB_VOLUME):/var/lib/postgresql/data \
-	  $(ENV_ARGS) \
-	  -e POSTGRES_USER=$(DB_USER) \
-	  -e POSTGRES_PASSWORD=$(DB_PASSWORD) \
-	  -e POSTGRES_DB=$(DB_NAME) \
-	  $(DB_IMAGE)
-	@echo "Postgres is starting on localhost:$(DB_PORT) — container $(DB_CONTAINER)"
+db-start:
+	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
+	@$(COMPOSE) -f $(COMPOSE_FILE) up -d $(DB_SERVICE)
 
+## Wait until Postgres is ready to accept connections
 .PHONY: db-wait
-db-wait: ## Wait until Postgres is ready to accept connections
-	@echo "Waiting for Postgres to become ready..."
-	@until $(DOCKER) exec $(DB_CONTAINER) pg_isready -h 127.0.0.1 -p 5432 -U $(DB_USER) >/dev/null 2>&1; do \
+db-wait:
+	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
+	@echo "[db-wait] Waiting for database..."; \
+	for i in $$(seq 1 30); do \
+	  if $(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -t 1' >/dev/null 2>&1; then \
+	    echo "[db-wait] Database is ready"; exit 0; \
+	  fi; \
 	  sleep 1; \
-	  printf "."; \
-	 done; echo " ready";
+	done; \
+	echo "[db-wait] Timeout waiting for DB"; exit 1
 
+## Create extensions (vector, uuid-ossp) if present (idempotent)
 .PHONY: db-init
-db-init: ## Initialize database extensions (vector)
-	@$(DOCKER) exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+db-init:
+	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
+	@$(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS vector;" || true'
+	@$(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";" || true'
 
+## Tail Postgres logs
 .PHONY: db-logs
-db-logs: ## Tail Postgres logs
-	@$(DOCKER) logs -f --since=1m $(DB_CONTAINER)
+db-logs:
+	@$(COMPOSE) logs -f $(DB_SERVICE)
 
+## Apply data/samples/schema.sql and data/samples/seed.sql
+.PHONY: db-seed
+db-seed:
+	@test -f $(DB_SEED_SCHEMA) || { echo "\n[db-seed] Missing $(DB_SEED_SCHEMA)."; exit 1; }
+	@echo "[db-seed] Applying schema: $(DB_SEED_SCHEMA)"
+	@$(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -f -' < "$(DB_SEED_SCHEMA)"
+	@if [ -f $(DB_SEED_DATA) ]; then \
+	  echo "[db-seed] Applying seed data: $(DB_SEED_DATA)"; \
+	  $(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -f -' < "$(DB_SEED_DATA)"; \
+	else \
+	  echo "[db-seed] No seed file found (skipping): $(DB_SEED_DATA)"; \
+	fi
+
+## Open interactive psql inside the db container
 .PHONY: db-psql
-db-psql: ## Open psql shell inside the DB container
-	@$(DOCKER) exec -it $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME)
+db-psql:
+	@$(COMPOSE) exec $(DB_SERVICE) psql -U $$POSTGRES_USER -d $$POSTGRES_DB
 
-.PHONY: db-sh
-db-sh: ## Open a bash shell in the DB container
-	@$(DOCKER) exec -it $(DB_CONTAINER) bash
+## Apply arbitrary SQL file: make db-sql FILE=path/to/file.sql
+.PHONY: db-sql
+db-sql:
+	@test -n "$(FILE)" || { echo "Usage: make db-sql FILE=path/to/file.sql"; exit 2; }
+	@test -f "$(FILE)" || { echo "File not found: $(FILE)"; exit 2; }
+	@$(COMPOSE) exec -T $(DB_SERVICE) sh -lc 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -f -' < "$(FILE)"
 
+## Stop Postgres service
 .PHONY: db-stop
-db-stop: ## Stop Postgres container
-	@-$(DOCKER) stop $(DB_CONTAINER)
+db-stop:
+	@$(COMPOSE) stop $(DB_SERVICE) || true
 
-.PHONY: db-rm
-db-rm: ## Remove Postgres container (keeps volume)
-	@-$(DOCKER) rm -f $(DB_CONTAINER)
-
+## Stop and remove Postgres + volumes (DANGEROUS – wipes data)
 .PHONY: db-reset
-db-reset: db-stop db-rm ## Remove container and volume (DANGEROUS)
-	@-$(DOCKER) volume rm $(DB_VOLUME) || true
+db-reset:
+	@$(COMPOSE) down -v
 
-DATE := $(shell date +%Y%m%d-%H%M%S)
-
-.PHONY: db-backup
-db-backup: dirs ## Backup DB to ./backups/<dbname>-<timestamp>.sql
-	@mkdir -p $(BACKUPS_DIR)
-	@$(DOCKER) exec $(DB_CONTAINER) pg_dump -U $(DB_USER) -d $(DB_NAME) -F p > "$(BACKUPS_DIR)/$(DB_NAME)-$(DATE).sql"
-	@echo "Backup written to $(BACKUPS_DIR)/$(DB_NAME)-$(DATE).sql"
-
-.PHONY: db-restore
-# Usage: make db-restore FILE=backups/app-20250101-101010.sql
-FILE ?=
-
-db-restore: ## Restore DB from a SQL dump (use FILE=...)
-	@if [ -z "$(FILE)" ]; then echo "Provide FILE=<path-to-sql>"; exit 2; fi
-	@cat "$(FILE)" | $(DOCKER) exec -i $(DB_CONTAINER) psql -U $(DB_USER) -d $(DB_NAME) -v ON_ERROR_STOP=1
-
-# -----------------------------------------------------------------------------
-# Application image lifecycle (optional until Dockerfile exists)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# Application image lifecycle
+# =============================================================================
 DOCKERFILE ?= Dockerfile
 
+## Build the application image
 .PHONY: app-build
-app-build: ## Build the application image (requires Dockerfile)
-	@if [ ! -f $(DOCKERFILE) ]; then echo "$(DOCKERFILE) not found — skipping"; exit 2; fi
+app-build:
+	@test -f $(DOCKERFILE) || { echo "$(DOCKERFILE) not found"; exit 2; }
 	@$(DOCKER) build -t $(APP_IMAGE) -f $(DOCKERFILE) .
 
+## Run dev container mounting the repo (override CMD="...")
 .PHONY: app-run
-# Run the app container mounting the current repo for live editing.
-# Customize CMD via CMD="python -m app.graph.assistant" or similar.
-CMD ?= bash
-app-run: dirs network ## Run the app container (dev) with repo mounted and custom CMD
+app-run: dirs
 	@$(DOCKER) run --rm -it \
 	  --name $(APP_CONTAINER) \
-	  --network $(NETWORK) \
 	  -p $(APP_PORT):$(APP_PORT) -p $(STUDIO_PORT):$(STUDIO_PORT) \
 	  -v "$(CURDIR)":/workspace \
 	  -v "$(ANALYTICS_DIR)":/workspace/data/raw/analytics \
@@ -162,64 +177,194 @@ app-run: dirs network ## Run the app container (dev) with repo mounted and custo
 	  -w /workspace \
 	  $(APP_IMAGE) $(CMD)
 
+## Open an interactive shell in app container
 .PHONY: app-sh
-app-sh: ## Open an interactive shell in a new app container
+app-sh:
 	@$(MAKE) app-run CMD=bash
 
-# -----------------------------------------------------------------------------
-# Data ingestion & utilities (executed inside ephemeral app container)
-# These targets expect scripts to exist later in the project. They will fail
-# fast with a helpful message if not present yet.
-# -----------------------------------------------------------------------------
-PY ?= python
-
-define RUN_APP_PY
-	@if [ ! -f "$1" ]; then echo "Missing $1 (will exist in later phases)."; exit 2; fi; \
-	$(DOCKER) run --rm \
-	  --network $(NETWORK) \
+# =============================================================================
+# Data ingestion helpers (executed inside ephemeral app container)
+# =============================================================================
+## Load Olist CSVs into Postgres (scripts/ingest_analytics.py)
+.PHONY: ingest-analytics
+ingest-analytics:
+	@$(DOCKER) run --rm \
 	  -v "$(CURDIR)":/workspace \
 	  -v "$(ANALYTICS_DIR)":/workspace/data/raw/analytics \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/ingest_analytics.py
+
+## Load Olist CSVs, truncating tables first (idempotent re-run)
+.PHONY: ingest-analytics-truncate
+ingest-analytics-truncate:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  -v "$(ANALYTICS_DIR)":/workspace/data/raw/analytics \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/ingest_analytics.py --truncate --analyze
+
+## Chunk + embed docs into pgvector (scripts/ingest_vectors.py)
+.PHONY: ingest-vectors
+ingest-vectors:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
 	  -v "$(DOCS_DIR)":/workspace/data/docs \
 	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
 	  -w /workspace \
-	  $(APP_IMAGE) $(PY) $1 $(2)
-endef
+	  $(APP_IMAGE) $(PY) scripts/ingest_vectors.py
 
-.PHONY: ingest-analytics
-ingest-analytics: ## Load Olist CSVs into Postgres (scripts/ingest_analytics.py)
-	@$(call RUN_APP_PY,scripts/ingest_analytics.py)
-
-.PHONY: ingest-vectors
-ingest-vectors: ## Chunk + embed docs into pgvector (scripts/ingest_vectors.py)
-	@$(call RUN_APP_PY,scripts/ingest_vectors.py)
-
+## Explain/analyze SQL via scripts/explain_sql.py; pass SQL="..."
 .PHONY: explain-sql
-explain-sql: ## Run explain_sql.py utility (scripts/explain_sql.py SQL="...")
-	@$(call RUN_APP_PY,scripts/explain_sql.py,"$(SQL)")
+explain-sql:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/explain_sql.py "$(SQL)"
 
-# -----------------------------------------------------------------------------
-# Compose wrappers (only if docker-compose.yml exists)
-# -----------------------------------------------------------------------------
-COMPOSE_FILE ?= docker-compose.yml
+## Ingest CSVs with defaults (docker-run → host DB)
+.PHONY: ingest-analytics-all
+ingest-analytics-all:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  -v "$(ANALYTICS_DIR)":/workspace/data/raw/analytics \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/ingest_analytics.py \
+	    --schema /workspace/data/samples/schema.sql \
+	    --data-dir /workspace/data/raw/analytics
 
-.PHONY: compose-up
-compose-up: ## docker compose up -d (if compose file exists)
+## Ingest docs into pgvector with defaults (docker-run → host DB)
+.PHONY: ingest-vectors-all
+ingest-vectors-all:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  -v "$(DOCS_DIR)":/workspace/data/docs \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/ingest_vectors.py \
+	    --docs-dir /workspace/data/docs
+
+## Generate analytics allowlist JSON from live DB schema
+.PHONY: gen-allowlist
+gen-allowlist:
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/gen_allowlist.py \
+	    --out /workspace/app/routing/allowlist.json
+
+# =============================================================================
+# Runtime shortcuts: LangGraph Server (Studio) & API
+# =============================================================================
+# Observação: CLI atual usa `langgraph dev` e lê `langgraph.json` na raiz.
+# Criamos esse arquivo automaticamente se não existir.
+define LG_JSON
+{
+  "dependencies": ["./"],
+  "graphs": { "assistant": "./app/graph/assistant.py:get_assistant" },
+  "env": "./.env"
+}
+endef
+export LG_JSON
+
+## Run LangGraph (dev server) on :$(APP_PORT) (docker run)
+.PHONY: studio-run
+studio-run:
+	@[ -s langgraph.json ] || printf '%s\n' '{' '  "dependencies": ["./"],' '  "graphs": { "assistant": "./app/graph/assistant.py:get_assistant" },' '  "env": "./.env"' '}' > langgraph.json
+	@$(DOCKER) run --rm --name $(APP_CONTAINER)-studio \
+	  -p $(APP_PORT):$(APP_PORT) \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -e REQUIRE_SQL_APPROVAL=false \
+	  -w /workspace \
+	  $(APP_IMAGE) langgraph dev --host 0.0.0.0 --port $(APP_PORT) --allow-blocking
+
+## Run LangGraph (dev server) via docker compose run (service `app`)
+.PHONY: studio-compose
+studio-compose:
+	@[ -s langgraph.json ] || printf '%s\n' '{' '  "dependencies": ["./"],' '  "graphs": { "assistant": "./app/graph/assistant.py:get_assistant" },' '  "env": "./.env"' '}' > langgraph.json
 	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
-	@$(COMPOSE) -f $(COMPOSE_FILE) up -d
+	@$(COMPOSE) run --rm --service-ports \
+	  -e DATABASE_URL="$(DSN_COMPOSE)" \
+	  $(APP_SERVICE) \
+	  langgraph dev --host 0.0.0.0 --port $(APP_PORT)
 
-.PHONY: compose-down
-compose-down: ## docker compose down (if compose file exists)
-	@if [ ! -f $(COMPOSE_FILE) ]; then echo "$(COMPOSE_FILE) not found"; exit 2; fi
-	@$(COMPOSE) -f $(COMPOSE_FILE) down
+## Run FastAPI app on :8000 (docker run)
+.PHONY: api-run
+api-run:
+	@$(DOCKER) run --rm --name $(APP_CONTAINER)-api \
+	  -p 8000:8000 \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) uvicorn app.api.server:get_app --host 0.0.0.0 --port 8000
 
-# -----------------------------------------------------------------------------
+# =============================================================================
+# One-shot flows
+# =============================================================================
+## Full setup: dirs + db + schema/seed + build + ingestions + allowlist
+.PHONY: bootstrap
+bootstrap: dirs db-start db-wait db-init db-seed app-build ingest-analytics-all ingest-vectors-all gen-allowlist
+	@echo "Bootstrap completed."
+
+## Bootstrap everything and start LangGraph Server
+.PHONY: studio-up
+studio-up: bootstrap
+	@$(MAKE) studio-run
+
+## Bootstrap everything and start FastAPI server
+.PHONY: api-up
+api-up: bootstrap
+	@$(MAKE) api-run
+
+# =============================================================================
+# Query Interface
+# =============================================================================
+## Query the assistant: make query QUERY="sua pergunta" [ATTACHMENT="caminho/do/arquivo"]
+.PHONY: query
+query:
+	@if [ -z "$(QUERY)" ] && [ -z "$(ATTACHMENT)" ]; then \
+		echo "Usage: make query QUERY=\"sua pergunta\" [ATTACHMENT=\"caminho/do/arquivo\"]"; \
+		echo "Examples:"; \
+		echo "  make query QUERY=\"Como iniciar um e-commerce?\""; \
+		echo "  make query QUERY=\"Quantos pedidos temos?\" ATTACHMENT=\"data/samples/invoice.pdf\""; \
+		echo "  make query ATTACHMENT=\"data/samples/order.txt\""; \
+		exit 1; \
+	fi
+	@$(DOCKER) run --rm \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  --network host \
+	  -w /workspace \
+	  $(APP_IMAGE) $(PY) scripts/query_assistant.py \
+	    --query "$(QUERY)" \
+	    --attachment "$(ATTACHMENT)" \
+	    --base-url "http://localhost:2024"
+
+# =============================================================================
 # Housekeeping
-# -----------------------------------------------------------------------------
+# =============================================================================
+## Remove dangling containers/images/networks/volumes (CAUTION)
 .PHONY: prune
-prune: ## Remove dangling containers/images/networks/volumes (CAUTION)
+prune:
 	@$(DOCKER) system prune -f --volumes
 
+## Remove Python caches and build artifacts
 .PHONY: clean
-clean: ## Remove Python caches and build artifacts
+clean:
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} +
 	@rm -rf .pytest_cache .mypy_cache dist build *.egg-info

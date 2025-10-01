@@ -167,9 +167,7 @@ class AnalyticsExecutor:
                     if readonly:
                         conn.exec_driver_sql("SET LOCAL default_transaction_read_only = on")
                     # timeout in milliseconds
-                    conn.exec_driver_sql(
-                        "SET LOCAL statement_timeout = :ms", {"ms": timeout * 1000}
-                    )
+                    conn.exec_driver_sql(f"SET LOCAL statement_timeout = {timeout * 1000}")
 
                     # Stream results
                     result = conn.execution_options(stream_results=True).execute(

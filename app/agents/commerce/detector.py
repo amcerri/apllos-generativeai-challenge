@@ -115,7 +115,11 @@ class CommerceDetector:
         "invoice": (
             "invoice",
             "nota fiscal",
+            "nota fiscal eletrônica",
+            "nfe",
+            "nf-e",
             "fatura",
+            "danfe",
             "bill to",
             "invoice number",
             "amount due",
@@ -159,7 +163,7 @@ class CommerceDetector:
     # Doc ID patterns (capture group 1 is the ID)
     RE_ID: Final[dict[str, re.Pattern[str]]] = {
         "invoice": re.compile(
-            r"\b(?:invoice\s*(?:no\.|#|number|nº)?\s*[:\-]?\s*)([A-Z0-9][A-Z0-9\-\./]{2,})",
+            r"\b(?:(?:invoice|nota\s+fiscal(?:\s+eletr[ôo]nica)?|nf-?e)\s*(?:no\.|#|number|nº)?\s*[:\-]?\s*)([A-Z0-9][A-Z0-9\-\./]{2,})",
             re.IGNORECASE,
         ),
         "purchase_order": re.compile(
@@ -182,7 +186,7 @@ class CommerceDetector:
     }
 
     # Currency
-    RE_CURR_SYM: Final[re.Pattern[str]] = re.compile(r"(R\$|\$|€|£)")
+    RE_CURR_SYM: Final[re.Pattern[str]] = re.compile(r"(US\$\s?|R\$\s?|\$|€|£)")
     RE_CURR_CODE: Final[re.Pattern[str]] = re.compile(
         r"\b(USD|BRL|EUR|GBP|ARS|CLP|MXN)\b", re.IGNORECASE
     )
@@ -238,25 +242,36 @@ class CommerceDetector:
 
             # Currency
             currency: str | None = None
-            m_code = self.RE_CURR_CODE.search(t)
-            if m_code:
-                currency = m_code.group(1).upper()
+            codes = [c.upper() for c in self.RE_CURR_CODE.findall(t)]
+            syms = [s.strip() for s in self.RE_CURR_SYM.findall(t)]
+            if codes:
+                uniq = sorted(set(codes))
+                if len(uniq) > 1:
+                    warnings.append(f"ambiguous_currency_codes:{','.join(uniq[:4])}")
+                for pref in ("USD", "BRL", "EUR", "GBP"):
+                    if pref in uniq:
+                        currency = pref
+                        break
+                currency = currency or uniq[0]
                 signals.append(f"ccy:{currency}")
-            else:
-                m_sym = self.RE_CURR_SYM.search(t)
-                if m_sym:
-                    sym = m_sym.group(1)
+            elif syms:
+                mapped: list[str] = []
+                for sym in syms:
+                    sym = sym.replace(" ", "")
                     if sym == "R$":
-                        currency = "BRL"
+                        mapped.append("BRL")
+                    elif sym in ("US$", "$"):
+                        mapped.append("USD")
                     elif sym == "€":
-                        currency = "EUR"
+                        mapped.append("EUR")
                     elif sym == "£":
-                        currency = "GBP"
-                    elif sym == "$":
-                        # ambiguous between USD/others; prefer USD
-                        currency = "USD"
-                        warnings.append("ambiguous_currency_symbol:$→USD")
-                    signals.append(f"ccy_sym:{sym}")
+                        mapped.append("GBP")
+                if mapped:
+                    uniq = sorted(set(mapped))
+                    if len(uniq) > 1:
+                        warnings.append(f"ambiguous_currency_symbol:{','.join(uniq[:4])}")
+                    currency = ("USD" if "USD" in uniq else uniq[0])
+                    signals.append(f"ccy_sym:{'/'.join(syms[:2])}")
 
             # Choose the best type
             best_type: str | None = None

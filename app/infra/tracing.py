@@ -11,6 +11,11 @@ Design
     - Small API: `configure()`, `get_tracer()`, `start_span()`, `current_trace_ids()`.
     - No imports from other internal modules to avoid cycles.
 
+Integration
+    - Used by agent modules and graph nodes for distributed tracing.
+    - Configure once at application startup via `configure()`.
+    - Spans are automatically correlated with thread IDs and component names.
+
 Usage
     >>> from app.infra.tracing import configure, start_span, current_trace_ids
     >>> configure(service_name="apllos-assistant", exporter="otlp-http", sample_ratio=0.1)
@@ -21,8 +26,8 @@ Usage
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager, nullcontext
-from typing import Any
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from typing import Any, Mapping
 
 # Attempt OpenTelemetry imports (optional dependency)
 _OTEL_AVAILABLE = False
@@ -56,6 +61,8 @@ except Exception:  # pragma: no cover - keep optional
 
 _log = logging.getLogger(__name__)
 _service_name = "apllos-assistant"
+
+__all__ = ["configure", "get_tracer", "start_span", "current_trace_ids"]
 
 
 def _bool_env(value: str | None) -> bool:
@@ -118,7 +125,7 @@ def configure(
     trace.set_tracer_provider(provider)
 
 
-def get_tracer(component: str = "app"):
+def get_tracer(component: str = "app") -> Any:
     """Return an OpenTelemetry tracer or a no‑op tracer when OTEL is absent."""
 
     if not _OTEL_AVAILABLE:
@@ -127,7 +134,9 @@ def get_tracer(component: str = "app"):
 
 
 @contextmanager
-def start_span(name: str, attributes: dict[str, Any] | None = None):
+def start_span(
+    name: str, attributes: Mapping[str, Any] | None = None
+) -> AbstractContextManager[Span | None]:
     """Context manager that starts a span when tracing is enabled.
 
     Yields the span object (or `None` when tracing is disabled).

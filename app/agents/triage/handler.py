@@ -14,8 +14,7 @@ Design
   if available.
 - Heuristics consider the user query (keywords) and optional router signals
   (e.g., allowlist/table/column hints, rag_hits, doc signals).
-- Output conforms to the `Answer` contract when available; otherwise a dict with
-  equivalent fields is returned (keys: text, meta, followups).
+- Output conforms to the `Answer` contract when available; otherwise a dict with equivalent fields is returned (keys: text, meta, followups).
 
 Integration
 -----------
@@ -33,16 +32,16 @@ True
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
 try:  # Optional logger
-    from app.infra.logging import get_logger
+    from app.infra.logging import get_logger as _get_logger
 except Exception:  # pragma: no cover - optional
     import logging as _logging
 
-    def get_logger(component: str, **initial_values: Any) -> Any:
+    def _get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
 
@@ -70,6 +69,37 @@ except Exception:  # pragma: no cover - optional
     ANSWER_CLS = None
 
 __all__ = ["TriageHandler", "triage_suggested_agent"]
+
+
+# ---------------------------------------------------------------------------
+# Signal normalization helpers
+# ---------------------------------------------------------------------------
+
+def _signals_to_mapping(signals: object) -> dict[str, Any]:
+    """Normalize arbitrary `signals` into a dict[str, Any].
+
+    Accepts Mapping, Sequence (of primitives), or scalars. This guards
+    against `dict(list[str])` ValueErrors when callers pass a list.
+    """
+    if signals is None:
+        return {}
+    if isinstance(signals, Mapping):
+        # Ensure plain dict[str, Any]
+        return {str(k): signals[k] for k in signals.keys()}
+    if isinstance(signals, Sequence) and not isinstance(signals, str | bytes | bytearray):
+        return {"signals": [str(x) for x in signals]}
+    return {"signals": [str(signals)]}
+
+
+def _signals_to_list(signals: object) -> list[str]:
+    """Coerce arbitrary `signals` input to a list[str] for Answer.meta."""
+    if signals is None:
+        return []
+    if isinstance(signals, Mapping):
+        return [str(k) for k in signals.keys()]
+    if isinstance(signals, Sequence) and not isinstance(signals, str | bytes | bytearray):
+        return [str(x) for x in signals]
+    return [str(signals)]
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +150,7 @@ _COMMERCE_TERMS: Final[tuple[str, ...]] = (
 
 
 def triage_suggested_agent(
-    query: str, signals: Mapping[str, Any] | None = None
+    query: str, signals: Mapping[str, Any] | Sequence[Any] | None = None
 ) -> tuple[str, list[str]]:
     """Suggest an agent (analytics|knowledge|commerce|triage) and reasons.
 
@@ -133,7 +163,7 @@ def triage_suggested_agent(
     reasons: list[str] = []
 
     # Signals from router can short-circuit
-    s = dict(signals or {})
+    s = _signals_to_mapping(signals)
     if s.get("rag_hits"):
         reasons.append("router_signal:rag_hits")
         return "knowledge", reasons
@@ -167,7 +197,7 @@ def triage_suggested_agent(
 class TriageHandler:
     """Produce a PT‑BR guidance answer with suggested next steps."""
 
-    def handle(self, query: str, *, signals: Mapping[str, Any] | None = None) -> Any:
+    def handle(self, query: str, *, signals: Mapping[str, Any] | Sequence[Any] | None = None) -> Any:
         """Return an Answer-like object with guidance and follow-ups.
 
         Parameters
@@ -177,12 +207,14 @@ class TriageHandler:
         """
         with start_span("agent.triage.handle"):
             agent, reasons = triage_suggested_agent(query, signals)
+            sig_list = _signals_to_list(signals)
             text = _compose_text_ptbr(query, agent)
             payload = {
                 "text": text,
                 "meta": {
                     "suggested_agent": agent,
                     "reasons": reasons,
+                    "signals": sig_list,
                 },
                 "followups": _followups_for(agent),
             }

@@ -282,7 +282,7 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
         for r in doc.risks[:10]:
             linhas.append(f"• {r}")
 
-    # Fecho com orientação
+    # Close with guidance
     if total_txt != "(não informado)":
         linhas.append(
             "Se quiser, posso comparar este total com pedidos anteriores ou simular cenários."

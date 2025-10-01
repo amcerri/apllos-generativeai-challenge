@@ -34,6 +34,8 @@ Usage
 from __future__ import annotations
 
 import json
+import math
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -259,80 +261,96 @@ class LLMClassifier:
         thread_id: str | None,
         locale: str,
     ) -> dict[str, Any]:
-        msg = (message or "").strip()
-        msg_l = msg.lower()
-        # Signals
-        signals: set[str] = set()
-        if any(
-            tok in msg_l
-            for tok in (
-                ".pdf",
-                ".doc",
-                ".docx",
-                "invoice",
-                "nfe",
-                "nota fiscal",
-                "beo",
-                "purchase order",
-                "order form",
-                "contrato",
-                "proposta",
-                "orçamento",
-                "romaneio",
-            )
-        ):
-            signals.add("commerce_doc")
-        if any(
-            tok in msg_l
-            for tok in ("select", "from", "where", "group by", "order by", "limit", "join")
-        ):
-            signals.add("sql_intent")
-        if any(
-            tok in msg_l
-            for tok in (
-                "manual",
-                "política",
-                "policy",
-                "docs",
-                "documento",
-                "RAG",
-                "segundo o documento",
-            )
-        ):
-            signals.add("doc_intent")
-        if locale.lower().startswith("pt"):
-            signals.add("language_ptbr")
+        """
+        Context-first deterministic fallback used only when the LLM backend
+        is unavailable or fails. This does **not** try to outsmart the LLM; it
+        derives intent from structured cues, prioritizing allowlist overlap and
+        SQL-like structure. Keyword hints are used only as weak assistance.
 
-        # Extract tables/columns from allowlist by word matching
-        words = {w.strip(".,:;()[]{}\"'`").lower() for w in msg.split()}
-        tables: list[str] = []
-        columns: list[str] = []
+        Heuristic signals (ordered by weight)
+        -------------------------------------
+        - Allowlist overlap (tables/columns) → strong signal for 'analytics'.
+        - SQL-ish structure (SELECT ... FROM, ```sql fences) → medium signal for 'analytics'.
+        - Commerce document structure cues (currency + totals-like terms) → medium for 'commerce'.
+        - Document-style phrasing indicating policy/how-to with no tabular cues → weak for 'knowledge'.
+        """
+        text = (message or "")
+        norm = text.lower()
+
+        # ---- Strong signal: allowlist overlap (context-first) ----------------
+        words = set(re.findall(r"[a-zA-Z0-9_]+", norm))
+        hit_tables: set[str] = set()
+        hit_columns: set[str] = set()
         for t, cols in allowlist.items():
-            if t.lower() in words:
-                tables.append(t)
-                signals.add("mentions_table")
+            t_norm = str(t).strip().lower()
+            if t_norm and t_norm in words:
+                hit_tables.add(str(t))
             for c in cols:
-                if c.lower() in words:
-                    columns.append(c)
-                    signals.add("mentions_column")
-        # Decide agent
-        agent = "triage"
-        conf = 0.35
-        reason = "ambiguous intent"
-        if "commerce_doc" in signals:
-            agent, conf, reason = "commerce", 0.82, "document cues (invoice/PO/etc.)"
-        elif "sql_intent" in signals or tables or columns:
-            agent, conf, reason = "analytics", 0.72, "tabular cues and/or SQL intent"
-        elif "doc_intent" in signals:
-            agent, conf, reason = "knowledge", 0.65, "procedural/policy document intent"
+                c_norm = str(c).strip().lower()
+                if c_norm and c_norm in words:
+                    hit_columns.add(str(c))
+
+        allowlist_score = min(1.0, 0.6 * len(hit_tables) + 0.3 * len(hit_columns))
+
+        # ---- Medium signal: SQL-like structure (structure, not keywords) -----
+        has_sql_block = "```sql" in norm or norm.strip().startswith("select ")
+        has_select_from = bool(re.search(r"\bselect\b.+\bfrom\b", norm, flags=re.S))
+        sqlish_score = 0.5 if has_sql_block else (0.4 if has_select_from else 0.0)
+
+        # ---- Commerce cues (structural-ish): currency + totals-like markers --
+        has_currency = bool(re.search(r"(?:r\$|\$|usd|brl|eur)\s*\d", norm))
+        has_total_terms = bool(re.search(r"\b(total|subtotal|tax|imposto|valor)\b", norm))
+        commerce_score = 0.5 if (has_currency and has_total_terms) else 0.0
+
+        # ---- Knowledge cues (weak): procedural/policy phrasing sans tables ---
+        # Keep this weak to avoid overshadowing analytics when allowlist hits exist.
+        knowledge_phrasing = bool(
+            re.search(r"\b(como|passo a passo|pol[ií]tica|manual|documenta[cç][aã]o)\b", norm)
+        )
+        knowledge_score = 0.3 if (knowledge_phrasing and not hit_tables and not hit_columns) else 0.0
+
+        # Aggregate per-agent scores (bounded in [0,1])
+        scores = {
+            "analytics": min(1.0, allowlist_score + sqlish_score),
+            "commerce": min(1.0, commerce_score),
+            "knowledge": min(1.0, knowledge_score),
+        }
+        agent, best = max(scores.items(), key=lambda kv: kv[1])
+
+        # Confidence: base 0.5 + scaled best score; fall back to triage if weak.
+        if best < 0.35:
+            agent = "triage"
+            confidence = 0.35
+            reason = "fallback: low structured signals"
+        else:
+            confidence = min(0.9, 0.5 + 0.4 * best)
+            if agent == "analytics":
+                reason = "allowlist/SQL structure indicates tabular intent"
+            elif agent == "commerce":
+                reason = "amounts and totals-like structure indicate commercial document"
+            else:
+                reason = "procedural/document intent without tabular cues"
+
+        # Build signals for observability (no hard keyword dependence)
+        signals: list[str] = []
+        if hit_tables:
+            signals.append(f"allowlist_tables:{len(hit_tables)}")
+        if hit_columns:
+            signals.append(f"allowlist_columns:{len(hit_columns)}")
+        if has_sql_block or has_select_from:
+            signals.append("sql_like")
+        if has_currency and has_total_terms:
+            signals.append("commerce_amounts")
+        if knowledge_phrasing and not (hit_tables or hit_columns):
+            signals.append("doc_style")
 
         return {
             "agent": agent,
-            "confidence": max(0.0, min(1.0, float(conf))),
+            "confidence": float(confidence),
             "reason": reason,
-            "tables": sorted(set(tables)),
-            "columns": sorted(set(columns)),
-            "signals": sorted(signals),
+            "tables": sorted(hit_tables),
+            "columns": sorted(hit_columns),
+            "signals": signals,
             "thread_id": thread_id,
         }
 
@@ -368,7 +386,7 @@ def _routerdecision_json_schema() -> dict[str, Any]:
             "signals": {"type": "array", "items": {"type": "string"}},
             "thread_id": {"type": ["string", "null"]},
         },
-        "required": ["agent", "confidence", "reason", "tables", "columns", "signals"],
+        "required": ["agent", "confidence", "reason", "tables", "columns", "signals", "thread_id"],
     }
 
 

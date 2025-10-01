@@ -3,11 +3,11 @@ Ingest Olist CSVs into PostgreSQL (analytics schema).
 
 Overview
 --------
-This script creates the analytics schema (via `schema.sql`) and bulk‑loads the
+This script creates the analytics schema (via `schema.sql`) and bulk-loads the
 Olist CSV datasets from `data/raw/analytics/` using PostgreSQL COPY for speed.
 It is designed to be:
-- **Idempotent**: safe to re‑run; tables can be truncated first with a flag.
-- **Dependency‑light**: uses SQLAlchemy if available; falls back gracefully.
+- **Idempotent**: safe to re-run; tables can be truncated first with a flag.
+- **Dependency-light**: uses SQLAlchemy if available; falls back gracefully.
 - **Strict about types**: relies on Postgres to coerce textual timestamps.
 
 Design
@@ -34,7 +34,6 @@ Environment
 -----------
 - DATABASE_URL (required unless engine is provided by `app.infra.db`).
 """
-
 from __future__ import annotations
 
 import argparse
@@ -55,8 +54,6 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:  # noqa: D401 - fallback
         return _logging.getLogger(component)
 
-
-start_span: Any
 try:
     from app.infra.tracing import start_span as _start_span
 
@@ -64,30 +61,23 @@ try:
 except Exception:  # pragma: no cover - optional
     from contextlib import nullcontext as _nullcontext
 
-    def _fallback_start_span(_name: str, _attrs: dict[str, Any] | None = None):
+    def start_span(_name: str, _attrs: dict[str, Any] | None = None):
         return _nullcontext()
-
-    start_span = _fallback_start_span
 
 # ---------------------------------------------------------------------------
 # Optional SQLAlchemy engine (via infra or direct)
 # ---------------------------------------------------------------------------
-_get_engine: Any = None
-Engine: Any
 try:
     from sqlalchemy import create_engine as _create_engine
     from sqlalchemy.engine import Engine as _Engine
 
-    Engine = _Engine
 except Exception:  # pragma: no cover - optional
-    Engine = object  # sentinel type
-    _create_engine = None
+    _create_engine = None  # type: ignore[assignment]
 
 try:
     from app.infra.db import get_engine as _get_engine  # preferred
 except Exception:  # pragma: no cover - optional
-    _get_engine = None
-
+    _get_engine = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -109,6 +99,19 @@ CSV_TO_TABLE: dict[str, str] = {
     "product_category_name_translation.csv": "product_category_translation",
 }
 
+# Load order to satisfy foreign keys (lower comes first)
+TABLE_ORDER: dict[str, int] = {
+    "product_category_translation": 10,
+    "products": 20,
+    "customers": 30,
+    "sellers": 40,
+    "orders": 50,
+    "order_items": 60,
+    "order_payments": 70,
+    "order_reviews": 80,
+    "geolocation": 90,
+}
+
 
 @dataclass(slots=True)
 class IngestOptions:
@@ -121,7 +124,6 @@ class IngestOptions:
 # ---------------------------------------------------------------------------
 # Engine helpers
 # ---------------------------------------------------------------------------
-
 
 def _resolve_engine() -> Any:
     """Return a SQLAlchemy Engine using infra helper or DATABASE_URL.
@@ -142,7 +144,6 @@ def _resolve_engine() -> Any:
 # Core operations
 # ---------------------------------------------------------------------------
 
-
 def apply_schema(engine: Any, schema_path: Path) -> None:
     """Execute the schema SQL file (multiple statements allowed)."""
     sql_text = schema_path.read_text(encoding="utf-8")
@@ -161,42 +162,6 @@ def truncate_tables(engine: Any, tables: list[str]) -> None:
             conn.exec_driver_sql(f"TRUNCATE {table_list} RESTART IDENTITY CASCADE")
 
 
-def _read_csv_header(path: Path) -> list[str]:
-    with path.open("r", encoding="utf-8", newline="") as fh:
-        reader = csv.reader(fh)
-        header = next(reader)
-        return [h.strip() for h in header]
-
-
-def copy_csv(engine: Any, table: str, csv_path: Path) -> int:
-    """COPY a CSV file into `analytics.table` using the header as column list.
-
-    Returns the number of rows ingested (best effort; relies on driver rowcount
-    when available, otherwise returns -1).
-    """
-    columns = _read_csv_header(csv_path)
-    col_list = ", ".join(columns)
-    copy_sql = (
-        f"COPY {_SCHEMA_NAME}.{table} ({col_list}) "
-        "FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',', QUOTE '\"' , ESCAPE '\"', NULL '')"
-    )
-
-    # Use raw DBAPI connection to access copy_expert (psycopg2/psycopg)
-    with start_span("ingest.copy_csv", {"table": table, "file": str(csv_path)}):
-        with engine.raw_connection() as raw:
-            cur = raw.cursor()
-            with csv_path.open("r", encoding="utf-8", newline="") as fh:
-                try:
-                    # psycopg2/psycopg both expose copy_expert
-                    cur.copy_expert(copy_sql, fh)
-                finally:
-                    raw.commit()
-            try:
-                return int(getattr(cur, "rowcount", -1))
-            except Exception:
-                return -1
-
-
 def analyze_tables(engine: Any, tables: list[str]) -> None:
     if not tables:
         return
@@ -206,25 +171,143 @@ def analyze_tables(engine: Any, tables: list[str]) -> None:
                 conn.exec_driver_sql(f"ANALYZE {_SCHEMA_NAME}.{t}")
 
 
+def drop_fk_products_category_if_exists(engine: Any) -> None:
+    """Drop products→translation FK if present (to allow loading mismatched CSVs)."""
+    with start_span("ingest.drop_fk_products_category", None):
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f"ALTER TABLE {_SCHEMA_NAME}.products DROP CONSTRAINT IF EXISTS fk_products_category")
+
+
+def backfill_missing_product_categories(engine: Any) -> int:
+    """Ensure translation has at least the categories present in products (self-translation)."""
+    sql = f"""
+    INSERT INTO {_SCHEMA_NAME}.product_category_translation
+        (product_category_name, product_category_name_english)
+    SELECT DISTINCT p.product_category_name, p.product_category_name
+    FROM {_SCHEMA_NAME}.products AS p
+    LEFT JOIN {_SCHEMA_NAME}.product_category_translation AS t
+      ON t.product_category_name = p.product_category_name
+    WHERE p.product_category_name IS NOT NULL
+      AND t.product_category_name IS NULL
+    """
+    with start_span("ingest.backfill_categories", None):
+        with engine.begin() as conn:
+            res = conn.exec_driver_sql(sql)
+            try:
+                return int(getattr(res, "rowcount", 0))
+            except Exception:
+                return 0
+
+
+def add_fk_products_category(engine: Any) -> None:
+    """Recreate products→translation FK after backfilling."""
+    with start_span("ingest.add_fk_products_category", None):
+        with engine.begin() as conn:
+            conn.exec_driver_sql(
+                f"""
+                ALTER TABLE {_SCHEMA_NAME}.products
+                ADD CONSTRAINT fk_products_category
+                FOREIGN KEY (product_category_name)
+                REFERENCES {_SCHEMA_NAME}.product_category_translation(product_category_name)
+                """
+            )
+
+
+def copy_csv(engine: Any, table: str, csv_path: Path) -> int:
+    """COPY a CSV into a *temporary* table, then INSERT into analytics.table.
+
+    This makes the ingestion idempotent by skipping rows that would violate
+    primary key / unique constraints in the destination table.
+
+    Strategy
+    --------
+    1) CREATE TEMP TABLE tmp_copy_<table> (LIKE analytics.<table> INCLUDING DEFAULTS) ON COMMIT DROP
+       (no PK/unique constraints are copied, so duplicates load into temp).
+    2) COPY the CSV into the temp table using server-side header handling.
+    3) INSERT INTO analytics.<table> SELECT * FROM temp ON CONFLICT DO NOTHING.
+       Return the number of inserted rows (not the number copied into temp).
+    """
+    temp_table = f"tmp_copy_{table}"
+    schema_qualified = f"{_SCHEMA_NAME}.{table}"
+
+    # COPY statement targets the temporary table (no explicit column list; rely on CSV header ↔ table columns)
+    copy_sql = (
+        f"COPY {temp_table} "
+        "FROM STDIN WITH (FORMAT CSV, HEADER TRUE, DELIMITER ',', QUOTE '\"' , ESCAPE '\"', NULL '')"
+    )
+
+    insert_sql = f"INSERT INTO {schema_qualified} SELECT * FROM {temp_table} ON CONFLICT DO NOTHING"
+
+    with start_span("ingest.copy_csv", {"table": table, "file": str(csv_path)}):
+        raw = engine.raw_connection()
+        try:
+            cur: Any = raw.cursor()
+            inserted_rows = -1
+            try:
+                # 1) Create the temp table shaped like the destination (no PK/unique constraints)
+                cur.execute(
+                    f"CREATE TEMP TABLE {temp_table} (LIKE {schema_qualified} INCLUDING DEFAULTS) ON COMMIT DROP"
+                )
+
+                # 2) COPY the CSV into the temp table
+                if hasattr(cur, "copy"):
+                    # psycopg3 streaming API expects bytes; stream file in chunks
+                    with csv_path.open("rb") as fh:
+                        with cur.copy(copy_sql) as cp:  # type: ignore[attr-defined]
+                            while True:
+                                chunk = fh.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                cp.write(chunk)
+                elif hasattr(cur, "copy_expert"):
+                    # psycopg2 path; text mode works with HEADER TRUE
+                    with csv_path.open("r", encoding="utf-8", newline="") as fh:
+                        cur.copy_expert(copy_sql, fh)  # type: ignore[attr-defined]
+                else:
+                    raise RuntimeError(
+                        "COPY not supported by DBAPI driver (expected cursor.copy or cursor.copy_expert)"
+                    )
+
+                # 3) Move data into the destination, skipping duplicates
+                cur.execute(insert_sql)
+                try:
+                    inserted_rows = int(getattr(cur, "rowcount", -1))
+                except Exception:
+                    inserted_rows = -1
+
+                raw.commit()
+                return inserted_rows
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+        finally:
+            try:
+                raw.close()
+            except Exception:
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
-
 def discover_files(data_dir: Path) -> list[tuple[str, Path]]:
-    """Return a list of (table, path) for known CSVs found in data_dir."""
+    """Return a list of (table, path) for known CSVs found in data_dir, ordered to respect FKs."""
     found: list[tuple[str, Path]] = []
     for fname, table in CSV_TO_TABLE.items():
         p = data_dir / fname
         if p.exists():
             found.append((table, p))
+    # Ensure product_category_translation loads before products, etc.
+    found.sort(key=lambda pair: TABLE_ORDER.get(pair[0], 1000))
     return found
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
 
 def parse_args(argv: list[str] | None = None) -> IngestOptions:
     ap = argparse.ArgumentParser(description="Ingest Olist CSVs into analytics schema")
@@ -234,7 +317,10 @@ def parse_args(argv: list[str] | None = None) -> IngestOptions:
     ap.add_argument("--analyze", action="store_true", help="Run ANALYZE after load")
     ns = ap.parse_args(argv)
     return IngestOptions(
-        schema_path=ns.schema_path, data_dir=ns.data_dir, truncate=ns.truncate, analyze=ns.analyze
+        schema_path=ns.schema_path,
+        data_dir=ns.data_dir,
+        truncate=ns.truncate,
+        analyze=ns.analyze,
     )
 
 
@@ -247,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     with start_span("ingest.run", {"data_dir": str(opts.data_dir)}):
         # 1) Apply schema
         apply_schema(engine, opts.schema_path)
+        drop_fk_products_category_if_exists(engine)
 
         # 2) Discover CSVs and target tables
         pairs = discover_files(opts.data_dir)
@@ -264,6 +351,11 @@ def main(argv: list[str] | None = None) -> int:
             rows = copy_csv(engine, table, path)
             total_rows += max(rows, 0)
             log.info("loaded csv", table=table, path=str(path), rows=rows)
+
+        # Backfill any categories present in products but missing in translation, then re-add FK
+        inserted = backfill_missing_product_categories(engine)
+        log.info("category backfill complete", inserted=inserted)
+        add_fk_products_category(engine)
 
         # 4) Analyze
         if opts.analyze:

@@ -1,20 +1,22 @@
 """
-Graph builder (LangGraph wiring for multi‑agent assistant).
+Graph builder (LangGraph wiring for multi-agent assistant).
 
 Overview
 --------
 Assemble a LangGraph graph that routes user requests across four specialized
-agents (analytics, knowledge, commerce, triage) using a context‑first
-supervisor. The build is dependency‑light and degrades gracefully if LangGraph
+agents (analytics, knowledge, commerce, triage) using a context-first
+supervisor. The build is dependency-light and degrades gracefully if LangGraph
 is not available, returning a descriptive stub for tests.
 
 Design
 ------
 - Optional imports for LangGraph; provide safe fallbacks.
-- Nodes wrap our agent components with minimal, business‑centric I/O.
-- Routing: LLM classifier → deterministic supervisor with single‑pass fallbacks.
-- Human‑in‑the‑loop: optional SQL approval gate emitted before execution.
+- Nodes wrap our agent components with minimal, business-centric I/O.
+- Routing: LLM classifier → deterministic supervisor with single-pass fallbacks.
+- Human-in-the-loop: optional SQL approval gate emitted before execution.
 - Checkpointing: integrated when available via the infra helper.
+- Typed state with per-key channels (Annotated reducers) to support concurrent
+  updates during Studio graph rendering.
 
 Integration
 -----------
@@ -32,7 +34,7 @@ True
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Annotated, TypedDict
 
 # ---------------------------------------------------------------------------
 # Optional dependencies and infra fallbacks
@@ -46,6 +48,18 @@ try:  # LangGraph (optional at import time)
     END, StateGraph = _END, _StateGraph
 except Exception:  # pragma: no cover - optional
     END, StateGraph = "__END__", None
+
+# Optional messages reducer (Studio draws may fan-out and merge)
+try:
+    from langgraph.graph.message import add_messages as _add_messages
+
+    add_messages = _add_messages  # type: ignore[assignment]
+except Exception:  # pragma: no cover - optional
+
+    def add_messages(left: list[dict] | None, right: list[dict] | None) -> list[dict]:
+        # Fallback concatenation used only when LangGraph is absent at import time.
+        return (left or []) + (right or [])
+
 
 try:  # Logging
     from app.infra.logging import get_logger
@@ -92,7 +106,7 @@ except Exception:  # pragma: no cover - optional
         params: Mapping[str, Any] | None = None,
         limit: int | None = None,
         tables: Sequence[str] | None = None,
-        reason: str = "Confirmar execução de SQL",
+        reason: str = "Approve SQL execution",
     ) -> dict[str, Any]:
         return {
             "type": "human_interrupt",
@@ -102,6 +116,7 @@ except Exception:  # pragma: no cover - optional
                 "params": dict(params or {}),
                 "limit": limit,
                 "tables": list(tables or []),
+                "reason": reason,
             },
         }
 
@@ -115,27 +130,20 @@ try:
 except Exception:  # pragma: no cover - optional
     LLMClassifier = None
 
-apply_routing_rules: Any
+supervise: Any
 try:
-    import app.routing.supervisor as _supervisor
+    from app.routing.supervisor import supervise as _supervise
 
-    apply_routing_rules = getattr(_supervisor, "apply_routing_rules", None)
-    if apply_routing_rules is None:
-
-        def apply_routing_rules(
-            decision: Mapping[str, Any], *, allowlist: Mapping[str, list[str]] | None = None
-        ) -> Mapping[str, Any]:
-            return decision
-
+    supervise = _supervise
 except Exception:  # pragma: no cover - optional
 
-    def apply_routing_rules(
+    def supervise(
         decision: Mapping[str, Any], *, allowlist: Mapping[str, list[str]] | None = None
     ) -> Mapping[str, Any]:
         return decision
 
 
-# Agents: analytics
+# Agents: analytics - use full LLM-powered planner
 AnalyticsPlanner: Any
 try:
     from app.agents.analytics.planner import AnalyticsPlanner as _AnalyticsPlanner
@@ -236,6 +244,60 @@ try:
 except Exception:
     Answer = None
 
+
+# ---------------------------------------------------------------------------
+# Reducers (channels) to tolerate fan-out during Studio graph drawing
+# ---------------------------------------------------------------------------
+def _pick_last(_left: Any | None, right: Any | None) -> Any | None:
+    """Reducer: keep the last writer's value."""
+    return right
+
+
+# Reducer: concatenates lists, tolerating None on either side.
+def _concat_list(left: list[Any] | None, right: list[Any] | None) -> list[Any]:
+    """Reducer: concatenates lists, tolerating None on either side."""
+    return (left or []) + (right or [])
+
+
+# ---------------------------------------------------------------------------
+# Graph state definition (typed) with per-key channels
+# ---------------------------------------------------------------------------
+class GraphState(TypedDict, total=False):
+    # Input / routing
+    query: Annotated[str, _pick_last]
+    attachment: Annotated[Mapping[str, Any] | None, _pick_last]
+    allowlist: Annotated[Mapping[str, Sequence[str]] | None, _pick_last]
+    router_decision: Annotated[Mapping[str, Any] | None, _pick_last]
+    agent: Annotated[str | None, _pick_last]
+    tables: Annotated[list[str], _pick_last]
+    columns: Annotated[list[str], _pick_last]
+    k: Annotated[int | None, _pick_last]
+
+    # Observability / multi-writers
+    signals: Annotated[list[str], _concat_list]
+    interrupts: Annotated[list[dict[str, Any]], _concat_list]
+    messages: Annotated[list[dict[str, Any]], add_messages]
+
+    # Analytics
+    analytics_plan: Annotated[Mapping[str, Any] | None, _pick_last]
+    sql: Annotated[str | None, _pick_last]
+    params: Annotated[Mapping[str, Any] | None, _pick_last]
+    limit: Annotated[int | None, _pick_last]
+    analytics_rows: Annotated[list[Mapping[str, Any]] | None, _pick_last]
+
+    # Knowledge
+    hits: Annotated[list[Mapping[str, Any]] | None, _pick_last]
+    ranked: Annotated[list[Mapping[str, Any]] | None, _pick_last]
+    citations: Annotated[list[Mapping[str, Any]] | None, _pick_last]
+
+    # Commerce
+    detection: Annotated[Mapping[str, Any] | None, _pick_last]
+    doc: Annotated[Mapping[str, Any] | None, _pick_last]
+
+    # Final answer
+    answer: Annotated[Mapping[str, Any] | None, _pick_last]
+
+
 __all__ = ["build_graph"]
 
 # ---------------------------------------------------------------------------
@@ -243,7 +305,7 @@ __all__ = ["build_graph"]
 # ---------------------------------------------------------------------------
 
 
-def build_graph(*, require_sql_approval: bool = True) -> Any:
+def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] | None = None) -> Any:
     """Build and return a compiled LangGraph (or a descriptive stub).
 
     Parameters
@@ -251,6 +313,10 @@ def build_graph(*, require_sql_approval: bool = True) -> Any:
     require_sql_approval: When True, emit a human gate before executing SQL.
     """
     log = get_logger("graph.build")
+
+    # Database configuration is handled globally in assistant.py
+
+    # Allowlist will be loaded in assistant.py and passed via state
 
     # Instantiate components with gentle fallbacks
     classifier = LLMClassifier() if LLMClassifier is not None else _StubClassifier()
@@ -302,106 +368,199 @@ def build_graph(*, require_sql_approval: bool = True) -> Any:
         }
 
     with start_span("graph.build"):
-        sg = StateGraph(dict)  # state is a plain mapping
+        sg = StateGraph(GraphState)  # typed state with channels
 
-        # -- Node definitions ------------------------------------------------
-        def node_route(state: dict[str, Any]) -> dict[str, Any]:
+        # -- Node definitions (return deltas only) ---------------------------
+        def node_route(state: GraphState) -> dict[str, Any]:
             q = str(state.get("query", "")).strip()
+            attachment = state.get("attachment")
+            
+            # If there's an attachment, modify the query to include attachment context
+            if attachment:
+                filename = attachment.get("filename", "arquivo")
+                content_preview = attachment.get("content", "")[:200] + "..." if len(attachment.get("content", "")) > 200 else attachment.get("content", "")
+                q = f"{q} (Anexo: {filename} - {content_preview})"
+            
             with start_span("node.route"):
                 dec = classifier.classify(q)
-                state["router_decision"] = dec
-                return state
+                # Convert RouterDecision to dict if it's a dataclass
+                if hasattr(dec, '__dict__'):
+                    dec_dict = dec.__dict__
+                else:
+                    dec_dict = dec
+                
+                # Ensure we can access attributes as dict keys
+                if not isinstance(dec_dict, dict):
+                    dec_dict = {
+                        "agent": getattr(dec, "agent", "triage"),
+                        "confidence": getattr(dec, "confidence", 0.0),
+                        "reason": getattr(dec, "reason", ""),
+                        "tables": getattr(dec, "tables", []),
+                        "columns": getattr(dec, "columns", []),
+                        "signals": getattr(dec, "signals", []),
+                        "thread_id": getattr(dec, "thread_id", ""),
+                    }
+                
+                return {
+                    "allowlist": allowlist or {},  # Include allowlist in state
+                    "router_decision": dec_dict,
+                    "tables": list(dec_dict.get("tables", [])),
+                    "columns": list(dec_dict.get("columns", [])),
+                    "signals": list(dec_dict.get("signals", [])),
+                }
 
-        def node_supervisor(state: dict[str, Any]) -> dict[str, Any]:
+        def node_supervisor(state: GraphState) -> dict[str, Any]:
             with start_span("node.supervisor"):
-                dec = state.get("router_decision", {})
-                dec2 = apply_routing_rules(dec, allowlist=state.get("allowlist"))
-                # Normalize agent name
-                agent = (dec2.get("agent") or "triage").strip()
-                state["agent"] = agent
-                state["router_decision"] = dec2
-                return state
+                dec = state.get("router_decision") or {}
+                # Don't pass context to avoid incorrect fallbacks
+                dec2 = supervise(dec)
+                # Convert RouterDecision to dict if it's a dataclass
+                if hasattr(dec2, '__dict__'):
+                    dec2_dict = dec2.__dict__
+                else:
+                    dec2_dict = dec2
+                
+                # Ensure we can access attributes as dict keys
+                if not isinstance(dec2_dict, dict):
+                    dec2_dict = {
+                        "agent": getattr(dec2, "agent", "triage"),
+                        "confidence": getattr(dec2, "confidence", 0.0),
+                        "reason": getattr(dec2, "reason", ""),
+                        "tables": getattr(dec2, "tables", []),
+                        "columns": getattr(dec2, "columns", []),
+                        "signals": getattr(dec2, "signals", []),
+                        "thread_id": getattr(dec2, "thread_id", ""),
+                    }
+                
+                # Ensure dec2_dict is not None
+                if dec2_dict is None:
+                    dec2_dict = {"agent": "triage", "confidence": 0.0, "reason": "", "tables": [], "columns": [], "signals": []}
+                
+                agent = (dec2_dict.get("agent") or "triage").strip()
+                return {"agent": agent, "router_decision": dec2_dict}
 
         # Analytics pipeline
-        def node_an_plan(state: dict[str, Any]) -> dict[str, Any]:
+        def node_an_plan(state: GraphState) -> dict[str, Any]:
             with start_span("node.analytics.plan"):
+                allowlist = state.get("allowlist") or {}
+                # Fallback to hardcoded allowlist if empty
+                if not allowlist:
+                    allowlist = {
+                        "orders": ["order_id", "customer_id", "order_status", "order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"],
+                        "order_items": ["order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"],
+                        "customers": ["customer_id", "customer_unique_id", "customer_zip_code_prefix", "customer_city", "customer_state"],
+                        "products": ["product_id", "product_category_name", "product_name_lenght", "product_description_lenght", "product_photos_qty", "product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm"],
+                        "sellers": ["seller_id", "seller_zip_code_prefix", "seller_city", "seller_state"],
+                        "order_payments": ["order_id", "payment_sequential", "payment_type", "payment_installments", "payment_value"],
+                        "order_reviews": ["review_id", "order_id", "review_score", "review_comment_title", "review_comment_message", "review_creation_date", "review_answer_timestamp"],
+                        "geolocation": ["geolocation_zip_code_prefix", "geolocation_lat", "geolocation_lng", "geolocation_city", "geolocation_state"],
+                        "product_category_translation": ["product_category_name", "product_category_name_english"]
+                    }
                 plan = analytics_planner.plan(
                     query=str(state.get("query", "")),
-                    allowlist=state.get("allowlist"),
+                    allowlist=allowlist,
                 )
-                state["analytics_plan"] = plan
-                return state
+                return {"analytics_plan": plan}
 
-        def node_an_exec(state: dict[str, Any]) -> dict[str, Any]:
+        def node_an_exec(state: GraphState) -> dict[str, Any]:
             with start_span("node.analytics.exec"):
-                plan = state.get("analytics_plan", {})
-                sql = plan.get("sql", "")
-                params = plan.get("params", {})
-                limit = plan.get("limit_applied")
+                plan = state.get("analytics_plan")
+                if plan is None:
+                    return {"rows": [], "sql": "", "error": "No analytics plan available"}
+                
+                # Convert PlannerPlan to dict if needed
+                if hasattr(plan, 'to_dict'):
+                    plan_dict = plan.to_dict()
+                elif hasattr(plan, '__dict__'):
+                    plan_dict = plan.__dict__
+                else:
+                    plan_dict = plan
+                
+                sql = plan_dict.get("sql", "")
+                params = plan_dict.get("params", {})
+                limit = plan_dict.get("limit_applied")
+                out: dict[str, Any] = {}
 
-                # Optional human gate
                 if require_sql_approval and sql:
-                    state.setdefault("interrupts", []).append(
+                    out["interrupts"] = [
                         make_sql_gate(
                             sql=sql,
                             params=params,
                             limit=limit,
-                            tables=plan.get("tables"),
-                            reason="Aprovar execução de SQL",
+                            tables=plan_dict.get("tables"),
+                            reason="Approve SQL execution",
                         )
-                    )
+                    ]
 
-                rows = analytics_executor.execute(sql=sql, params=params, limit=limit)
-                state["analytics_rows"] = rows
-                return state
+                rows = analytics_executor.execute(plan_dict)
+                out["analytics_rows"] = rows
+                return out
 
-        def node_an_norm(state: dict[str, Any]) -> dict[str, Any]:
+        def node_an_norm(state: GraphState) -> dict[str, Any]:
             with start_span("node.analytics.normalize"):
-                rows = state.get("analytics_rows")
-                plan = state.get("analytics_plan", {})
+                result = state.get("analytics_rows")
+                plan = state.get("analytics_plan") or {}
+                
+                # Convert plan to dict if needed
+                if hasattr(plan, 'to_dict'):
+                    plan_dict = plan.to_dict()
+                elif hasattr(plan, '__dict__'):
+                    plan_dict = plan.__dict__
+                else:
+                    plan_dict = plan
+                
+                # Convert ExecutorResult to dict if needed
+                if hasattr(result, 'to_dict'):
+                    result_dict = result.to_dict()
+                elif hasattr(result, '__dict__'):
+                    result_dict = result.__dict__
+                else:
+                    result_dict = result or {}
+                
                 normalized = analytics_norm.normalize(
-                    query=str(state.get("query", "")), rows=rows, plan=plan
+                    plan=plan_dict,
+                    result=result_dict,
+                    question=str(state.get("query", ""))
                 )
-                state["answer"] = normalized
-                return state
+                return {"answer": normalized}
 
         # Knowledge pipeline
-        def node_kn_retrieve(state: dict[str, Any]) -> dict[str, Any]:
+        def node_kn_retrieve(state: GraphState) -> dict[str, Any]:
             with start_span("node.knowledge.retrieve"):
-                hits = retriever.retrieve(query=str(state.get("query", "")), k=state.get("k", 6))
-                state["hits"] = hits
-                return state
+                result = retriever.retrieve(query=str(state.get("query", "")), top_k=state.get("k", 6), min_score=0.01)
+                return {"hits": result.hits}
 
-        def node_kn_rank(state: dict[str, Any]) -> dict[str, Any]:
+        def node_kn_rank(state: GraphState) -> dict[str, Any]:
             with start_span("node.knowledge.rank"):
-                ranked = ranker.rank(query=str(state.get("query", "")), hits=state.get("hits", []))
-                state["ranked"] = ranked
-                return state
+                result = ranker.rank(query=str(state.get("query", "")), hits=state.get("hits") or [])
+                return {"ranked": result.hits}
 
-        def node_kn_answer(state: dict[str, Any]) -> dict[str, Any]:
+        def node_kn_answer(state: GraphState) -> dict[str, Any]:
             with start_span("node.knowledge.answer"):
                 ans = answerer.answer(
-                    query=str(state.get("query", "")), ranked=state.get("ranked", [])
+                    query=str(state.get("query", "")), ranked=state.get("ranked") or []
                 )
-                state["answer"] = ans
-                return state
+                cites = ans.get("citations") if isinstance(ans, dict) else None
+                out: dict[str, Any] = {"answer": ans}
+                if cites:
+                    out["citations"] = cites
+                return out
 
         # Commerce pipeline
-        def node_co_detect(state: dict[str, Any]) -> dict[str, Any]:
+        def node_co_detect(state: GraphState) -> dict[str, Any]:
             with start_span("node.commerce.detect"):
                 det = detector.detect(
                     source_filename=state.get("source_filename"),
                     source_mime=state.get("source_mime"),
                     text=state.get("text"),
                 )
-                state["detection"] = det
-                return state
+                return {"detection": det}
 
-        def node_co_extract(state: dict[str, Any]) -> dict[str, Any]:
+        def node_co_extract(state: GraphState) -> dict[str, Any]:
             with start_span("node.commerce.extract"):
-                det = state.get("detection")
+                det = state.get("detection") or {}
                 doc = extractor.extract(
-                    text=state.get("text", ""),
+                    text=str(state.get("text", "")),
                     source_filename=state.get("source_filename"),
                     source_mime=state.get("source_mime"),
                     doc_type_hint=getattr(det, "doc_type", None)
@@ -409,21 +568,18 @@ def build_graph(*, require_sql_approval: bool = True) -> Any:
                     currency_hint=getattr(det, "currency", None)
                     or (det.get("currency") if isinstance(det, Mapping) else None),
                 )
-                state["doc"] = doc
-                return state
+                return {"doc": doc}
 
-        def node_co_summarize(state: dict[str, Any]) -> dict[str, Any]:
+        def node_co_summarize(state: GraphState) -> dict[str, Any]:
             with start_span("node.commerce.summarize"):
-                ans = summarizer.summarize(state.get("doc"))
-                state["answer"] = ans
-                return state
+                ans = summarizer.summarize(state.get("doc") or {})
+                return {"answer": ans}
 
         # Triage
-        def node_tr_handle(state: dict[str, Any]) -> dict[str, Any]:
+        def node_tr_handle(state: GraphState) -> dict[str, Any]:
             with start_span("node.triage.handle"):
                 ans = triage.handle(query=str(state.get("query", "")), signals=state.get("signals"))
-                state["answer"] = ans
-                return state
+                return {"answer": ans}
 
         # -- Graph wiring ----------------------------------------------------
         sg.add_node("route", node_route)
@@ -446,7 +602,7 @@ def build_graph(*, require_sql_approval: bool = True) -> Any:
         sg.set_entry_point("route")
         sg.add_edge("route", "supervisor")
 
-        # Conditional fan‑out after supervisor
+        # Conditional fan-out after supervisor
         sg.add_conditional_edges(
             "supervisor",
             lambda s: (s.get("agent") or "triage").strip(),
@@ -499,7 +655,7 @@ class _StubClassifier:
         ql = (query or "").lower()
         if any(k in ql for k in ("invoice", "po ", "purchase order", "beo")):
             agent = "commerce"
-        elif any(k in ql for k in ("tabela", "coluna", "média", "soma", "por mês", "sql")):
+        elif any(k in ql for k in ("tabela", "coluna", "média", "soma", "por mês", "sql", "pedido")):
             agent = "analytics"
         elif any(k in ql for k in ("política", "manual", "documento", "pdf", "como ")):
             agent = "knowledge"
@@ -525,16 +681,15 @@ class _StubAnalyticsExecutor:
     def __init__(self, require_sql_approval: bool) -> None:
         self.require_sql_approval = require_sql_approval
 
-    def execute(
-        self, *, sql: str, params: Mapping[str, Any] | None = None, limit: int | None = None
-    ) -> list[dict[str, Any]]:
+    def execute(self, plan: Mapping[str, Any]) -> list[dict[str, Any]]:
         # Return a tiny fake result
         return [{"qty": 123}]
 
 
 class _StubAnalyticsNormalizer:
-    def normalize(self, *, query: str, rows: Any, plan: Mapping[str, Any]) -> Mapping[str, Any]:
+    def normalize(self, plan: Mapping[str, Any], result: Mapping[str, Any], question: str) -> Mapping[str, Any]:
         text = "Encontrei 123 registros (amostra limitada para segurança)."
+        rows = result.get("rows", [])
         return {
             "text": text,
             "data": rows,

@@ -239,27 +239,32 @@ class CommerceExtractor:
         ),
     }
 
-    RE_CURRENCY_SYM = re.compile(r"(R\$|\$|€|£)")
+    RE_CURRENCY_SYM = re.compile(r"(US\$|U\$S|R\$|\$|€|£)")
     RE_CURRENCY_CODE = re.compile(r"\b(USD|BRL|EUR|GBP|ARS|CLP|MXN)\b", re.IGNORECASE)
+
+    _CURRENCY_PREFIX = r"(?:US\$|U\$S|R\$|\$|€|£)\s*"
 
     RE_DATE = re.compile(r"\b((?:\d{4}[-/]\d{2}[-/]\d{2})|(?:\d{2}[-/]\d{2}[-/]\d{4}))\b")
 
     RE_TOTAL = re.compile(
-        r"\b(grand\s+total|total\s+geral|valor\s+total|total)\b[:\-]?\s*([\p{Sc}R$€£$]?[\s\t]*[0-9.,]+)",
+        rf"\b(grand\s+total|total\s+geral|valor\s+total|total)\b[:\-]?\s*({_CURRENCY_PREFIX}?[0-9][0-9.,]*)",
         re.IGNORECASE,
     )
     RE_SUBTOTAL = re.compile(
-        r"\b(subtotal)\b[:\-]?\s*([\p{Sc}R$€£$]?[\s\t]*[0-9.,]+)", re.IGNORECASE
+        rf"\b(subtotal)\b[:\-]?\s*({_CURRENCY_PREFIX}?[0-9][0-9.,]*)",
+        re.IGNORECASE,
     )
     RE_FREIGHT = re.compile(
-        r"\b(freight|shipping|frete)\b[:\-]?\s*([\p{Sc}R$€£$]?[\s\t]*[0-9.,]+)", re.IGNORECASE
+        rf"\b(freight|shipping|frete)\b[:\-]?\s*({_CURRENCY_PREFIX}?[0-9][0-9.,]*)",
+        re.IGNORECASE,
     )
     RE_DISCOUNT = re.compile(
-        r"\b(discount|desconto)\b[:\-]?\s*([\p{Sc}R$€£$]?[\s\t]*[0-9.,]+)", re.IGNORECASE
+        rf"\b(discount|desconto)\b[:\-]?\s*({_CURRENCY_PREFIX}?[0-9][0-9.,]*)",
+        re.IGNORECASE,
     )
 
     RE_ITEM_LINE = re.compile(
-        r"^(?P<idx>\d{1,4})?\s*(?P<sku>[A-Z0-9_\-]{3,})?\s*(?P<name>[\w\- ,./]{3,})\s+(?P<qty>\d+[\.,]?\d*)\s+(?P<unit_price>[R$€£$]?[\d.,]+)\s+(?P<line_total>[R$€£$]?[\d.,]+)\s*$",
+        rf"^(?P<idx>\d{{1,4}})?\s*\)?\s*(?P<sku>[A-Z0-9_\-]{{3,}})?\s*(?P<name>[\w\- ,./]{{3,}})\s+(?:qty:)?(?P<qty>\d+[\.,]?\d*)\s+(?:unit:)?(?P<unit_price>{_CURRENCY_PREFIX}?[0-9][\d.,]*)\s+(?:line:)?(?P<line_total>{_CURRENCY_PREFIX}?[0-9][\d.,]*)\s*$",
         re.IGNORECASE,
     )
 
@@ -278,7 +283,7 @@ class CommerceExtractor:
         currency_hint: str | None = None,
         use_llm: bool = False,
         max_items: int | None = None,
-    ) -> CommerceDoc:
+    ) -> dict[str, Any]:
         """Return a normalized :class:`CommerceDoc` from the given text.
 
         The LLM path is optional and only used when `use_llm=True` **and** an
@@ -288,7 +293,7 @@ class CommerceExtractor:
         with start_span("agent.commerce.extract", {"use_llm": use_llm}):
             text = (text or "").strip()
             if not text:
-                return self._empty_doc(
+                doc = self._empty_doc(
                     source_filename=source_filename,
                     source_mime=source_mime,
                     doc_type=doc_type_hint,
@@ -296,17 +301,19 @@ class CommerceExtractor:
                     parse_engine="empty@1",
                     warnings=["empty_text"],
                 )
+                return doc.to_dict()
 
             api_key = os.getenv("OPENAI_API_KEY")
             if use_llm and api_key:  # optional branch
                 try:
-                    return self._extract_via_llm(
+                    doc = self._extract_via_llm(
                         text=text,
                         source_filename=source_filename,
                         source_mime=source_mime,
                         doc_type_hint=doc_type_hint,
                         currency_hint=currency_hint,
                     )
+                    return doc.to_dict()
                 except Exception as exc:
                     # Fall back to heuristics, attach warning
                     doc = self._extract_via_heuristics(
@@ -318,9 +325,9 @@ class CommerceExtractor:
                         max_items=max_items,
                     )
                     doc.risks = [*doc.risks, f"llm_extract_error:{type(exc).__name__}"]
-                    return doc
+                    return doc.to_dict()
 
-            return self._extract_via_heuristics(
+            doc = self._extract_via_heuristics(
                 text=text,
                 source_filename=source_filename,
                 source_mime=source_mime,
@@ -328,6 +335,7 @@ class CommerceExtractor:
                 currency_hint=currency_hint,
                 max_items=max_items,
             )
+            return doc.to_dict()
 
     # -- Paths ---------------------------------------------------------------
     def _extract_via_heuristics(
