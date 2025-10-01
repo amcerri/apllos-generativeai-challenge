@@ -20,7 +20,7 @@ Integration
       `url` or `doc_id` per citation).
 
 Usage
-    >>> a = Answer(text="Tudo certo.")
+    >>> a = Answer(text="All good.")
     >>> a.to_dict()["text"]
     'Tudo certo.'
 """
@@ -29,7 +29,46 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
+
+__all__: Final[list[str]] = ["Citation", "Answer", "ANSWER_JSON_SCHEMA"]
+
+# JSON Schema for Structured Outputs
+ANSWER_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Answer",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "text": {"type": "string", "minLength": 1},
+        "data": {"type": ["array", "null"], "items": {"type": "array"}},
+        "columns": {"type": ["array", "null"], "items": {"type": "string"}},
+        "citations": {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "title": {"type": "string", "minLength": 1},
+                    "url": {"type": ["string", "null"]},
+                    "doc_id": {"type": ["string", "null"]},
+                    "chunk_id": {"type": ["string", "null"]},
+                    "lines": {"type": ["string", "null"]},
+                },
+                "required": ["title"],
+                "anyOf": [
+                    {"required": ["url"]},
+                    {"required": ["doc_id"]},
+                ],
+            },
+        },
+        "meta": {"type": ["object", "null"]},
+        "no_context": {"type": ["boolean", "null"]},
+        "artifacts": {"type": ["object", "null"]},
+        "followups": {"type": ["array", "null"], "items": {"type": "string"}},
+    },
+    "required": ["text"],
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,7 +110,7 @@ def _norm_rows(rows: Iterable[Iterable[Any]] | None, expected_len: int | None) -
 # ---------------------------------------------------------------------------
 # Citation
 # ---------------------------------------------------------------------------
-@dataclass
+@dataclass(slots=True)
 class Citation:
     """Reference to a supporting source used in an answer.
 
@@ -133,7 +172,7 @@ class Citation:
 # ---------------------------------------------------------------------------
 # Answer
 # ---------------------------------------------------------------------------
-@dataclass
+@dataclass(slots=True)
 class Answer:
     """Agent answer contract with minimal runtime validation.
 
@@ -280,47 +319,9 @@ class Answer:
             followups=followups_list,
         )
 
-    # ---------------------------
-    # JSON Schema for Structured Outputs
-    # ---------------------------
-    JSON_SCHEMA: dict[str, Any] = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Answer",
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "text": {"type": "string", "minLength": 1},
-            "data": {"type": ["array", "null"], "items": {"type": "array"}},
-            "columns": {"type": ["array", "null"], "items": {"type": "string"}},
-            "citations": {
-                "type": ["array", "null"],
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "title": {"type": "string", "minLength": 1},
-                        "url": {"type": ["string", "null"]},
-                        "doc_id": {"type": ["string", "null"]},
-                        "chunk_id": {"type": ["string", "null"]},
-                        "lines": {"type": ["string", "null"]},
-                    },
-                    "required": ["title"],
-                    "anyOf": [
-                        {"required": ["url"]},
-                        {"required": ["doc_id"]},
-                    ],
-                },
-            },
-            "meta": {"type": ["object", "null"]},
-            "no_context": {"type": ["boolean", "null"]},
-            "artifacts": {"type": ["object", "null"]},
-            "followups": {"type": ["array", "null"], "items": {"type": "string"}},
-        },
-        "required": ["text"],
-    }
 
     @classmethod
     def schema(cls) -> dict[str, Any]:
         """Return a (shallow) copy of the JSON Schema dict."""
 
-        return dict(cls.JSON_SCHEMA)
+        return dict(ANSWER_JSON_SCHEMA)

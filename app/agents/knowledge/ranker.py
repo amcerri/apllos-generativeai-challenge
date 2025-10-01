@@ -207,11 +207,11 @@ class KnowledgeRanker:
                 )
 
             # Optional threshold on rerank
-            if isinstance(min_score, float):
-                ranked = [h for h in ranked if h.rerank >= min_score]
+            if min_score is not None:
+                ranked = [h for h in ranked if h.rerank >= float(min_score)]
 
             # Sort and cap
-            ranked.sort(key=lambda h: (h.rerank, h.score, -len(h.text)), reverse=True)
+            ranked.sort(key=lambda h: (h.rerank, h.score, len(h.text)), reverse=True)
             ranked = ranked[: max(1, int(top_k))]
 
             return RankResult(hits=ranked, used_weights=self._weights_map())
@@ -231,7 +231,6 @@ class KnowledgeRanker:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-_TOKEN_RE = re.compile(r"[\p{L}\p{N}_-]+", flags=re.IGNORECASE)
 
 # Python's `re` lacks \p classes by default; use a pragmatic fallback
 _FALLBACK_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-]+", flags=re.IGNORECASE)

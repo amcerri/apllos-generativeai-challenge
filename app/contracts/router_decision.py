@@ -30,22 +30,68 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import Any, Final, Literal, cast
 
 # ---------------------------------------------------------------------------
 # Canonical agent names and schema
 # ---------------------------------------------------------------------------
 AgentName = Literal["analytics", "knowledge", "commerce", "triage"]
-_AGENT_VALUES: tuple[str, ...] = ("analytics", "knowledge", "commerce", "triage")
-_ALLOWED_KEYS: tuple[str, ...] = (
+_AGENT_VALUES: Final[tuple[str, ...]] = ("analytics", "knowledge", "commerce", "triage")
+_ALLOWED_KEYS: Final[tuple[str, ...]] = (
     "agent",
     "confidence",
     "reason",
     "tables",
     "columns",
     "signals",
-    "thread_id",
 )
+
+__all__: Final[list[str]] = ["AgentName", "RouterDecision", "ROUTER_DECISION_JSON_SCHEMA"]
+
+# JSON Schema for Structured Outputs
+ROUTER_DECISION_JSON_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "RouterDecision",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "agent": {
+            "type": "string",
+            "enum": list(_AGENT_VALUES),
+            "description": "Target agent name",
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "description": "Classifier confidence in [0,1]",
+        },
+        "reason": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short justification for the route",
+        },
+        "tables": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Referenced/recognized tables",
+            "default": [],
+        },
+        "columns": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Referenced/recognized columns",
+            "default": [],
+        },
+        "signals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Routing signals (allowlist-hit, rag-hit, etc.)",
+            "default": [],
+        },
+    },
+    "required": ["agent", "confidence", "reason"],
+}
 
 
 def _norm_list_str(values: Iterable[Any] | None) -> list[str]:
@@ -73,7 +119,7 @@ def _is_valid_agent(value: str) -> bool:
     return value in _AGENT_VALUES
 
 
-@dataclass
+@dataclass(slots=True)
 class RouterDecision:
     """Router output contract with minimal runtime validation.
 
@@ -189,60 +235,9 @@ class RouterDecision:
             thread_id=(str(thread_id).strip() or None) if thread_id is not None else None,
         )
 
-    # ---------------------------
-    # JSON Schema for Structured Outputs
-    # ---------------------------
-    JSON_SCHEMA: dict[str, Any] = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "RouterDecision",
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "agent": {
-                "type": "string",
-                "enum": list(_AGENT_VALUES),
-                "description": "Target agent name",
-            },
-            "confidence": {
-                "type": "number",
-                "minimum": 0.0,
-                "maximum": 1.0,
-                "description": "Classifier confidence in [0,1]",
-            },
-            "reason": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Short justification for the route",
-            },
-            "tables": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Referenced/recognized tables",
-                "default": [],
-            },
-            "columns": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Referenced/recognized columns",
-                "default": [],
-            },
-            "signals": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Routing signals (allowlist-hit, rag-hit, etc.)",
-                "default": [],
-            },
-            "thread_id": {
-                "type": ["string", "null"],
-                "description": "Thread correlation identifier (optional)",
-                "default": None,
-            },
-        },
-        "required": ["agent", "confidence", "reason"],
-    }
 
     @classmethod
     def schema(cls) -> dict[str, Any]:
         """Return a (shallow) copy of the JSON Schema dict."""
 
-        return dict(cls.JSON_SCHEMA)
+        return dict(ROUTER_DECISION_JSON_SCHEMA)

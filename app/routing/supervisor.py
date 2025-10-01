@@ -154,8 +154,18 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
         fallback_applied = False
         chosen = agent
 
-        allowlist_cues = bool(tables or columns or ("sql_intent" in signals))
-        doc_cues = bool("doc_intent" in signals or ctx.rag_hits > 0)
+        # Sync with LLMClassifier signal names: accepts both legacy and new variants.
+        allowlist_cues = bool(
+            tables
+            or columns
+            or ("sql_like" in signals)      # new structural SQL hint
+            or ("sql_intent" in signals)    # legacy name
+        )
+        doc_cues = bool(
+            ("doc_style" in signals)         # new weak document‑style hint
+            or ("doc_intent" in signals)     # legacy name
+            or (ctx.rag_hits and ctx.rag_hits > 0)
+        )
 
         if agent == "analytics" and doc_cues and not allowlist_cues:
             chosen = "knowledge"

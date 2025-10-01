@@ -28,6 +28,7 @@ from typing import (
     Any,
     Protocol,
     TypeVar,
+    Final,
     runtime_checkable,
 )
 
@@ -50,7 +51,7 @@ JSONValue = JSONScalar | dict[str, "JSONValue"] | list["JSONValue"]
 JSONArray = list[JSONValue]
 JSONObject = dict[str, JSONValue]
 
-__all__ = [
+__all__: Final[list[str]] = [
     "T",
     "R",
     "StrPath",

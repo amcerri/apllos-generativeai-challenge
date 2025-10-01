@@ -72,7 +72,7 @@ _get_engine: Any = None
 Engine: Any
 try:
     from sqlalchemy import create_engine as _create_engine
-    from sqlalchemy import text as _sql_text
+    from sqlalchemy import text as _sql_text, bindparam as _bindparam
     from sqlalchemy.engine import Engine as _Engine
 
     Engine = _Engine
@@ -122,24 +122,37 @@ def _fetch_allowlist(engine: Any, *, schema: str, include_views: bool) -> dict[s
     # Restrict to base tables by default; optionally include views
     kinds = ("BASE TABLE", "VIEW") if include_views else ("BASE TABLE",)
 
-    sql = """
-        SELECT c.table_name, c.column_name
-        FROM information_schema.columns c
-        JOIN information_schema.tables t
-          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
-        WHERE c.table_schema = :schema
-          AND t.table_type = ANY(:kinds)
-          AND c.table_name NOT LIKE 'pg\\_%' ESCAPE '\\'
-          AND c.table_name NOT LIKE 'sql\\_%' ESCAPE '\\'
-        ORDER BY c.table_name, c.ordinal_position
-        """
     out: dict[str, list[str]] = {}
     with engine.begin() as conn:
-        res = (
-            conn.execute(_sql_text(sql), {"schema": schema, "kinds": list(kinds)})
-            if _sql_text
-            else conn.exec_driver_sql(sql, {"schema": schema, "kinds": list(kinds)})
-        )
+        if _sql_text is not None:
+            sql = """
+                SELECT c.table_name, c.column_name
+                FROM information_schema.columns c
+                JOIN information_schema.tables t
+                  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                WHERE c.table_schema = :schema
+                  AND t.table_type IN :kinds
+                  AND c.table_name NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.table_name NOT LIKE 'sql\\_%' ESCAPE '\\'
+                ORDER BY c.table_name, c.ordinal_position
+            """
+            stmt = _sql_text(sql).bindparams(_bindparam("kinds", expanding=True))
+            res = conn.execute(stmt, {"schema": schema, "kinds": list(kinds)})
+        else:
+            # Fallback for DBAPI pathways without SQLAlchemy text/expanding params
+            type_filter = "IN ('BASE TABLE','VIEW')" if include_views else "= 'BASE TABLE'"
+            sql = f"""
+                SELECT c.table_name, c.column_name
+                FROM information_schema.columns c
+                JOIN information_schema.tables t
+                  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+                WHERE c.table_schema = :schema
+                  AND t.table_type {type_filter}
+                  AND c.table_name NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.table_name NOT LIKE 'sql\\_%' ESCAPE '\\'
+                ORDER BY c.table_name, c.ordinal_position
+            """
+            res = conn.exec_driver_sql(sql, {"schema": schema})
         for table, column in res.fetchall():
             out.setdefault(str(table), []).append(str(column))
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from typing import Any
+from typing import Any, Final
 
 from . import safe_json_dumps, utc_now
 from . import short_uuid as _short_uuid
@@ -45,6 +45,7 @@ __all__ = [
     "parse_uuid",
     "normalize_id",
     "ulid",
+    "is_valid_ulid",
 ]
 
 
@@ -163,7 +164,8 @@ def normalize_id(value: str | None, *, lower: bool = True) -> str | None:
 # ---------------------------------------------------------------------------
 # ULID (Universally Unique Lexicographically Sortable Identifier)
 # ---------------------------------------------------------------------------
-_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford's Base32 (no I, L, O, U)
+_ALPHABET: Final[str] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford's Base32 (no I, L, O, U)
+_ALPHABET_SET: Final[set[str]] = set(_ALPHABET)
 
 
 def _encode_crockford(value: int, length: int) -> str:
@@ -172,6 +174,20 @@ def _encode_crockford(value: int, length: int) -> str:
         chars.append(_ALPHABET[value & 31])
         value >>= 5
     return "".join(reversed(chars))
+
+
+def is_valid_ulid(value: str | None) -> bool:
+    """Return True if *value* looks like a valid ULID string (26 chars, Crockford base32).
+
+    This is a lightweight syntactic check (length + alphabet); it does not parse components.
+    """
+
+    if value is None:
+        return False
+    s = str(value).strip().upper()
+    if len(s) != 26:
+        return False
+    return all(ch in _ALPHABET_SET for ch in s)
 
 
 def ulid() -> str:

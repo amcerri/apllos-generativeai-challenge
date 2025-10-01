@@ -114,7 +114,7 @@ _DEFAULT_DOCS_DIR: Final[str] = "data/docs"
 _DEFAULT_PATTERN: Final[str] = "*.pdf,*.txt,*.md"
 _DEFAULT_MODEL: Final[str] = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 _DEFAULT_DIM: Final[int] = int(os.environ.get("EMBEDDING_DIM", "1536"))
-_DEFAULT_TABLE: Final[str] = os.environ.get("RAG_TABLE", "rag.chunks")
+_DEFAULT_TABLE: Final[str] = os.environ.get("RAG_TABLE", "public.doc_chunks")
 
 _TRUE: Final[set[str]] = {"1", "true", "yes", "on"}
 
@@ -140,7 +140,7 @@ class IngestOpts:
 def _resolve_engine() -> Any:
     if _get_engine is not None:
         return _get_engine()
-    if _create_engine is None:
+    if globals().get("_create_engine") is None:
         raise RuntimeError("SQLAlchemy is required but not available")
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -271,15 +271,16 @@ def _ensure_schema(engine: Any, *, dim: int, table: str) -> None:
         conn.exec_driver_sql(
             f"""
             CREATE TABLE IF NOT EXISTS {schema}.{name} (
-                doc_id     TEXT NOT NULL,
-                chunk_id   INTEGER NOT NULL,
+                id         SERIAL PRIMARY KEY,
+                doc_id     TEXT,
+                chunk_id   TEXT,
                 title      TEXT,
                 content    TEXT NOT NULL,
-                embedding  vector({dim}) NOT NULL,
-                source_path TEXT,
+                embedding  vector({dim}),
+                source     TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
                 metadata   JSONB,
-                created_at TIMESTAMP DEFAULT NOW(),
-                PRIMARY KEY (doc_id, chunk_id)
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -289,10 +290,13 @@ def _index_exists(engine: Any, *, table: str) -> bool:
     schema, _, name = table.partition(".")
     schema = schema or "public"
     name = name or table
-    q = "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND indexname = %s LIMIT 1"
+    q = (
+        "SELECT 1 FROM pg_indexes WHERE schemaname = %(schema)s AND indexname = %(idx)s LIMIT 1"
+    )
     idx_name = f"idx_{name}_embedding"
+    params = {"schema": schema, "idx": idx_name}
     with engine.begin() as conn:
-        res = conn.exec_driver_sql(q, (schema, idx_name))
+        res = conn.exec_driver_sql(q, params)
         row = res.first()
         return bool(row)
 
@@ -310,11 +314,11 @@ def _create_index(engine: Any, *, table: str, method: str) -> None:
         conn.exec_driver_sql(f"DROP INDEX IF EXISTS {schema}.{idx_name}")
         if method == "hnsw":
             conn.exec_driver_sql(
-                f"CREATE INDEX {idx_name} ON {schema}.{name} USING hnsw (embedding)"
+                f"CREATE INDEX {idx_name} ON {schema}.{name} USING hnsw (embedding vector_cosine_ops)"
             )
         else:
             conn.exec_driver_sql(
-                f"CREATE INDEX {idx_name} ON {schema}.{name} USING ivfflat (embedding) WITH (lists=100)"
+                f"CREATE INDEX {idx_name} ON {schema}.{name} USING ivfflat (embedding vector_cosine_ops) WITH (lists=100)"
             )
 
 
@@ -337,11 +341,12 @@ def upsert_chunks(
         rows.append(
             {
                 "doc_id": doc_id,
-                "chunk_id": i,
+                "chunk_id": f"chunk_{i}",
                 "title": title,
                 "content": content,
                 "embedding": emb,
-                "source_path": source_path,
+                "source": source_path,
+                "chunk_index": i,
                 "metadata": json.dumps({}),
             }
         )
@@ -349,29 +354,23 @@ def upsert_chunks(
     if not rows:
         return 0
 
-    # Use server‑side JSON to vector via parameter binding for safety
-    # SQLAlchemy Core is optional; we will assemble a parameterized INSERT.
     cols = [
         "doc_id",
         "chunk_id",
         "title",
         "content",
         "embedding",
-        "source_path",
+        "source",
+        "chunk_index",
         "metadata",
     ]
     placeholders = ", ".join([f"%({c})s" for c in cols])
-    values_sql = ", ".join([f"({placeholders})" for _ in rows])
 
-    # pgvector accepts Python lists for the vector parameter
+    # Use a single-row VALUES; passing a list of dicts to exec_driver_sql triggers
+    # executemany() under the hood. This avoids building a huge multi-VALUES string
+    # and works reliably across DBAPI drivers/paramstyles.
     sql = (
-        f"INSERT INTO {schema}.{name} ("
-        + ", ".join(cols)
-        + ") VALUES "
-        + values_sql
-        + " ON CONFLICT (doc_id, chunk_id) DO UPDATE SET "
-        "title = EXCLUDED.title, content = EXCLUDED.content, "
-        "embedding = EXCLUDED.embedding, source_path = EXCLUDED.source_path, metadata = EXCLUDED.metadata"
+        f"INSERT INTO {schema}.{name} (" + ", ".join(cols) + ") VALUES (" + placeholders + ")"
     )
 
     with engine.begin() as conn:

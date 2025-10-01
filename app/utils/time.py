@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import time as _time
 from datetime import UTC, datetime
+from typing import Final
 
-__all__ = [
+__all__: Final[list[str]] = [
     "as_utc",
     "parse_iso8601",
     "format_iso8601",

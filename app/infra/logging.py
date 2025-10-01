@@ -80,7 +80,7 @@ def _shared_processors(json_output: bool) -> list[structlog.types.Processor]:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
         # Rename `event` to `message` for JSON to align with common conventions
-        (structlog.processors.EventRenamer("message") if json_output else (lambda *_: _[1])),
+        (structlog.processors.EventRenamer("message") if json_output else (lambda _logger, _name, event_dict: event_dict)),
     ]
 
 
@@ -98,6 +98,15 @@ def _clear_root_handlers() -> None:
             h.close()
         except Exception:
             pass
+
+
+def _is_truthy(v: Any) -> bool:
+    """Best-effort boolean parser for env/CLI style values."""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +130,7 @@ def configure(*, level: str | int | None = None, json: bool | None = None) -> No
     env_json = os.getenv("STRUCTLOG_JSON")
 
     resolved_level = _parse_level(level if level is not None else env_level)
-    resolved_json = (
-        (str(json).lower() in {"1", "true", "yes", "on"})
-        if json is not None
-        else (str(env_json).lower() in {"1", "true", "yes", "on"})
-    )
+    resolved_json = json if isinstance(json, bool) else _is_truthy(env_json)
 
     _clear_root_handlers()
 
@@ -198,3 +203,11 @@ def clear_context(keys: Iterable[str] | None = None) -> None:
         structlog.contextvars.unbind_contextvars(*keys)
     else:
         structlog.contextvars.clear_contextvars()
+
+
+__all__ = [
+    "configure",
+    "get_logger",
+    "bind_context",
+    "clear_context",
+]

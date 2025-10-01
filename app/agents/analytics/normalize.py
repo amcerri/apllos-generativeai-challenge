@@ -186,13 +186,7 @@ def _infer_shape(columns: list[str]) -> str:
 
 
 def _render_count_ptbr(rows: list[Mapping[str, Any]], table: str | None) -> str:
-    qty = 0
-    if rows and isinstance(rows[0].get("qty"), int | float):
-        qty = (
-            int(rows[0]["qty"])
-            if not isinstance(rows[0]["qty"], float)
-            else int(round(rows[0]["qty"]))
-        )
+    qty = _as_int(rows[0].get("qty")) if rows else 0
     qfmt = _fmt_int_ptbr(qty)
     alvo = f" na tabela `{table}`" if table else ""
     return f"Encontrei {qfmt} registros{alvo}."
@@ -204,17 +198,17 @@ def _render_timeseries_ptbr(
     if not rows:
         alvo = f" na tabela `{table}`" if table else ""
         return f"Não encontrei dados de série temporal{alvo}."
-    total = sum(int(r.get("qty", 0) or 0) for r in rows)
+    total = sum(_as_int(r.get("qty", 0)) for r in rows)
     qfmt = _fmt_int_ptbr(total)
     nper = len(rows)
     escala = {"month": "mensal", "week": "semanal", "day": "diária", "year": "anual"}.get(
         scale or "", "temporal"
     )
     alvo = f" na tabela `{table}`" if table else ""
-    # Últimos 3 pontos, se houver
+    # Last 3 points, if available
     tail = rows[-3:]
     tail_str = ", ".join(
-        f"{_fmt_period_ptbr(r.get('period'))}: {_fmt_int_ptbr(int(r.get('qty', 0) or 0))}"
+        f"{_fmt_period_ptbr(r.get('period'))}: {_fmt_int_ptbr(_as_int(r.get('qty', 0)))}"
         for r in tail
     )
     return (
@@ -279,8 +273,32 @@ def _coerce_answer(dec: Mapping[str, Any]) -> Any:
 
 
 def _extract_table_from_sql(sql: str) -> str | None:
-    m = re.search(r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", sql, flags=re.IGNORECASE)
-    return m.group(1) if m else None
+    # Supports: FROM table, FROM schema.table, FROM "Schema"."Table", FROM table AS t
+    m = re.search(
+        r"""
+        \bFROM\s+                              # FROM clause
+        (?:                                     # first identifier (schema or table)
+            "([^"]+)"                           # quoted part 1
+            |                                   # or
+            ([a-zA-Z_][\w$]*)                   # unquoted part 1
+        )
+        (?:                                     # optional .second identifier (table)
+            \.
+            (?:
+                "([^"]+)"                       # quoted part 2
+                |
+                ([a-zA-Z_][\w$]*)               # unquoted part 2
+            )
+        )?
+        """,
+        sql,
+        flags=re.IGNORECASE | re.VERBOSE,
+    )
+    if not m:
+        return None
+    parts = [g for g in m.groups() if g]
+    # Return last identifier (table name)
+    return parts[-1]
 
 
 def _extract_timescale_from_sql(sql: str) -> str | None:
@@ -305,6 +323,13 @@ def _coerce_primitive(v: Any) -> Any:
         return float(v) if hasattr(v, "as_integer_ratio") or isinstance(v, int | float) else str(v)
     except Exception:
         return str(v)
+
+
+def _as_int(x: Any) -> int:
+    try:
+        return int(round(float(x)))
+    except Exception:
+        return 0
 
 
 def _fmt_int_ptbr(n: int) -> str:

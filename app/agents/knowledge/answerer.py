@@ -3,23 +3,23 @@ Knowledge answerer (PT‑BR composition with citations).
 
 Overview
 --------
-Compose a user-facing answer in Portuguese (pt-BR) based on ranked RAG hits,
-including required citations. If there is insufficient context, return an
-Answer-like payload with `no_context=True` and objective follow-ups.
+Compose a user‑facing answer in Portuguese (pt‑BR) from ranked RAG hits,
+including mandatory citations. When there is insufficient context, return an
+Answer‑like payload with `no_context=True` and objective follow‑ups.
 
 Design
 ------
 - Inputs: user `query` and ranked hits from the retriever/ranker.
 - Output: `Answer` dataclass (if available) or a plain `dict` with keys:
   `text`, `citations`, `meta`, and optional `followups`.
-- Conservative summarization: purely extractive, selecting salient sentences from
+- Summarization is conservative/extractive: pick salient sentences from
   the top chunks; no additional LLM calls in this POC.
 - Citations: one entry per cited chunk (title, url|doc_id, chunk_id, lines).
 
 Integration
 -----------
-- Call from the knowledge agent after retrieval and ranking, before returning to
-  the graph. Keep answers concise and business-oriented.
+Called by the knowledge agent after retrieval and ranking, before returning to
+the graph. Keep answers concise and business‑oriented.
 
 Usage
 -----
@@ -96,10 +96,10 @@ class _HitView:
 # Answerer
 # ---------------------------------------------------------------------------
 class KnowledgeAnswerer:
-    """Compose PT‑BR answers from RAG hits with mandatory citations."""
+    """Compose pt‑BR answers from RAG hits with mandatory citations."""
 
     MAX_CITATIONS: Final[int] = 5
-    MAX_CHARS: Final[int] = 900
+    MAX_CHARS: Final[int] = 2000
 
     def __init__(self) -> None:
         self.log = get_logger("agent.knowledge.answerer")
@@ -200,38 +200,90 @@ def _answer_no_context_ptbr(query: str) -> dict[str, Any]:
 
 
 def _compose_summary_ptbr(query: str, hits: Sequence[_HitView], cap_chars: int) -> str:
-    # Extractive summary: pick salient sentences from the first chunks
-    q_tokens = _tokenize(query)
-    sentences: list[str] = []
-    for h in hits[:3]:  # keep it short; top-3 chunks
-        for s in _split_sentences(h.text):
-            score = _sentence_salience(q_tokens, s)
-            if score >= 0.15:  # mild threshold
-                sentences.append(s.strip())
-        if len(sentences) >= 8:
-            break
+    """Generate a conversational answer using LLM based on retrieved documents."""
+    
+    # Prepare context from hits
+    context_parts = []
+    for i, hit in enumerate(hits[:5], 1):  # Use top 5 hits
+        title = hit.title or f"Documento {i}"
+        content = hit.text.strip()
+        context_parts.append(f"[{title}]\n{content}\n")
+    
+    context = "\n".join(context_parts)
+    
+    # Generate conversational response using LLM
+    try:
+        from openai import OpenAI
+        import os
+        
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        
+        prompt = f"""Você é um assistente especializado em e-commerce. Com base nos documentos fornecidos, responda à pergunta de forma conversacional e natural, como se estivesse conversando com alguém.
 
-    if not sentences:
-        # Fallback: take the beginning of the first chunk
-        fallback = hits[0].text.strip().splitlines()[0:2]
-        text = " ".join(x.strip() for x in fallback if x.strip())
-    else:
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        uniq: list[str] = []
-        for s in sentences:
-            if s not in seen:
-                uniq.append(s)
-                seen.add(s)
-        text = " ".join(uniq)
+Pergunta: {query}
 
-    # Cap length conservatively
-    if len(text) > cap_chars:
-        text = text[: cap_chars - 1].rstrip() + "…"
+Documentos relevantes:
+{context}
 
-    # Make it business-oriented (pt-BR) with a brief intro
-    lead = "Resumo com base nos documentos: "
-    return lead + text
+Instruções:
+- Responda de forma direta e conversacional
+- Use as informações dos documentos para fundamentar sua resposta
+- Não mencione "de acordo com os documentos" ou similar
+- Seja útil e prático
+- Use linguagem natural e acessível
+- Foque em responder especificamente à pergunta feita
+
+Resposta:"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Você é um especialista em e-commerce que responde perguntas de forma conversacional e útil."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=800,
+            temperature=0.7
+        )
+        
+        answer = response.choices[0].message.content.strip()
+        
+        # Cap length if needed
+        if len(answer) > cap_chars:
+            answer = answer[:cap_chars - 1].rstrip() + "..."
+            
+        return answer
+        
+    except Exception as e:
+        # Fallback to extractive summary if LLM fails
+        q_tokens = _tokenize(query)
+        sentences: list[str] = []
+        for h in hits[:3]:
+            for s in _split_sentences(h.text):
+                score = _sentence_salience(q_tokens, s)
+                if score >= 0.15:
+                    sentences.append(s.strip())
+            if len(sentences) >= 8:
+                break
+
+        if not sentences:
+            fallback = hits[0].text.strip().splitlines()[0:2]
+            text = " ".join(x.strip() for x in fallback if x.strip())
+        else:
+            seen: set[str] = set()
+            uniq: list[str] = []
+            for s in sentences:
+                if s not in seen:
+                    clean_s = s.strip()
+                    if clean_s and not clean_s.endswith('.'):
+                        clean_s += '.'
+                    uniq.append(clean_s)
+                    seen.add(s)
+            text = " ".join(uniq)
+
+        if len(text) > cap_chars:
+            text = text[:cap_chars - 1].rstrip() + "…"
+            
+        return f"Com base nos documentos disponíveis: {text}"
 
 
 def _make_citations(hits: Sequence[_HitView]) -> list[dict[str, Any]]:
@@ -261,8 +313,9 @@ def _split_sentences(text: str) -> list[str]:
     text = (text or "").strip()
     if not text:
         return []
-    # Split on sentence boundaries; fallback to paragraphs
-    parts = re.split(r"(?<=[.!?])\s+|\n+", text)
+    # Normalize newlines to spaces, then split on sentence boundaries
+    normalized = re.sub(r"\s*\n+\s*", " ", text)
+    parts = _SENT_SPLIT_RE.split(normalized)
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -303,7 +356,7 @@ def _coerce_answer(dec: Mapping[str, Any]) -> Any:
 
 
 def _suggest_followups(query: str) -> list[str]:
-    # Provide objective follow-up questions in Portuguese
+    # Provide objective follow‑up questions in pt‑BR
     base = [
         "Pode fornecer mais detalhes?",
         "Tem algum documento específico para anexar?",

@@ -64,9 +64,59 @@ except Exception:  # pragma: no cover - optional
 try:
     from app.graph.build import build_graph as _build_graph
 except Exception:  # pragma: no cover - optional
+    _build_graph = None
 
-    def _build_graph(*, require_sql_approval: bool = True) -> Any:
-        return {"engine": "stub", "nodes": [], "require_sql_approval": bool(require_sql_approval)}
+# Global cache for compiled graphs
+_GRAPH_CACHE: dict[tuple[bool], Any] = {}
+
+# Global database configuration flag
+_DB_CONFIGURED = False
+
+# Global allowlist cache
+_ALLOWLIST_CACHE: dict[str, Any] = {}
+
+def clear_cache():
+    """Clear the graph cache (useful for development)."""
+    global _GRAPH_CACHE
+    _GRAPH_CACHE.clear()
+
+def _load_allowlist() -> dict[str, Any]:
+    """Load allowlist from file."""
+    global _ALLOWLIST_CACHE
+    if _ALLOWLIST_CACHE:
+        return _ALLOWLIST_CACHE
+    
+    # Hardcoded allowlist as fallback
+    allowlist = {
+        "orders": ["order_id", "customer_id", "order_status", "order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"],
+        "order_items": ["order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"],
+        "customers": ["customer_id", "customer_unique_id", "customer_zip_code_prefix", "customer_city", "customer_state"],
+        "products": ["product_id", "product_category_name", "product_name_lenght", "product_description_lenght", "product_photos_qty", "product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm"],
+        "sellers": ["seller_id", "seller_zip_code_prefix", "seller_city", "seller_state"],
+        "order_payments": ["order_id", "payment_sequential", "payment_type", "payment_installments", "payment_value"],
+        "order_reviews": ["review_id", "order_id", "review_score", "review_comment_title", "review_comment_message", "review_creation_date", "review_answer_timestamp"],
+        "geolocation": ["geolocation_zip_code_prefix", "geolocation_lat", "geolocation_lng", "geolocation_city", "geolocation_state"],
+        "product_category_translation": ["product_category_name", "product_category_name_english"]
+    }
+    
+    try:
+        import json
+        import os
+        allowlist_path = os.path.join(os.path.dirname(__file__), "..", "routing", "allowlist.json")
+        if os.path.exists(allowlist_path):
+            with open(allowlist_path, 'r') as f:
+                allowlist = json.load(f)
+                log = get_logger("graph.assistant")
+                log.info("Allowlist loaded from file", tables=list(allowlist.keys()))
+        else:
+            log = get_logger("graph.assistant")
+            log.info("Using hardcoded allowlist", tables=list(allowlist.keys()))
+    except Exception as e:
+        log = get_logger("graph.assistant")
+        log.warning("Failed to load allowlist from file, using hardcoded", error=str(e))
+    
+    _ALLOWLIST_CACHE = allowlist
+    return allowlist
 
 
 __all__ = ["get_assistant"]
@@ -126,9 +176,50 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
     log = get_logger("graph.assistant")
 
     require_sql_approval = _get_require_sql_approval(settings)
+    
+    # Configure database once globally
+    global _DB_CONFIGURED
+    if not _DB_CONFIGURED:
+        try:
+            import os
+            from app.infra.db import configure_engine
+            
+            dsn = os.environ.get("DATABASE_URL")
+            if dsn:
+                # Convert postgresql+psycopg:// to postgresql:// for SQLAlchemy
+                if dsn.startswith("postgresql+psycopg://"):
+                    dsn = dsn.replace("postgresql+psycopg://", "postgresql://")
+                
+                # Convert Docker internal hostname for external access
+                if "@db:" in dsn:
+                    dsn = dsn.replace("@db:", "@host.docker.internal:")
+                
+                engine = configure_engine(url=dsn, echo=False, pool_size=5, readonly_default=False)
+                from app.infra import db
+                db._ENGINE = engine  # Set the global engine
+                log.info("Database configured successfully", dsn=dsn[:50] + "..." if len(dsn) > 50 else dsn)
+                _DB_CONFIGURED = True
+            else:
+                log.warning("DATABASE_URL not set; database features disabled")
+                _DB_CONFIGURED = True
+        except Exception as e:
+            log.warning(f"Failed to configure database: {e}")
+            _DB_CONFIGURED = True
+    
+    # Check cache first
+    cache_key = (require_sql_approval,)
+    if cache_key in _GRAPH_CACHE:
+        log.info("Using cached graph", require_sql_approval=require_sql_approval)
+        return _GRAPH_CACHE[cache_key]
 
     with start_span("assistant.get", {"require_sql_approval": require_sql_approval}):
-        graph = _build_graph(require_sql_approval=require_sql_approval)
+        if _build_graph is not None:
+            allowlist = _load_allowlist()
+            graph = _build_graph(require_sql_approval=require_sql_approval, allowlist=allowlist)
+            # Cache the compiled graph
+            _GRAPH_CACHE[cache_key] = graph
+        else:
+            graph = {"engine": "stub", "nodes": [], "require_sql_approval": bool(require_sql_approval)}
         try:
             log.info(
                 "Assistant graph ready",

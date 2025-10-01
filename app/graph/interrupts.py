@@ -25,7 +25,7 @@ Typical usage inside a node (pseudocode):
 ...     params={"status": "delivered"},
 ...     limit=100,
 ...     tables=["orders"],
-...     reason="Confirmar execução SQL em produção",
+...     reason="Confirm SQL execution in production",
 ... )
 >>> # Return/yield `interrupt` to pause the graph and await human input.
 
@@ -44,7 +44,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Callable
+from contextlib import AbstractContextManager, nullcontext as _nullcontext
 
 try:  # Optional logger
     from app.infra.logging import get_logger
@@ -56,17 +57,13 @@ except Exception:  # pragma: no cover - optional
 
 
 # Tracing (optional; single alias)
-start_span: Any
+start_span: Callable[[str, dict[str, Any] | None], AbstractContextManager[Any]]
 try:
     from app.infra.tracing import start_span as _start_span
-
     start_span = _start_span
 except Exception:  # pragma: no cover - optional
-    from contextlib import nullcontext as _nullcontext
-
-    def _fallback_start_span(_name: str, _attrs: dict[str, Any] | None = None):
+    def _fallback_start_span(_name: str, _attrs: dict[str, Any] | None = None) -> AbstractContextManager[Any]:
         return _nullcontext()
-
     start_span = _fallback_start_span
 
 __all__ = [
@@ -76,6 +73,8 @@ __all__ = [
     "parse_human_response",
     "make_sql_gate",
     "make_external_call_gate",
+    "GATE_SQL_EXECUTION",
+    "GATE_EXTERNAL_CALL",
 ]
 
 
@@ -166,7 +165,7 @@ def make_sql_gate(
     params: Mapping[str, Any] | None = None,
     limit: int | None = None,
     tables: Sequence[str] | None = None,
-    reason: str = "Confirmar execução SQL",
+    reason: str = "Confirm SQL execution",
 ) -> dict[str, Any]:
     """Build a standardized SQL approval gate.
 
@@ -187,7 +186,7 @@ def make_sql_gate(
 
     gate = HumanGate(
         name=GATE_SQL_EXECUTION,
-        title="Aprovar execução de SQL",
+        title="Approve SQL execution",
         message=reason,
         severity="medium",
         details=details,
@@ -202,7 +201,7 @@ def make_external_call_gate(
     endpoint: str,
     payload: Mapping[str, Any] | None = None,
     method: str = "POST",
-    reason: str = "Confirmar chamada externa",
+    reason: str = "Confirm external call",
 ) -> dict[str, Any]:
     """Build a standardized external-call approval gate."""
     details: dict[str, Any] = {
@@ -213,7 +212,7 @@ def make_external_call_gate(
     }
     gate = HumanGate(
         name=GATE_EXTERNAL_CALL,
-        title="Aprovar chamada externa",
+        title="Approve external call",
         message=reason,
         severity="high" if method.upper() in {"POST", "PUT", "DELETE"} else "medium",
         details=details,
@@ -263,9 +262,9 @@ def _jsonify(v: Mapping[str, Any] | dict[str, Any]) -> dict[str, Any]:
 def _coerce_primitive(v: Any) -> Any:
     if v is None:
         return None
-    if isinstance(v, bool | int | float | str):
+    if isinstance(v, (bool, int, float, str)):  # noqa: UP038
         return v
-    if isinstance(v, Sequence) and not isinstance(v, str | bytes | bytearray):
+    if isinstance(v, Sequence) and not isinstance(v, (str, bytes, bytearray)):  # noqa: UP038
         return [_coerce_primitive(x) for x in list(v)[:100]]
     if isinstance(v, Mapping):
         return _jsonify(dict(v))

@@ -31,7 +31,7 @@ Usage
 >>> allowlist = {"orders": ["order_id", "order_status", "order_purchase_timestamp", "customer_id"],
 ...              "order_items": ["order_id", "price", "freight_value", "product_id", "seller_id"]}
 >>> planner = AnalyticsPlanner()
->>> plan = planner.plan("Pedidos por mês em 2018", allowlist, thread_id="t-123")
+>>> plan = planner.plan("Orders per month in 2018", allowlist, thread_id="t-123")
 >>> plan.sql.startswith("SELECT") and plan.limit_applied in (True, False)
 True
 """
@@ -123,7 +123,7 @@ class AnalyticsPlanner:
     # Public API -------------------------------------------------------------
     def plan(
         self,
-        question: str,
+        query: str,
         allowlist: Mapping[str, Iterable[str]],
         *,
         thread_id: str | None = None,
@@ -132,7 +132,7 @@ class AnalyticsPlanner:
         """Produce a safe SQL plan.
 
         Args:
-            question: Natural‑language request.
+            query: Natural‑language request.
             allowlist: Mapping of table → columns allowed for selection.
             thread_id: Correlation id for logging/tracing.
             default_limit: Optional per‑call LIMIT for non‑aggregate previews.
@@ -147,7 +147,7 @@ class AnalyticsPlanner:
         with start_span("agent.analytics.plan", {"thread_id": thread_id}):
             logger = self.log.bind(component="agent.analytics", event="plan", thread_id=thread_id)
 
-            text = (question or "").strip()
+            text = (query or "").strip()
             lw = text.lower()
             tables_index = _normalize_allowlist(allowlist)
 
@@ -161,38 +161,67 @@ class AnalyticsPlanner:
                     limit_applied=True,
                     warnings=["empty_allowlist"],
                 )
-
+            
+            # Get columns from allowlist
             cols = tables_index[table]
+            
+            # Add schema prefix for SQL generation
+            if not table.startswith("analytics."):
+                table = f"analytics.{table}"
             is_agg = _is_aggregation_intent(lw)
             timescale = _detect_timescale(lw)
             ts_col = _find_time_column(cols)
+
+            year = _extract_year(lw)
 
             warnings: list[str] = []
 
             if is_agg and timescale and ts_col:
                 # Timeseries aggregation
+                where = ""
+                if year and ts_col:
+                    where = (
+                        f"WHERE {table}.{ts_col} >= '{year}-01-01' AND "
+                        f"{table}.{ts_col} < '{year + 1}-01-01'"
+                    )
                 sql = (
                     f"SELECT date_trunc('{timescale}', {table}.{ts_col}) AS period, COUNT(1) AS qty\n"
                     f"FROM {table}\n"
+                    f"{where}\n"
                     f"GROUP BY period\n"
                     f"ORDER BY period"
-                )
+                ).replace("\n\n", "\n")
                 limit_applied = False
                 reason = f"{timescale} time series using {ts_col}"
             elif is_agg:
                 # Global aggregation (count)
-                sql = f"SELECT COUNT(1) AS qty FROM {table}"
+                if year and ts_col:
+                    sql = (
+                        f"SELECT COUNT(1) AS qty\n"
+                        f"FROM {table}\n"
+                        f"WHERE {table}.{ts_col} >= '{year}-01-01' AND "
+                        f"{table}.{ts_col} < '{year + 1}-01-01'"
+                    )
+                else:
+                    sql = f"SELECT COUNT(1) AS qty FROM {table}"
                 limit_applied = False
                 reason = "global count"
             else:
                 # Preview with cap: choose a small set of explicit columns
                 preview_cols = _choose_preview_columns(cols)
+                where = ""
+                if year and ts_col:
+                    where = (
+                        f"WHERE {table}.{ts_col} >= '{year}-01-01' AND "
+                        f"{table}.{ts_col} < '{year + 1}-01-01'"
+                    )
                 sql = (
                     f"SELECT {', '.join(f'{table}.{c}' for c in preview_cols)}\n"
                     f"FROM {table}\n"
+                    f"{where}\n"
                     f"ORDER BY 1 DESC\n"
                     f"LIMIT {cap}"
-                )
+                ).replace("\n\n", "\n")
                 limit_applied = True
                 reason = "capped preview"
 
@@ -201,7 +230,9 @@ class AnalyticsPlanner:
                 warnings.append("select_star_blocked")
                 sql = sql.replace("*", "1")  # ultra‑conservative fallback
 
-            _validate_identifiers(sql, {table: cols})  # raises on violation
+            # Create validation allowlist with schema prefix to match the SQL
+            validation_allowlist = {table: cols}
+            _validate_identifiers(sql, validation_allowlist)  # raises on violation
 
             logger.info("Planned SQL", sql=sql, reason=reason)
             return PlannerPlan(
@@ -217,6 +248,7 @@ _AGG_KEYS = (
     "count",
     "quantos",
     "qtd",
+    "quantidade",
     "número de",
     "numero de",
     "total",
@@ -284,6 +316,20 @@ def _detect_timescale(lw: str) -> str | None:
     return None
 
 
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+
+def _extract_year(lw: str) -> int | None:
+    """Return a 4-digit year if present (e.g., 2018), else None."""
+    m = _YEAR_RE.search(lw)
+    if not m:
+        return None
+    try:
+        return int(m.group(0))
+    except Exception:
+        return None
+
+
 def _find_time_column(columns: list[str]) -> str | None:
     lwcols = [c.lower() for c in columns]
     for hint in _TIME_HINTS:
@@ -326,13 +372,21 @@ def _validate_identifiers(sql: str, allowlist: Mapping[str, Iterable[str]]) -> N
         columns.update({str(c) for c in cols})
 
     # Validate column names that appear after a dot (table.column)
-    for m in re.finditer(r"([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)", sql):
+    # Only match patterns that have at least one dot before the column name
+    for m in re.finditer(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+)\.([a-zA-Z_][a-zA-Z0-9_]*)", sql):
         t, c = m.group(1), m.group(2)
-        if t not in tables or c not in columns:
+        # Check both with and without schema prefix
+        table_without_schema = t.replace("analytics.", "") if t.startswith("analytics.") else t
+        # Check if table exists in allowlist (with or without schema prefix)
+        table_found = t in tables or table_without_schema in tables
+        if not table_found or c not in columns:
             raise ValueError(f"identifier not allowed: {t}.{c}")
 
     # Validate FROM clause tables
-    for m in re.finditer(r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", sql, flags=re.IGNORECASE):
+    for m in re.finditer(r"\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\b", sql, flags=re.IGNORECASE):
         t = m.group(1)
-        if t not in tables:
+        # Check both with and without schema prefix
+        table_without_schema = t.replace("analytics.", "") if t.startswith("analytics.") else t
+        table_found = t in tables or table_without_schema in tables
+        if not table_found:
             raise ValueError(f"table not allowed: {t}")

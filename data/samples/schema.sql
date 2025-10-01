@@ -1,21 +1,19 @@
 -- Olist Analytics Schema (PostgreSQL)
 --
--- Overview
--- --------
--- Normalized tables derived from Olist CSV datasets. Datetime fields are
--- stored as TIMESTAMP WITHOUT TIME ZONE and should be parsed during bulk
--- ingestion (see scripts/ingest_analytics.py).
---
--- Notes
--- -----
--- * This schema is intentionally minimal and analytics‑friendly.
--- * Foreign keys cover the expected relationships from the public dataset.
--- * Indexes are included for the most common join paths.
+-- Normalized tables derived from Olist CSV datasets.
 
 BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS analytics;
 SET search_path = analytics, public;
+
+-- Product category translation ---------------------------------------------
+-- CSV: product_category_name_translation.csv
+-- Columns: product_category_name, product_category_name_english
+CREATE TABLE IF NOT EXISTS product_category_translation (
+    product_category_name          TEXT PRIMARY KEY,
+    product_category_name_english  TEXT NOT NULL
+);
 
 -- Customers -----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS customers (
@@ -26,7 +24,7 @@ CREATE TABLE IF NOT EXISTS customers (
     customer_state             TEXT NOT NULL
 );
 
--- Geolocation (many rows per prefix; no strict PK on purpose) --------------
+-- Geolocation ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS geolocation (
     geolocation_zip_code_prefix INTEGER NOT NULL,
     geolocation_lat             DOUBLE PRECISION NOT NULL,
@@ -50,6 +48,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 -- Products ------------------------------------------------------------------
+-- CSV: olist_products_dataset.csv
 CREATE TABLE IF NOT EXISTS products (
     product_id                   TEXT PRIMARY KEY,
     product_category_name        TEXT,
@@ -59,7 +58,10 @@ CREATE TABLE IF NOT EXISTS products (
     product_weight_g             INTEGER,
     product_length_cm            INTEGER,
     product_height_cm            INTEGER,
-    product_width_cm             INTEGER
+    product_width_cm             INTEGER,
+    CONSTRAINT fk_products_category
+        FOREIGN KEY (product_category_name)
+        REFERENCES product_category_translation(product_category_name)
 );
 
 -- Sellers -------------------------------------------------------------------
@@ -113,18 +115,6 @@ CREATE TABLE IF NOT EXISTS order_reviews (
         FOREIGN KEY (order_id) REFERENCES orders(order_id)
 );
 
--- Product category translation ---------------------------------------------
-CREATE TABLE IF NOT EXISTS product_category_translation (
-    product_category_name          TEXT PRIMARY KEY,
-    product_category_name_english  TEXT NOT NULL
-);
-
--- Optional relationship from products to translation table ------------------
-ALTER TABLE products
-    ADD CONSTRAINT fk_products_category
-    FOREIGN KEY (product_category_name)
-    REFERENCES product_category_translation(product_category_name);
-
 -- Indexes for common joins --------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id        ON orders (customer_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id      ON order_items (order_id);
@@ -133,8 +123,6 @@ CREATE INDEX IF NOT EXISTS idx_order_items_seller_id     ON order_items (seller_
 CREATE INDEX IF NOT EXISTS idx_order_payments_order_id   ON order_payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_order_reviews_order_id    ON order_reviews (order_id);
 CREATE INDEX IF NOT EXISTS idx_products_category         ON products (product_category_name);
-
--- Zip‑code helpers ----------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_customers_zip_prefix      ON customers (customer_zip_code_prefix);
 CREATE INDEX IF NOT EXISTS idx_sellers_zip_prefix        ON sellers (seller_zip_code_prefix);
 CREATE INDEX IF NOT EXISTS idx_geolocation_zip_prefix    ON geolocation (geolocation_zip_code_prefix);

@@ -1,12 +1,15 @@
-version: "3.9"
+# docker-compose: app (LangGraph Server / API) + Postgres (pgvector)
+# Compose v2 (sem `version:`). Deixe o Compose gerenciar a rede automaticamente.
+
 name: apllos-generativeai-challenge
 
 services:
-  postgres:
-    # Postgres with pgvector extension
+  db:
     image: ${DB_IMAGE:-pgvector/pgvector:pg16}
     container_name: ${DB_CONTAINER:-apllos-generativeai-challenge-postgres}
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
@@ -20,22 +23,19 @@ services:
       retries: 20
     volumes:
       - pgdata:/var/lib/postgresql/data
-    networks:
-      - appnet
 
   app:
-    # Optional until Dockerfile exists. You can also run ephemeral containers via `make app-run`.
-    image: ${APP_IMAGE:-apllos-generativeai-challenge-app:dev}
-    container_name: ${APP_CONTAINER:-apllos-generativeai-challenge-app}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${APP_IMAGE:-apllos/app:latest}
+    container_name: ${APP_CONTAINER:-apllos-app}
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-    ports:
-      - "${APP_PORT:-2024}:${APP_PORT:-2024}"
-      - "${STUDIO_PORT:-2025}:${STUDIO_PORT:-2025}"
     environment:
-      # Compose reads .env automatically; values here can be overridden at runtime
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@postgres:5432/app}
+      # Compose lê .env automaticamente; pode sobrescrever em tempo de execução
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       APP_ENV: ${APP_ENV:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -45,19 +45,16 @@ services:
       LANGGRAPH_SERVER_PORT: ${APP_PORT:-2024}
       LANGGRAPH_STUDIO_PORT: ${STUDIO_PORT:-2025}
     working_dir: /workspace
+    ports:
+      - "8000:8000"                         # FastAPI
+      - "${APP_PORT:-2024}:${APP_PORT:-2024}"     # LangGraph Server
+      - "${STUDIO_PORT:-2025}:${STUDIO_PORT:-2025}" # Studio
     volumes:
       - ./:/workspace
       - ./data/raw/analytics:/workspace/data/raw/analytics
       - ./data/docs:/workspace/data/docs
-    networks:
-      - appnet
-    # Default command provides a shell if the module isn't present yet
-    command: ["bash", "-lc", "python -m app.graph.assistant || bash"]
-
-networks:
-  appnet:
-    name: ${NETWORK:-apllos-generativeai-challenge-net}
+    # Comando padrão fornece shell se o módulo ainda não estiver presente
+    command: ["bash", "-lc", "sleep infinity"]
 
 volumes:
-  pgdata:
-    name: ${DB_VOLUME:-apllos-generativeai-challenge-pgdata}
+  pgdata: {}
