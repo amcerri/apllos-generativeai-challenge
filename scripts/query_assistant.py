@@ -141,6 +141,7 @@ class QueryAssistant:
                 title = citation.get('title', 'No title')
                 print(f"  {i}. {title}")
         
+        
         # Show metadata
         if meta:
             print(f"\nMetadata:")

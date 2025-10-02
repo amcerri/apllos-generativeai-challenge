@@ -58,11 +58,10 @@ help: ## Show this help message
 	@echo ""
 	@echo "BOOTSTRAP & RESET:"
 	@echo "  bootstrap     - Complete bootstrap: reset + setup + start + ingest + test"
-	@echo "  reset         - Complete reset: stop all + remove containers + clean volumes"
+	@echo "  reset         - Complete reset: stop all + remove containers + clean volumes (keeps data)"
 	@echo ""
 	@echo "DIRECTORY MANAGEMENT:"
 	@echo "  dirs          - Create required directories"
-	@echo "  clean-dirs    - Remove data directories"
 	@echo ""
 	@echo "DOCKER MANAGEMENT:"
 	@echo "  docker-build  - Build application Docker image"
@@ -106,11 +105,13 @@ help: ## Show this help message
 	@echo "                    make query QUERY=\"analise este pedido\" ATTACHMENT=\"data/samples/order.txt\""
 	@echo ""
 	@echo "UTILITIES:"
+	@echo "  install-deps  - Install/update Python dependencies from pyproject.toml"
 	@echo "  logs          - Show application logs"
 	@echo "  logs-db       - Show database logs"
 	@echo "  shell         - Open shell in application container"
 	@echo "  shell-db      - Open shell in database container"
 	@echo "  clean         - Clean temporary files and caches"
+	@echo "  clean-data    - Remove data directories (WARNING: deletes CSVs and PDFs)"
 
 # =============================================================================
 # Bootstrap & Reset (Main Commands)
@@ -132,7 +133,6 @@ reset: ## Complete reset: stop all + remove containers + clean volumes
 	@echo "Starting complete reset..."
 	@echo "=========================="
 	@$(MAKE) docker-reset
-	@$(MAKE) clean-dirs
 	@echo "Complete reset finished."
 
 .PHONY: setup
@@ -165,12 +165,15 @@ dirs: ## Create required directories
 	@mkdir -p "$(DOCS_DIR)"
 	@echo "Directories created."
 
-.PHONY: clean-dirs
-clean-dirs: ## Remove data directories
-	@echo "Cleaning directories..."
+.PHONY: clean-data
+clean-data: ## Remove data directories (WARNING: deletes CSVs and PDFs)
+	@echo "WARNING: This will delete all data files (CSVs, PDFs)!"
+	@echo "Press Ctrl+C to cancel, or Enter to continue..."
+	@read dummy
+	@echo "Cleaning data directories..."
 	@rm -rf "$(ANALYTICS_DIR)"
 	@rm -rf "$(DOCS_DIR)"
-	@echo "Directories cleaned."
+	@echo "Data directories cleaned."
 
 # =============================================================================
 # Docker Management
@@ -296,19 +299,18 @@ db-status: ## Show database status
 .PHONY: ingest-analytics
 ingest-analytics: ## Ingest analytics data from CSVs
 	@echo "Ingesting analytics data..."
-	@$(PY) scripts/ingest_analytics.py \
-		--dsn "$(DSN_COMPOSE)" \
-		--csv-root $(ANALYTICS_DIR) \
-		--schema-sql $(DB_SEED_SCHEMA)
+	@DATABASE_URL="postgresql+psycopg://$(DB_USER):$(DB_PASSWORD)@localhost:$(POSTGRES_PORT)/$(DB_NAME)" $(PY) scripts/ingest_analytics.py \
+		--schema "$(DB_SEED_SCHEMA)" \
+		--data-dir "$(ANALYTICS_DIR)" \
+		--truncate --analyze
 	@echo "Analytics data ingested."
 
 .PHONY: ingest-vectors
 ingest-vectors: ## Ingest document vectors for RAG
 	@echo "Ingesting document vectors..."
-	@$(PY) scripts/ingest_vectors.py \
-		--dsn "$(DSN_COMPOSE)" \
-		--docs-root $(DOCS_DIR) \
-		--model $(shell $(PY) -c "import yaml; print(yaml.safe_load(open('app/config/models.yaml'))['embeddings_model'])")
+	@DATABASE_URL="postgresql+psycopg://$(DB_USER):$(DB_PASSWORD)@localhost:$(POSTGRES_PORT)/$(DB_NAME)" $(PY) scripts/ingest_vectors.py \
+		--docs-dir "$(DOCS_DIR)" \
+		--model $(shell $(PY) -c "import yaml; print(yaml.safe_load(open('app/config/models.yaml'))['models']['embeddings']['name'])")
 	@echo "Document vectors ingested."
 
 .PHONY: gen-allowlist
@@ -475,6 +477,13 @@ clean: ## Clean temporary files and caches
 	@find . -type d -name ".pytest_cache" -delete
 	@find . -type d -name ".mypy_cache" -delete
 	@echo "Cleanup completed."
+
+.PHONY: install-deps
+install-deps: ## Install/update Python dependencies from pyproject.toml
+	@echo "Installing Python dependencies..."
+	@$(PY) -m pip install --upgrade pip
+	@$(PY) -m pip install -e .
+	@echo "Dependencies installed."
 
 # =============================================================================
 # Default target
