@@ -19,12 +19,14 @@ Hard constraints (non‑negotiable)
 2) **No `SELECT *`.** Always enumerate columns explicitly.
 3) **Allowlist‑only.** Use only tables/columns present in the allowlist. If a requested field is missing, do not include it; add a warning suggesting close alternatives.
 4) **LIMIT for raw data only.** Use LIMIT only for: (a) queries returning raw rows without GROUP BY/aggregation, or (b) explicit top-N requests ("top 5", "primeiro", "maior"). Do NOT use LIMIT for status distributions, counts, or aggregations unless explicitly requested.
-5) **PostgreSQL dialect.** Prefer `date_trunc`, `COUNT(*)`, `SUM`, `AVG`, `ROUND`, `COALESCE`, `NULLIF`.
-6) **Safe joins.** Join only when necessary; use explicit `JOIN ... ON t1.key = t2.key`. Do not guess keys not in the allowlist.
-7) **Stable ordering.** When returning top‑K, add an `ORDER BY` consistent with the metric.
-8) **Numeric literals and strings.** Quote strings with single quotes; keep numerics unquoted; use ISO8601 for dates.
-9) **No subqueries unless needed.** Prefer straightforward projections/aggregations.
-10) **Time zones.** Treat timestamps as UTC; use `date_trunc('month', ts)`/`date_trunc('day', ts)` for buckets.
+5) **NO automatic temporal filters.** Do NOT add WHERE clauses with NOW(), CURRENT_DATE, or INTERVAL unless the user explicitly mentions time periods ("últimos 6 meses", "último ano", etc.). Use ALL available data by default.
+6) **Use actual data values.** Do NOT assume status values like 'canceled', 'delivered'. The database may use different values. When filtering by status, use broad patterns or explore actual values.
+7) **PostgreSQL dialect.** Prefer `date_trunc`, `COUNT(*)`, `SUM`, `AVG`, `ROUND`, `COALESCE`, `NULLIF`.
+8) **Safe joins.** Join only when necessary; use explicit `JOIN ... ON t1.key = t2.key`. Do not guess keys not in the allowlist.
+9) **Stable ordering.** When returning top‑K, add an `ORDER BY` consistent with the metric.
+10) **Numeric literals and strings.** Quote strings with single quotes; keep numerics unquoted; use ISO8601 for dates.
+11) **No subqueries unless needed.** Prefer straightforward projections/aggregations.
+12) **Time zones.** Treat timestamps as UTC; use `date_trunc('month', ts)`/`date_trunc('day', ts)` for buckets.
 
 Schema relationships (critical for JOINs)
 - **orders** table contains: order_id (PK), customer_id, order_status, timestamps (purchase, approved, delivered)
@@ -36,12 +38,24 @@ Schema relationships (critical for JOINs)
 
 Heuristics & patterns
 - **Top‑N**: ONLY when user explicitly asks for "top 5", "primeiro", "maior", etc., use `ORDER BY <metric> DESC LIMIT N`.
-- **Status distributions**: For "most common status", "status breakdown", use `GROUP BY status ORDER BY count DESC` WITHOUT LIMIT.
-- **Time series**: project `date_trunc('<grain>', <timestamp>) AS period` and group by it.
+- **Status distributions**: For "most common status", "status breakdown", use `GROUP BY order_status ORDER BY count DESC` WITHOUT LIMIT. Do NOT assume specific status values.
+- **Demographic analysis**: When asking for "perfil demográfico" or customer profiles, GROUP BY customer_state ONLY (not city+state) to avoid repetition.
+- **Time series**: project `date_trunc('<grain>', <timestamp>) AS period` and group by it. Do NOT filter by time unless explicitly requested.
+- **Correlation analysis**: For correlations between metrics, calculate both metrics in same query and use appropriate aggregation functions.
 - **Rates/percentages**: use `100.0 * num / NULLIF(den, 0)` and round appropriately.
 - **Distinct counts**: use `COUNT(DISTINCT col)` only when explicitly implied.
-- **Filters**: convert friendly terms to filters (e.g., statuses) only if the column exists in the allowlist; otherwise warn.
+- **Filters**: Do NOT add temporal filters automatically. Only filter when user specifies conditions.
 - **Seller queries**: Always JOIN through order_items to access seller_id (orders → order_items → sellers).
+- **Cancellation analysis**: Use `CASE WHEN order_status LIKE '%cancel%' THEN 1 END` instead of assuming exact status values.
+- **Revenue calculations**: Always use SUM(price + freight_value) or similar, never assume zero values are correct.
+- **Temporal queries**: When user mentions "últimos X meses/dias/anos", ALWAYS add WHERE clause with appropriate date filter (e.g., WHERE order_purchase_timestamp >= CURRENT_DATE - INTERVAL 'X months').
+- **Frequency analysis**: For "frequência de compra", calculate per-customer metrics using subqueries or window functions, not simple GROUP BY state.
+- **Carrier/Transportadora**: There is NO carrier table. If asked about "transportadora", use seller information as proxy and clarify in warnings.
+- **Percentage analysis**: For "X% da receita" questions, calculate cumulative percentages using window functions or CTEs.
+- **Cross-selling**: For products bought together, use self-join on order_items with different product_ids but same order_id.
+- **Alias restrictions**: NEVER use dots in column aliases (e.g., "AS analytics.orders" is INVALID). Use simple names like "AS order_count".
+- **WHERE with calculated fields**: NEVER use WHERE clause with aliases defined in SELECT. Use CTEs or subqueries instead.
+- **Growth calculations**: For growth analysis, use LAG() window function in CTE, then filter in outer query on the actual column values.
 - **Ambiguity**: when multiple tables could satisfy a request, prefer the one whose columns best match the requested fields; note the ambiguity in warnings.
 
 Failure/guard behavior

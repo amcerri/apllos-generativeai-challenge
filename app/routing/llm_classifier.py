@@ -2,33 +2,37 @@
 Routing LLM classifier
 
 Overview
-    Classifies a user message into one of the assistant agents (analytics,
-    knowledge, commerce, triage) and extracts table/column hints using a
-    language model with Structured Outputs. Falls back to a lightweight
-    heuristic classifier when the LLM client is unavailable.
+--------
+Classifies a user message into one of the assistant agents (analytics,
+knowledge, commerce, triage) and extracts table/column hints using a
+language model with Structured Outputs. Falls back to a lightweight
+heuristic classifier when the LLM client is unavailable.
 
 Design
-    - Prompts live in `app/prompts/routing/{system.txt,examples.jsonl}`.
-    - Allowlist (tables → columns) is injected into the system prompt by
-      replacing the `<<<ALLOWLIST_JSON>>>` placeholder.
-    - Pluggable LLM backend with an optional OpenAI implementation using
-      JSON Schema (strict) response formatting.
-    - Output normalized to the `RouterDecision` contract (dict or dataclass).
+------
+- Prompts live in `app/prompts/routing/{system.txt,examples.jsonl}`.
+- Allowlist (tables → columns) is injected into the system prompt by
+  replacing the `<<<ALLOWLIST_JSON>>>` placeholder.
+- Pluggable LLM backend with an optional OpenAI implementation using
+  JSON Schema (strict) response formatting.
+- Output normalized to the `RouterDecision` contract (dict or dataclass).
 
 Integration
-    - Import and call `classify(message, allowlist, thread_id=None)`.
-    - Provide an LLM backend (see `OpenAIJSONBackend`) or rely on the fallback
-      rules for basic routing in constrained environments.
+-----------
+- Import and call `classify(message, allowlist, thread_id=None)`.
+- Provide an LLM backend (see `OpenAIJSONBackend`) or rely on the fallback
+  rules for basic routing in constrained environments.
 
 Usage
-    >>> from app.routing.llm_classifier import LLMClassifier, OpenAIJSONBackend
-    >>> clf = LLMClassifier()  # will try OpenAI if available, else fallback
-    >>> decision = clf.classify("Qual foi a receita por mês em 2017?", {
-    ...     "orders": ["order_id", "order_purchase_timestamp", "order_status"],
-    ...     "order_items": ["order_id", "price", "freight_value"],
-    ... })
-    >>> isinstance(decision, dict) or getattr(decision, "agent", None) in {"analytics","knowledge","commerce","triage"}
-    True
+-----
+>>> from app.routing.llm_classifier import LLMClassifier, OpenAIJSONBackend
+>>> clf = LLMClassifier()  # will try OpenAI if available, else fallback
+>>> decision = clf.classify("Qual foi a receita por mês em 2017?", {
+...     "orders": ["order_id", "order_purchase_timestamp", "order_status"],
+...     "order_items": ["order_id", "price", "freight_value"],
+... })
+>>> isinstance(decision, dict) or getattr(decision, "agent", None) in {"analytics","knowledge","commerce","triage"}
+True
 """
 
 from __future__ import annotations

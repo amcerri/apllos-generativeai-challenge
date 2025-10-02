@@ -1,5 +1,5 @@
 # docker-compose: app (LangGraph Server / API) + Postgres (pgvector)
-# Compose v2 (sem `version:`). Deixe o Compose gerenciar a rede automaticamente.
+# Compose v2 (no `version:`). Let Compose manage the network automatically.
 
 name: apllos-generativeai-challenge
 
@@ -34,7 +34,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      # Compose lê .env automaticamente; pode sobrescrever em tempo de execução
+      # Compose reads .env automatically; can override at runtime
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       APP_ENV: ${APP_ENV:-development}
@@ -51,9 +51,7 @@ services:
       - "${STUDIO_PORT:-2025}:${STUDIO_PORT:-2025}" # Studio
     volumes:
       - ./:/workspace
-      - ./data/raw/analytics:/workspace/data/raw/analytics
-      - ./data/docs:/workspace/data/docs
-    # Comando padrão fornece shell se o módulo ainda não estiver presente
+    # Default command provides shell if module is not yet present
     command: ["bash", "-lc", "sleep infinity"]
 
 volumes:

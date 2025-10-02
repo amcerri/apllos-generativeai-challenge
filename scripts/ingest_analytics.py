@@ -2,7 +2,6 @@
 Ingest Olist CSVs into PostgreSQL (analytics schema).
 
 Overview
---------
 This script creates the analytics schema (via `schema.sql`) and bulk-loads the
 Olist CSV datasets from `data/raw/analytics/` using PostgreSQL COPY for speed.
 It is designed to be:
@@ -11,14 +10,12 @@ It is designed to be:
 - **Strict about types**: relies on Postgres to coerce textual timestamps.
 
 Design
-------
 1) Apply schema from a provided SQL file.
 2) Discover known CSV filenames → target tables.
 3) COPY rows with explicit column lists from CSV headers.
 4) ANALYZE tables to refresh planner stats.
 
 Integration
------------
 - Expects `DATABASE_URL` (e.g., `postgresql+psycopg2://user:pass@host:5432/db`).
 - Works with our infra helpers if present (`app.infra.db.get_engine`).
 - Intended to be used locally and in CI as a smoke step.

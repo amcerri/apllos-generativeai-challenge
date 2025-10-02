@@ -2,28 +2,24 @@
 Generate allowlist (tables → columns) from PostgreSQL introspection.
 
 Overview
---------
 This utility inspects a PostgreSQL schema (default: `analytics`) and emits a
 JSON allowlist mapping each table name to the list of column names. The file is
 used by the Analytics agent planner to constrain SQL generation to known tables
 and columns.
 
 Design
-------
 - Read-only introspection via information_schema.
 - Optional inclusion of views; base tables only by default.
 - Deterministic output: sorted tables and columns.
 - Minimal dependencies; integrates with our infra helpers if present.
 
 Integration
------------
 - Uses `app.infra.db.get_engine()` when available; otherwise falls back to
   `DATABASE_URL` with SQLAlchemy.
 - Intended to be committed under `data/samples/allowlist.json` (default path),
   but the `--out` flag can be used to override.
 
 Usage
------
 $ python -m scripts.gen_allowlist \
     --schema analytics \
     --out data/samples/allowlist.json \
@@ -107,13 +103,27 @@ class GenOptions:
 
 
 def _resolve_engine() -> Any:
+    # Try DATABASE_URL first (for standalone script execution)
+    url = os.environ.get("DATABASE_URL")
+    if url and _create_engine is not None:
+        return _create_engine(url, pool_pre_ping=True, future=True)
+    
+    # Fallback to configured engine
     if _get_engine is not None:
-        return _get_engine()
+        try:
+            return _get_engine()
+        except RuntimeError:
+            # If get_engine fails, try DATABASE_URL as fallback
+            if url and _create_engine is not None:
+                return _create_engine(url, pool_pre_ping=True, future=True)
+            raise
+    
     if _create_engine is None:
         raise RuntimeError("SQLAlchemy is required but not available")
-    url = os.environ.get("DATABASE_URL")
+    
     if not url:
         raise RuntimeError("DATABASE_URL is not set and infra.get_engine is unavailable")
+    
     return _create_engine(url, pool_pre_ping=True, future=True)
 
 

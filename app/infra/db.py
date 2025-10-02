@@ -2,33 +2,35 @@
 Database helpers (SQLAlchemy with safe, optional dependency).
 
 Overview
-    Minimal utilities to configure and access a SQLAlchemy engine for Postgres
-    (or any SQLAlchemy-supported backend). Prefers read-only connections for
-    analytics workloads by setting Postgres session flags when possible.
+--------
+Minimal utilities to configure and access a SQLAlchemy engine for Postgres
+(or any SQLAlchemy-supported backend). Prefers read-only connections for
+analytics workloads by setting Postgres session flags when possible.
 
 Design
-    - Optional import of SQLAlchemy; errors are raised only when used.
-    - No imports from other internal modules; stdlib logging only.
-    - Provide small, composable functions: configure, get/close engine, and a
-      context manager for connections.
+------
+- Optional import of SQLAlchemy; errors are raised only when used.
+- No imports from other internal modules; stdlib logging only.
+- Provide small, composable functions: configure, get/close engine, and a
+  context manager for connections.
 
 Integration
-    - Call `configure_from_config(cfg)` at bootstrap.
-    - Obtain the engine via `get_engine()` or a connection with
-      `open_connection(readonly=True)`.
-    - If no URL is provided in config, falls back to env var 
-      
-      DATABASE_URL.
+-----------
+- Call `configure_from_config(cfg)` at bootstrap.
+- Obtain the engine via `get_engine()` or a connection with
+  `open_connection(readonly=True)`.
+- If no URL is provided in config, falls back to env var DATABASE_URL.
 
 Usage
-    >>> from app.infra.db import configure_from_config, get_engine, open_connection
-    >>> cfg = {"database": {"url": "postgresql+psycopg://user:pass@localhost:5432/app",
-    ...                     "pool_size": 10, "pool_timeout_sec": 10}}
-    >>> configure_from_config(cfg)
-    >>> engine = get_engine()
-    >>> with open_connection() as conn:
-    ...     result = conn.exec_driver_sql("SELECT 1").scalar()
-    ...     assert result == 1
+-----
+>>> from app.infra.db import configure_from_config, get_engine, open_connection
+>>> cfg = {"database": {"url": "postgresql+psycopg://user:pass@localhost:5432/app",
+...                     "pool_size": 10, "pool_timeout_sec": 10}}
+>>> configure_from_config(cfg)
+>>> engine = get_engine()
+>>> with open_connection() as conn:
+...     result = conn.exec_driver_sql("SELECT 1").scalar()
+...     assert result == 1
 """
 
 from __future__ import annotations

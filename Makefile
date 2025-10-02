@@ -57,8 +57,9 @@ help: ## Show this help message
 	@echo "======================================"
 	@echo ""
 	@echo "BOOTSTRAP & RESET:"
-	@echo "  bootstrap     - Complete bootstrap: reset + setup + start + ingest + test"
-	@echo "  reset         - Complete reset: stop all + remove containers + clean volumes (keeps data)"
+	@echo "  bootstrap          - Complete bootstrap: reset + minimal setup + start + ingest real data + test"
+	@echo "  bootstrap-complete - GUARANTEED complete bootstrap with step-by-step data loading"
+	@echo "  reset              - Complete reset: stop all + remove containers + clean volumes (keeps data)"
 	@echo ""
 	@echo "DIRECTORY MANAGEMENT:"
 	@echo "  dirs          - Create required directories"
@@ -123,11 +124,39 @@ bootstrap: ## Complete bootstrap: reset + setup + start + ingest + test
 	@echo "Starting complete bootstrap..."
 	@echo "============================="
 	@$(MAKE) reset
-	@$(MAKE) setup
-	@$(MAKE) start
+	@$(MAKE) setup-minimal
+	@$(MAKE) docker-build
+	@echo "Waiting for database to be ready for ingestion..."
+	@$(MAKE) db-wait
 	@$(MAKE) ingest-all
+	@$(MAKE) studio-up
 	@$(MAKE) validate
 	@echo "Bootstrap complete! System is ready."
+
+.PHONY: bootstrap-complete
+bootstrap-complete: ## Complete bootstrap with guaranteed data loading
+	@echo "Starting COMPLETE bootstrap with data loading..."
+	@echo "==============================================="
+	@echo "Step 1: Complete reset..."
+	@$(MAKE) reset
+	@echo "Step 2: Setup database and directories..."
+	@$(MAKE) setup-minimal
+	@echo "Step 3: Build Docker image..."
+	@$(MAKE) docker-build
+	@echo "Step 4: Wait for database to be fully ready..."
+	@sleep 5
+	@$(MAKE) db-wait
+	@echo "Step 5: Load real analytics data..."
+	@$(MAKE) ingest-analytics
+	@echo "Step 6: Load document vectors..."
+	@$(MAKE) ingest-vectors
+	@echo "Step 7: Generate allowlist..."
+	@$(MAKE) gen-allowlist
+	@echo "Step 8: Start LangGraph Studio..."
+	@$(MAKE) studio-up
+	@echo "Step 9: Validate system..."
+	@$(MAKE) validate
+	@echo "COMPLETE BOOTSTRAP FINISHED! System ready with real data."
 
 .PHONY: reset
 reset: ## Complete reset: stop all + remove containers + clean volumes
@@ -146,6 +175,16 @@ setup: ## Setup environment: create dirs + start db + init + seed
 	@$(MAKE) db-init
 	@$(MAKE) db-seed
 	@echo "Setup complete."
+
+.PHONY: setup-minimal
+setup-minimal: ## Setup environment without sample data: create dirs + start db + init only
+	@echo "Setting up minimal environment..."
+	@echo "================================="
+	@$(MAKE) dirs
+	@$(MAKE) db-start
+	@$(MAKE) db-wait
+	@$(MAKE) db-init
+	@echo "Minimal setup complete (no sample data)."
 
 .PHONY: start
 start: ## Start application: build + start studio
@@ -317,8 +356,8 @@ ingest-vectors: ## Ingest document vectors for RAG
 .PHONY: gen-allowlist
 gen-allowlist: ## Generate allowlist from database schema
 	@echo "Generating allowlist..."
-	@$(PY) scripts/gen_allowlist.py \
-		--dsn "$(DSN_COMPOSE)" \
+	@DATABASE_URL="postgresql+psycopg://$(DB_USER):$(DB_PASSWORD)@localhost:$(POSTGRES_PORT)/$(DB_NAME)" $(PY) scripts/gen_allowlist.py \
+		--schema "$(DB_SEED_SCHEMA)" \
 		--out app/routing/allowlist.json
 	@echo "Allowlist generated."
 
@@ -445,15 +484,24 @@ batch-query: ## Process multiple queries from YAML file (INPUT="queries.yaml" [O
 	@echo "Processing batch queries from $(INPUT)..."
 	@$(PY) scripts/batch_query.py --input "$(INPUT)" $(if $(OUTPUT),--output "$(OUTPUT)")
 
+.PHONY: logs
+logs: ## Show real-time logs from LangGraph Studio container
+	@if docker ps --format '{{.Names}}' | grep -q "apllos-app-studio"; then \
+		echo "Showing real-time logs from LangGraph Studio..."; \
+		echo "Press Ctrl+C to stop following logs"; \
+		docker logs -f apllos-app-studio; \
+	else \
+		echo "LangGraph Studio container not running."; \
+		echo "Start it with: make studio-up"; \
+		echo ""; \
+		echo "Available containers:"; \
+		docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}" || echo "No containers running"; \
+	fi
+
 # =============================================================================
 # Utilities
 # =============================================================================
 
-.PHONY: logs
-logs: ## Show application logs
-	@echo "Application logs:"
-	@$(DOCKER) logs $(APP_CONTAINER)-studio --tail 50 2>/dev/null || echo "Studio not running"
-	@$(DOCKER) logs $(APP_CONTAINER)-api --tail 50 2>/dev/null || echo "API not running"
 
 .PHONY: logs-db
 logs-db: ## Show database logs

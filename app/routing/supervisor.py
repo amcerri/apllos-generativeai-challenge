@@ -2,36 +2,40 @@
 Routing supervisor (deterministic guards & fallbacks)
 
 Overview
-    Applies context‑first routing rules on top of the LLM router decision and
-    resolves a single, final agent with at most one fallback (no loops).
+--------
+Applies context‑first routing rules on top of the LLM router decision and
+resolves a single, final agent with at most one fallback (no loops).
 
 Design
-    - Inputs: a RouterDecision‑shaped object (dict or dataclass) and optional
-      context hints (e.g., RAG hit signals).
-    - Hard guards: commerce dominates when `commerce_doc` is present; never
-      produce multiple fallbacks; confidence is recalibrated conservatively.
-    - Output: normalized dict or RouterDecision dataclass (if available).
+------
+- Inputs: a RouterDecision‑shaped object (dict or dataclass) and optional
+  context hints (e.g., RAG hit signals).
+- Hard guards: commerce dominates when `commerce_doc` is present; never
+  produce multiple fallbacks; confidence is recalibrated conservatively.
+- Output: normalized dict or RouterDecision dataclass (if available).
 
 Integration
-    - Call `supervise(decision, ctx)` from the graph after LLM classification
-      and before agent dispatch.
-    - Logging/tracing are optional; this module degrades gracefully without
-      infra dependencies.
+-----------
+- Call `supervise(decision, ctx)` from the graph after LLM classification
+  and before agent dispatch.
+- Logging/tracing are optional; this module degrades gracefully without
+  infra dependencies.
 
 Usage
-    >>> from app.routing.supervisor import supervise, RoutingContext
-    >>> ctx = RoutingContext(rag_hits=2, rag_min_score=0.78)
-    >>> final_decision = supervise({
-    ...     "agent": "knowledge",
-    ...     "confidence": 0.61,
-    ...     "reason": "policy intent",
-    ...     "tables": ["orders"],
-    ...     "columns": ["order_status"],
-    ...     "signals": ["mentions_table", "mentions_column"],
-    ...     "thread_id": None,
-    ... }, ctx)
-    >>> final_decision["agent"] in {"analytics", "knowledge", "commerce", "triage"}
-    True
+-----
+>>> from app.routing.supervisor import supervise, RoutingContext
+>>> ctx = RoutingContext(rag_hits=2, rag_min_score=0.78)
+>>> final_decision = supervise({
+...     "agent": "knowledge",
+...     "confidence": 0.61,
+...     "reason": "policy intent",
+...     "tables": ["orders"],
+...     "columns": ["order_status"],
+...     "signals": ["mentions_table", "mentions_column"],
+...     "thread_id": None,
+... }, ctx)
+>>> final_decision["agent"] in {"analytics", "knowledge", "commerce", "triage"}
+True
 """
 
 from __future__ import annotations

@@ -2,25 +2,29 @@
 Structured logging utilities using structlog.
 
 Overview
-    Opinionated setup for structured logging with optional JSON output. Provides
-    a `configure()` function and a `get_logger()` helper that pre-binds a
-    `component` name and accepts additional context fields (e.g., `thread_id`).
+--------
+Opinionated setup for structured logging with optional JSON output. Provides
+a `configure()` function and a `get_logger()` helper that pre-binds a
+`component` name and accepts additional context fields (e.g., `thread_id`).
 
 Design
-    - Uses `structlog` with stdlib integration via `ProcessorFormatter`.
-    - Supports console (human-friendly) or JSON rendering, selectable via
-      parameters or environment variables.
-    - Binds common fields such as `component`, `event`, `thread_id`.
+------
+- Uses `structlog` with stdlib integration via `ProcessorFormatter`.
+- Supports console (human-friendly) or JSON rendering, selectable via
+  parameters or environment variables.
+- Binds common fields such as `component`, `event`, `thread_id`.
 
 Integration
-    - Call `configure()` once at app startup. Then use `get_logger("component")`.
-    - This module avoids importing other internal packages to remain import-safe.
+-----------
+- Call `configure()` once at app startup. Then use `get_logger("component")`.
+- This module avoids importing other internal packages to remain import-safe.
 
 Usage
-    >>> from app.infra.logging import configure, get_logger
-    >>> configure(level="INFO", json=False)
-    >>> log = get_logger("routing").bind(thread_id="abc123")
-    >>> log.info("router-started", agent_count=4)
+-----
+>>> from app.infra.logging import configure, get_logger
+>>> configure(level="INFO", json=False)
+>>> log = get_logger("routing").bind(thread_id="abc123")
+>>> log.info("router-started", agent_count=4)
 """
 
 from __future__ import annotations

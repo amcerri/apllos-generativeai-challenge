@@ -130,6 +130,14 @@ async def process_query(
             }
         
         # Create and start a run with input data
+        # Add timestamp to ensure no caching/reuse of previous results
+        import time
+        timestamp = int(time.time() * 1000)  # milliseconds
+        
+        # Add unique identifier to input to prevent caching
+        if "query" in input_data:
+            input_data["_batch_id"] = f"batch_{timestamp}_{query_index}"
+        
         run_data = {
             "assistant_id": "assistant",
             "input": input_data
@@ -207,6 +215,10 @@ async def process_query(
 
 def format_output(results: List[Dict[str, Any]], output_file: Path) -> None:
     """Format and write results to output file."""
+    
+    # Ensure we completely overwrite any existing file
+    if output_file.exists():
+        output_file.unlink()
     
     with open(output_file, 'w', encoding='utf-8') as f:
         # Header
@@ -348,6 +360,11 @@ async def main():
     queries = load_queries(input_file)
     print(f"Found {len(queries)} queries to process")
     
+    # Debug: Show output file path
+    print(f"Output will be written to: {output_file}")
+    if output_file.exists():
+        print(f"Warning: Output file already exists and will be overwritten")
+    
     print("Processing queries...")
     
     # Process queries with limited concurrency
@@ -359,12 +376,14 @@ async def main():
             return await process_query(client, query_data, index)
     
     async with httpx.AsyncClient() as client:
-        tasks = [
-            process_with_semaphore(client, query_data, i)
-            for i, query_data in enumerate(queries)
-        ]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Process queries sequentially to avoid overloading LangGraph Studio
+        results = []
+        for i, query_data in enumerate(queries):
+            try:
+                result = await process_with_semaphore(client, query_data, i)
+                results.append(result)
+            except Exception as e:
+                results.append(e)
     
     # Handle any exceptions
     processed_results = []

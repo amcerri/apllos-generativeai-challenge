@@ -2,26 +2,22 @@
 Explain SQL plans against PostgreSQL (EXPLAIN / EXPLAIN ANALYZE).
 
 Overview
---------
 Developer utility to inspect query plans safely. It connects to Postgres,
 wraps the provided SQL in `EXPLAIN (...)` with configurable options, and
 returns the plan in JSON or text. The script is conservative: it only allows
 `SELECT`/`WITH` statements and refuses anything that looks like DML/DDL.
 
 Design
-------
 - Optional dependency on our infra (`app.infra.db.get_engine`) with fallback to
   `DATABASE_URL` using SQLAlchemy.
 - Minimal SQL validation (read‑only, no multi‑statement, optional basic allowlist).
 - Robust CLI with JSON/text output and optional file write.
 
 Integration
------------
 - Requires access to a PostgreSQL instance with the analytics/knowledge data.
 - Use this during dev/CI to inspect performance or verify planner choices.
 
 Usage
------
 $ python -m scripts.explain_sql \
     --sql "SELECT count(*) FROM analytics.orders" \
     --analyze --buffers --format json --out plan.json
