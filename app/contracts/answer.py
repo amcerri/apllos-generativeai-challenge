@@ -2,27 +2,31 @@
 Answer Contract
 
 Overview
-    Strict dataclass representing the user-facing response produced by any
-    agent. Text is required and should be written in pt-BR by callers. Optional
-    fields support tabular data (analytics), citations (knowledge), metadata,
-    artifacts, and next-step suggestions.
+--------
+Strict dataclass representing the user-facing response produced by any
+agent. Text is required and should be written in pt-BR by callers. Optional
+fields support tabular data (analytics), citations (knowledge), metadata,
+artifacts, and next-step suggestions.
 
 Design
-    - Stdlib-only, PEP‑8/PEP‑257 compliant.
-    - Minimal runtime validation to keep results well-formed.
-    - JSON Schema is provided for validation and LLM Structured Outputs.
+------
+- Stdlib-only, PEP‑8/PEP‑257 compliant.
+- Minimal runtime validation to keep results well-formed.
+- JSON Schema is provided for validation and LLM Structured Outputs.
 
 Integration
-    - Use `Answer.from_dict(...)` to build/validate from dynamic inputs.
-    - For analytics, when returning rows, provide `columns` and enforce consistent
-      column counts.
-    - For knowledge, when using RAG, populate `citations` (at least one of
-      `url` or `doc_id` per citation).
+-----------
+- Use `Answer.from_dict(...)` to build/validate from dynamic inputs.
+- For analytics, when returning rows, provide `columns` and enforce consistent
+  column counts.
+- For knowledge, when using RAG, populate `citations` (at least one of
+  `url` or `doc_id` per citation).
 
 Usage
-    >>> a = Answer(text="All good.")
-    >>> a.to_dict()["text"]
-    'Tudo certo.'
+-----
+>>> a = Answer(text="All good.")
+>>> a.to_dict()["text"]
+'Tudo certo.'
 """
 
 from __future__ import annotations

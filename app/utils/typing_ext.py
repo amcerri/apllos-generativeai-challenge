@@ -2,22 +2,26 @@
 Typing extensions and common aliases
 
 Overview
-    Shared typing utilities and aliases used across the project. Prefer modern
-    Python 3.11+ features (e.g., X | Y unions) and keep this module stdlib‑only.
+--------
+Shared typing utilities and aliases used across the project. Prefer modern
+Python 3.11+ features (e.g., X | Y unions) and keep this module stdlib‑only.
 
 Design
-    - Provide JSON‑related aliases (recursive) for serialization contracts.
-    - Small utility protocols (e.g., `SupportsToDict`).
-    - Lightweight helpers like `is_json_compatible` and common TypeVars.
+------
+- Provide JSON‑related aliases (recursive) for serialization contracts.
+- Small utility protocols (e.g., `SupportsToDict`).
+- Lightweight helpers like `is_json_compatible` and common TypeVars.
 
 Integration
-    - Safe to import early; no side effects. Modules can rely on these aliases
-      without depending on external packages.
+-----------
+- Safe to import early; no side effects. Modules can rely on these aliases
+  without depending on external packages.
 
 Usage
-    >>> from app.utils.typing_ext import JSONValue, SupportsToDict, StrPath
-    >>> def to_payload(x: JSONValue) -> JSONValue:  # doctest: +SKIP
-    ...     return x
+-----
+>>> from app.utils.typing_ext import JSONValue, SupportsToDict, StrPath
+>>> def to_payload(x: JSONValue) -> JSONValue:  # doctest: +SKIP
+...     return x
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ models:
   # Router: lightweight classifier that produces RouterDecision
   router:
     provider: ${ROUTER_PROVIDER:-openai}
-    name: ${ROUTER_MODEL:-gpt-4.1-mini}
+    name: ${ROUTER_MODEL:-gpt-4o-mini}
     parameters:
       temperature: 0.0
       max_tokens: 400
@@ -20,13 +20,13 @@ models:
   analytics_planner:
     primary:
       provider: ${ANALYTICS_PROVIDER:-openai}
-      name: ${ANALYTICS_PLANNER_MODEL:-o3}
+      name: ${ANALYTICS_PLANNER_MODEL:-gpt-4o-mini}
       parameters:
         temperature: 0.0
         max_tokens: 800
     fallback:
       provider: ${ANALYTICS_PROVIDER:-openai}
-      name: ${ANALYTICS_PLANNER_MODEL_FALLBACK:-o4-mini}
+      name: ${ANALYTICS_PLANNER_MODEL_FALLBACK:-gpt-4o-mini}
       parameters:
         temperature: 0.0
         max_tokens: 800
@@ -35,13 +35,13 @@ models:
   knowledge_answerer:
     primary:
       provider: ${KNOWLEDGE_PROVIDER:-openai}
-      name: ${KNOWLEDGE_MODEL:-gpt-4.1}
+      name: ${KNOWLEDGE_MODEL:-gpt-4o-mini}
       parameters:
         temperature: 0.2
         max_tokens: 900
     mini:
       provider: ${KNOWLEDGE_PROVIDER:-openai}
-      name: ${KNOWLEDGE_MODEL_MINI:-gpt-4.1-mini}
+      name: ${KNOWLEDGE_MODEL_MINI:-gpt-4o-mini}
       parameters:
         temperature: 0.2
         max_tokens: 700
@@ -49,7 +49,7 @@ models:
   # Commerce: extraction with structured outputs (JSON)
   commerce_extractor:
     provider: ${COMMERCE_PROVIDER:-openai}
-    name: ${COMMERCE_MODEL:-gpt-4.1}
+    name: ${COMMERCE_MODEL:-gpt-4o-mini}
     parameters:
       temperature: 0.1
       max_tokens: 900

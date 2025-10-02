@@ -217,8 +217,9 @@ def _get_attr(obj: Mapping[str, Any] | Any, name: str, *, default: Any) -> Any:
 
 def _assert_safe_select(sql: str) -> None:
     sql_l = sql.lstrip().lower()
-    if not sql_l.startswith("select"):
-        raise ValueError("only SELECT statements are allowed")
+    # Allow SELECT and WITH (CTEs) statements
+    if not (sql_l.startswith("select") or sql_l.startswith("with")):
+        raise ValueError("only SELECT and WITH statements are allowed")
 
     blocked = {"insert", "update", "delete", "alter", "drop", "create", "grant", "revoke"}
     tokens = {t for t in sql_l.replace("\n", " ").split(" ") if t}

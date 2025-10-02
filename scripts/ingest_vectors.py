@@ -2,13 +2,11 @@
 Ingest documents into pgvector (RAG index).
 
 Overview
---------
 Chunk and embed PDF/TXT/MD documents from a directory and upsert the vectors
 into PostgreSQL using the pgvector extension. The script is dependency‑light
 and degrades gracefully when optional libs (OpenAI, PyPDF) are missing.
 
 Design
-------
 1) Create schema/table if needed (idempotent). Ensure `vector` extension.
 2) Discover files by glob pattern (default: *.pdf, *.txt, *.md).
 3) Extract text (PyPDF if present; otherwise skip PDFs) and chunk by characters.
@@ -17,7 +15,6 @@ Design
 6) Build/refresh ANN index (HNSW/IVFFlat) only when necessary.
 
 Integration
------------
 - Reads `DATABASE_URL` unless `app.infra.db.get_engine()` is available.
 - Embeddings: `OPENAI_API_KEY` + `EMBEDDING_MODEL` (default: text-embedding-3-small).
 - Table configurable via env `RAG_TABLE` (default: `rag.chunks`).

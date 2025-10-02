@@ -2,27 +2,31 @@
 Validation helpers
 
 Overview
-    Small, dependency‑free helpers for validating and coercing data. Utilities
-    are intentionally generic so they can be reused across agents and infra
-    without importing external libraries.
+--------
+Small, dependency‑free helpers for validating and coercing data. Utilities
+are intentionally generic so they can be reused across agents and infra
+without importing external libraries.
 
 Design
-    - Stdlib only. No I/O. Pure functions with explicit types.
-    - Provide safe coercions (`coerce_int/float/bool`) and common checks
-      (`is_non_empty_str`, `within_range`, etc.).
-    - Keep error messages short and actionable.
+------
+- Stdlib only. No I/O. Pure functions with explicit types.
+- Provide safe coercions (`coerce_int/float/bool`) and common checks
+  (`is_non_empty_str`, `within_range`, etc.).
+- Keep error messages short and actionable.
 
 Integration
-    - Import and use in planners, supervisors and normalizers to guard inputs.
-    - Functions raise `ValueError` for invalid inputs when prefixed with
-      `ensure_`.
+-----------
+- Import and use in planners, supervisors and normalizers to guard inputs.
+- Functions raise `ValueError` for invalid inputs when prefixed with
+  `ensure_`.
 
 Usage
-    >>> from app.utils.validation import (
-    ...   is_non_empty_str, ensure_non_empty_str, coerce_int,
-    ...   within_range, ensure_subset, normalize_list_str, safe_limit,
-    ... )
-    >>> is_non_empty_str(" hello ")
+-----
+>>> from app.utils.validation import (
+...   is_non_empty_str, ensure_non_empty_str, coerce_int,
+...   within_range, ensure_subset, normalize_list_str, safe_limit,
+... )
+>>> is_non_empty_str(" hello ")
     True
     >>> ensure_non_empty_str("  ok  ", name="agent")
     'ok'

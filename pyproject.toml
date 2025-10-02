@@ -35,8 +35,8 @@ dependencies = [
 
   # Database (Postgres + pgvector)
   "SQLAlchemy>=2.0.30",
-        "psycopg[binary,pool]>=3.1.18",
-        "psycopg2-binary>=2.9.0",
+  "psycopg[binary,pool]>=3.1.18",
+  "psycopg2-binary>=2.9.0",
   "pgvector>=0.3.4",
 
   # API server/runtime niceties
@@ -47,6 +47,7 @@ dependencies = [
   
   # Document processing
   "pypdf>=4.0.0",
+  "python-docx>=1.1.0",
 ]
 
 [project.optional-dependencies]

@@ -2,28 +2,32 @@
 RouterDecision Contract
 
 Overview
-    Strict dataclass and helpers for the router → supervisor interface. The
-    classifier must emit a `RouterDecision` instance serialized as JSON (or a
-    Python dict) that adheres to this contract exactly.
+--------
+Strict dataclass and helpers for the router → supervisor interface. The
+classifier must emit a `RouterDecision` instance serialized as JSON (or a
+Python dict) that adheres to this contract exactly.
 
 Design
-    - Strong typing via `Literal` for `agent` and simple runtime validation.
-    - No external dependencies; stdlib only.
-    - JSON Schema provided for LLM Structured Outputs and validation tools.
+------
+- Strong typing via `Literal` for `agent` and simple runtime validation.
+- No external dependencies; stdlib only.
+- JSON Schema provided for LLM Structured Outputs and validation tools.
 
 Integration
-    - Use `RouterDecision.from_dict(...)` to validate/construct from LLM output.
-    - Use `RouterDecision.JSON_SCHEMA` when configuring Structured Outputs.
-    - The supervisor should trust only validated instances.
+-----------
+- Use `RouterDecision.from_dict(...)` to validate/construct from LLM output.
+- Use `RouterDecision.JSON_SCHEMA` when configuring Structured Outputs.
+- The supervisor should trust only validated instances.
 
 Usage
-    >>> payload = {
-    ...   "agent": "analytics", "confidence": 0.77, "reason": "mentions tables",
-    ...   "tables": ["orders"], "columns": ["order_id"], "signals": ["allowlist-hit"],
-    ... }
-    >>> rd = RouterDecision.from_dict(payload)
-    >>> rd.agent, rd.confidence
-    ('analytics', 0.77)
+-----
+>>> payload = {
+...   "agent": "analytics", "confidence": 0.77, "reason": "mentions tables",
+...   "tables": ["orders"], "columns": ["order_id"], "signals": ["allowlist-hit"],
+... }
+>>> rd = RouterDecision.from_dict(payload)
+>>> rd.agent, rd.confidence
+('analytics', 0.77)
 """
 
 from __future__ import annotations

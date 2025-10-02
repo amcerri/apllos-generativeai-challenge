@@ -2,28 +2,32 @@
 ID utilities
 
 Overview
-    Helpers to generate and validate identifiers for logs, thread correlation,
-    and lightweight persistence. Prefers stdlib primitives (uuid, secrets,
-    hashlib) and avoids external dependencies.
+--------
+Helpers to generate and validate identifiers for logs, thread correlation,
+and lightweight persistence. Prefers stdlib primitives (uuid, secrets,
+hashlib) and avoids external dependencies.
 
 Design
-    - Deterministic hashing via `stable_hash` (JSON-serialized input).
-    - Random, URL-safe tokens via `random_token` (length-capped).
-    - Short, human-friendly IDs via `short_uuid` (wrapper) and `ulid` generator.
-    - Thread IDs combine UTC timestamp with a short suffix for easy eyeballing.
+------
+- Deterministic hashing via `stable_hash` (JSON-serialized input).
+- Random, URL-safe tokens via `random_token` (length-capped).
+- Short, human-friendly IDs via `short_uuid` (wrapper) and `ulid` generator.
+- Thread IDs combine UTC timestamp with a short suffix for easy eyeballing.
 
 Integration
-    - Safe to import early; no I/O and no global state beyond constants.
-    - Complements `app.utils.__init__` helpers; does not require other packages.
+-----------
+- Safe to import early; no I/O and no global state beyond constants.
+- Complements `app.utils.__init__` helpers; does not require other packages.
 
 Usage
-    >>> from app.utils.ids import short_uuid, random_token, stable_hash, make_thread_id, ulid
-    >>> short_uuid()
-    'a1b2c3d4'
-    >>> token = random_token(24)
-    >>> h = stable_hash({"a": 1, "b": 2}, length=12)
-    >>> tid = make_thread_id()
-    >>> u = ulid()
+-----
+>>> from app.utils.ids import short_uuid, random_token, stable_hash, make_thread_id, ulid
+>>> short_uuid()
+'a1b2c3d4'
+>>> token = random_token(24)
+>>> h = stable_hash({"a": 1, "b": 2}, length=12)
+>>> tid = make_thread_id()
+>>> u = ulid()
 """
 
 from __future__ import annotations

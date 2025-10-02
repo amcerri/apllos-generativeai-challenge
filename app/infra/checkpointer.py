@@ -2,27 +2,31 @@
 LangGraph checkpointer helpers (Postgres with safe fallbacks).
 
 Overview
-    Thin factory around LangGraph's checkpoint backends. Prefers Postgres when
-    available and gracefully degrades to a no-op checkpointer if the optional
-    dependency or configuration is missing.
+--------
+Thin factory around LangGraph's checkpoint backends. Prefers Postgres when
+available and gracefully degrades to a no-op checkpointer if the optional
+dependency or configuration is missing.
 
 Design
-    - Optional import of LangGraph Postgres saver (`PostgresSaver`).
-    - No hard dependency on other internal modules; stdlib logging only.
-    - Global getter `get_checkpointer()` returns a configured instance or a
-      no-op implementation that satisfies the minimal Saver-like surface.
+------
+- Optional import of LangGraph Postgres saver (`PostgresSaver`).
+- No hard dependency on other internal modules; stdlib logging only.
+- Global getter `get_checkpointer()` returns a configured instance or a
+  no-op implementation that satisfies the minimal Saver-like surface.
 
 Integration
-    - Initialized during application bootstrap using a configuration mapping.
-    - Returns a saver compatible with LangGraph runtime.
-    - When not configured or disabled, the returned saver is a `_NoopSaver`.
+-----------
+- Initialized during application bootstrap using a configuration mapping.
+- Returns a saver compatible with LangGraph runtime.
+- When not configured or disabled, the returned saver is a `_NoopSaver`.
 
 Usage
-    >>> from app.infra.checkpointer import configure_from_config, get_checkpointer
-    >>> cfg = {"database": {"url": "postgresql+psycopg://..."},
-    ...        "checkpointer": {"enabled": True, "backend": "postgres", "table": "checkpoints"}}
-    >>> configure_from_config(cfg)
-    >>> saver = get_checkpointer()
+-----
+>>> from app.infra.checkpointer import configure_from_config, get_checkpointer
+>>> cfg = {"database": {"url": "postgresql+psycopg://..."},
+...        "checkpointer": {"enabled": True, "backend": "postgres", "table": "checkpoints"}}
+>>> configure_from_config(cfg)
+>>> saver = get_checkpointer()
 """
 
 from __future__ import annotations

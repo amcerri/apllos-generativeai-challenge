@@ -2,31 +2,35 @@
 Time utilities
 
 Overview
-    Small, dependency‑free helpers for working with datetimes and durations.
-    Functions prefer timezone‑aware UTC datetimes and monotonic clocks for
-    elapsed time and deadlines.
+--------
+Small, dependency‑free helpers for working with datetimes and durations.
+Functions prefer timezone‑aware UTC datetimes and monotonic clocks for
+elapsed time and deadlines.
 
 Design
-    - Stdlib only (`datetime`, `time`).
-    - Always return **aware UTC** datetimes when constructing/parsing.
-    - Keep helpers orthogonal: parsing/formatting, unix conversions, durations,
-      and monotonic‑based timeouts.
+------
+- Stdlib only (`datetime`, `time`).
+- Always return **aware UTC** datetimes when constructing/parsing.
+- Keep helpers orthogonal: parsing/formatting, unix conversions, durations,
+  and monotonic‑based timeouts.
 
 Integration
-    - Safe to import early; no I/O. Complements `app.utils.utc_now`.
+-----------
+- Safe to import early; no I/O. Complements `app.utils.utc_now`.
 
 Usage
-    >>> from app.utils.time import (
-    ...     as_utc, parse_iso8601, format_iso8601,
-    ...     to_unix_seconds, to_unix_millis,
-    ...     from_unix_seconds, from_unix_millis,
-    ...     human_duration, monotonic_now, has_expired, remaining_ms,
-    ... )
-    >>> dt = parse_iso8601("2024-01-02T03:04:05Z")
-    >>> format_iso8601(dt)
-    '2024-01-02T03:04:05Z'
-    >>> to_unix_seconds(dt) > 0
-    True
+-----
+>>> from app.utils.time import (
+...     as_utc, parse_iso8601, format_iso8601,
+...     to_unix_seconds, to_unix_millis,
+...     from_unix_seconds, from_unix_millis,
+...     human_duration, monotonic_now, has_expired, remaining_ms,
+... )
+>>> dt = parse_iso8601("2024-01-02T03:04:05Z")
+>>> format_iso8601(dt)
+'2024-01-02T03:04:05Z'
+>>> to_unix_seconds(dt) > 0
+True
 """
 
 from __future__ import annotations

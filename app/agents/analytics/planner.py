@@ -210,6 +210,9 @@ class AnalyticsPlanner:
             self.log.info("LLM backend initialized for analytics planner")
         except Exception as exc:
             self.log.warning("LLM backend unavailable; using heuristics only", exc_info=exc)
+        
+        # Load examples for few-shot prompting
+        self._examples = self._load_examples()
 
     # Public API -------------------------------------------------------------
     def plan(
@@ -241,7 +244,9 @@ class AnalyticsPlanner:
             # Try LLM first if available
             if self._llm_backend:
                 try:
-                    return self._plan_with_llm(query, allowlist, logger, default_limit)
+                    plan = self._plan_with_llm(query, allowlist, logger, default_limit)
+                    # CRITICAL: Fix alias issues before returning
+                    return self._fix_alias_issues(plan, logger)
                 except Exception as exc:
                     logger.warning("LLM planning failed; falling back to heuristics", exc_info=exc)
 
@@ -350,12 +355,38 @@ class AnalyticsPlanner:
         # Load system prompt and inject allowlist
         system_prompt = self._load_system_prompt(allowlist)
         
-        # Prepare user message
+        # Prepare messages with few-shot examples
+        messages = []
+        
+        # Add relevant examples (use up to 3 most relevant ones)
+        if self._examples:
+            # Simple relevance: find examples with similar keywords
+            query_lower = query.lower()
+            relevant_examples = []
+            
+            for example in self._examples:
+                input_text = example.get("input", "").lower()
+                # Score based on keyword overlap
+                score = 0
+                for word in query_lower.split():
+                    if len(word) > 3 and word in input_text:
+                        score += 1
+                
+                if score > 0:
+                    relevant_examples.append((score, example))
+            
+            # Sort by relevance and take top 3
+            relevant_examples.sort(key=lambda x: x[0], reverse=True)
+            for _, example in relevant_examples[:3]:
+                messages.append({"role": "user", "content": example["input"]})
+                messages.append({"role": "assistant", "content": json.dumps(example["output"], ensure_ascii=False)})
+        
+        # Add current query
         user_message = query.strip()
         if default_limit:
             user_message += f" (default limit: {default_limit})"
         
-        messages = [{"role": "user", "content": user_message}]
+        messages.append({"role": "user", "content": user_message})
         
         # Generate plan with LLM
         logger.info("Generating SQL plan with LLM", query=query[:100])
@@ -394,6 +425,28 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
         # Inject allowlist
         allowlist_json = json.dumps(dict(allowlist), indent=2)
         return template.replace("<<<ALLOWLIST_JSON>>>", allowlist_json)
+    
+    def _load_examples(self) -> list[dict[str, Any]]:
+        """Load few-shot examples from JSONL file."""
+        try:
+            from pathlib import Path
+            import json
+            
+            examples_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "examples.jsonl"
+            examples = []
+            
+            with open(examples_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        examples.append(json.loads(line))
+            
+            self.log.info(f"Loaded {len(examples)} examples for few-shot prompting")
+            return examples
+            
+        except Exception as exc:
+            self.log.warning(f"Could not load examples: {exc}")
+            return []
 
     def _validate_llm_plan(
         self, 
@@ -437,6 +490,33 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
             limit_applied=limit_applied,
             warnings=warnings,
         )
+    
+    def _fix_alias_issues(self, plan: PlannerPlan, logger: Any) -> PlannerPlan:
+        """Fix alias issues in SQL (remove dots from aliases)."""
+        import re
+        
+        original_sql = plan.sql
+        
+        # Find and fix aliases with dots (e.g., "AS analytics.customers" -> "AS customers")
+        # Pattern: AS followed by schema.table_name
+        fixed_sql = re.sub(
+            r'\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)\b',
+            lambda m: f"AS {m.group(1).split('.')[-1]}",  # Keep only the part after the dot
+            original_sql,
+            flags=re.IGNORECASE
+        )
+        
+        if fixed_sql != original_sql:
+            logger.warning(f"Fixed alias issues in SQL: {original_sql[:100]}... -> {fixed_sql[:100]}...")
+            return PlannerPlan(
+                sql=fixed_sql,
+                params=plan.params,
+                reason=plan.reason,
+                limit_applied=plan.limit_applied,
+                warnings=plan.warnings + ["fixed_alias_dots"]
+            )
+        
+        return plan
 
     def _fix_schema_prefixes(self, sql: str) -> str:
         """Ensure all table references have analytics schema prefix."""

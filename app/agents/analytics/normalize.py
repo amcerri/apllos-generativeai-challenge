@@ -42,10 +42,13 @@ from __future__ import annotations
 
 import math
 import re
+import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Final, cast
+from pathlib import Path
 
 try:  # Optional logger
     from app.infra.logging import get_logger
@@ -100,12 +103,34 @@ class _ResultView:
 
 
 class AnalyticsNormalizer:
-    """Produce a PT‑BR narrative and tabular payload from executor results."""
-
-    MAX_PREVIEW_ROWS: Final[int] = 500  # additional safety for payload size
+    """LLM-powered analytics normalizer using structured prompts."""
 
     def __init__(self) -> None:
         self.log = get_logger("agent.analytics.normalize")
+        self._system_prompt = self._load_system_prompt()
+        self._examples = self._load_examples()
+    
+
+    def _load_system_prompt(self) -> str:
+        """Load the system prompt from file."""
+        try:
+            prompt_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "normalizer_system.txt"
+            return prompt_path.read_text(encoding="utf-8")
+        except Exception:
+            return ""
+    
+    def _load_examples(self) -> list[dict[str, Any]]:
+        """Load few-shot examples from JSONL file."""
+        try:
+            examples_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "normalizer_examples.jsonl"
+            examples = []
+            for line in examples_path.read_text(encoding="utf-8").strip().split('\n'):
+                if line.strip():
+                    examples.append(json.loads(line))
+            return examples
+        except Exception:
+            return []
+
 
     def normalize(
         self,
@@ -114,539 +139,217 @@ class AnalyticsNormalizer:
         result: Mapping[str, Any] | _ResultView,
         question: str | None = None,
     ) -> Any:
-        """Return an Answer‑like object with PT‑BR text and optional table.
-
-        Parameters
-        ----------
-        plan: Dict or object with `sql`, `limit_applied`.
-        result: Dict or object with `rows`, `row_count`, `exec_ms`, `limit_applied`.
-        question: Original user question (optional; used for tone/hints).
+        """Normalize using LLM-powered approach with fallback."""
+        
+        # Convert inputs to standard format
+        plan_view = _as_plan(plan)
+        result_view = _as_result(result)
+        user_query = question or "Consulta de dados"
+        
+        # Try LLM-powered normalization with fallback
+        try:
+            llm_result = self._normalize_with_llm(user_query, plan_view, result_view)
+            if llm_result:
+                return _coerce_answer(llm_result)
+            else:
+                self.log.warning("LLM normalization returned None, using fallback")
+                return self._fallback_normalize(user_query, plan_view, result_view)
+        except Exception as e:
+            # Log the error and use fallback
+            self.log.warning(f"LLM normalization failed: {e}, using fallback")
+            return self._fallback_normalize(user_query, plan_view, result_view)
+    
+    
+    def _fallback_system_prompt(self) -> str:
+        """Fallback system prompt if file loading fails."""
+        return """You are an Analytics Result Normalizer. Format SQL results into business-friendly Portuguese responses.
+        
+        Rules:
+        1. Format currency as R$ X,XX
+        2. Use thousands separators for large numbers
+        3. Provide complete, contextual responses
+        4. Return JSON with 'text' field containing the formatted response
+        5. Include 'meta' field with query information
         """
-
-        with start_span("agent.analytics.normalize"):
-            p = _as_plan(plan)
-            r = _as_result(result)
-
-            rows_raw = list(r.rows)
-            columns = _infer_columns(rows_raw)
-
-            shape = _infer_shape(columns)
-            table = _extract_table_from_sql(p.sql)
-            scale = _extract_timescale_from_sql(p.sql)
-
-            # Enhanced context-aware rendering
-            text = _render_intelligent_response(rows_raw, p.sql, table, shape, scale, r.row_count, p.limit_applied)
-            
-            if shape == "count":
-                data, cols = None, None
-            elif shape == "timeseries":
-                data, cols = _limit_rows(rows_raw, self.MAX_PREVIEW_ROWS), columns
-            else:  # preview
-                data, cols = _limit_rows(rows_raw, self.MAX_PREVIEW_ROWS), columns
-
-            meta = {
-                "sql": p.sql,
-                "row_count": r.row_count,
-                "limit_applied": bool(p.limit_applied or r.limit_applied),
-                "exec_ms": r.exec_ms,
-            }
-
-            followups = _suggest_followups(shape, table)
-
-            payload = {
-                "text": text,
-                **(
-                    {"data": data, "columns": cols} if data is not None and cols is not None else {}
-                ),
-                "meta": meta,
-                "followups": followups,
-            }
-            return _coerce_answer(payload)
-
-
-# ---------------------------------------------------------------------------
-# Shape detection & rendering
-# ---------------------------------------------------------------------------
-
-
-def _infer_columns(rows: list[Mapping[str, Any]]) -> list[str]:
-    if not rows:
-        return []
-    # Preserve insertion order of the first row
-    return [str(k) for k in rows[0].keys()]
-
-
-def _infer_shape(columns: list[str]) -> str:
-    cols = {c.lower() for c in columns}
-    if {"qty"} == cols or ("qty" in cols and len(cols) == 1):
-        return "count"
-    if {"period", "qty"}.issubset(cols):
-        return "timeseries"
-    # Check for distribution patterns (grouping column + count column)
-    if any(col in columns for col in ['customer_state', 'product_category_name', 'seller_state']):
-        if any(keyword in col.lower() for col in columns for keyword in ['count', 'qty', 'total']):
-            return "distribution"
-    return "preview"
-
-
-def _render_intelligent_response(
-    rows: list[Mapping[str, Any]], 
-    sql: str, 
-    table: str | None, 
-    shape: str, 
-    scale: str | None, 
-    row_count: int, 
-    limit_applied: bool,
-    user_query: str = ""
-) -> str:
-    """Generate intelligent, context-aware response based on SQL and data."""
     
-    if not rows:
-        return "Não foram encontrados dados para sua consulta."
-    
-    sql_lower = sql.lower()
-    first_row = rows[0]
-    columns = list(first_row.keys())
-    
-    # Detect correlation/analysis queries (freight vs cancellation, etc.)
-    if any(keyword in sql_lower for keyword in ['avg(', 'correlation', 'cancellation']) and 'customer_state' in columns:
-        if 'avg_freight_value' in columns and 'cancellation_rate' in columns:
-            avg_freight = _as_float(first_row.get('avg_freight_value', 0))
-            cancel_rate = _as_float(first_row.get('cancellation_rate', 0))
-            return f"Análise por região: {len(rows)} estados analisados. Frete médio: R$ {_fmt_float_ptbr(avg_freight)}, Taxa de cancelamento média: {_fmt_float_ptbr(cancel_rate)}%."
-    
-    # Detect revenue/financial queries (only for actual revenue calculations)
-    if 'sum(' in sql_lower and any(col in columns for col in ['total_revenue', 'receita', 'revenue']):
-        if 'customer_state' in columns:
-            # Find the revenue column
-            revenue_col = None
-            for col in columns:
-                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
-                    revenue_col = col
-                    break
-            
-            if revenue_col:
-                total_revenue = sum(_as_float(row.get(revenue_col, 0)) for row in rows)
-                top_state = rows[0].get('customer_state', 'N/A')
-                top_revenue = _as_float(rows[0].get(revenue_col, 0))
-                return f"A receita total é R$ {_fmt_float_ptbr(total_revenue)}. O estado com maior receita é {top_state} (R$ {_fmt_float_ptbr(top_revenue)})."
+    def _normalize_with_llm(
+        self, 
+        user_query: str, 
+        plan: _PlanView, 
+        result: _ResultView
+    ) -> dict[str, Any] | None:
+        """Use LLM to normalize the results."""
         
-        elif len(rows) == 1:
-            # Find the revenue column
-            revenue_col = None
-            for col in columns:
-                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
-                    revenue_col = col
-                    break
-            
-            if revenue_col:
-                revenue = _as_float(first_row.get(revenue_col, 0))
-                return f"A receita total é R$ {_fmt_float_ptbr(revenue)}."
-    
-    # Detect filtered order queries (e.g., undelivered orders)
-    if 'order_id' in columns and any(keyword in sql_lower for keyword in ['where', '<>', '!=', 'not']):
-        if 'delivered' in sql_lower:
-            if row_count == 0:
-                return "Todos os pedidos já foram entregues."
+        try:
+            from openai import OpenAI
+        except ImportError:
+            return None
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            return None
+        
+        client = OpenAI(api_key=api_key)
+        
+        # Prepare compact input for LLM (convert non-serializable types)
+        def convert_for_json(obj):
+            from decimal import Decimal
+            from datetime import datetime, date, timedelta
+            if isinstance(obj, dict):
+                return {k: convert_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_for_json(item) for item in obj]
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            elif isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            elif isinstance(obj, timedelta):
+                return str(obj)  # Convert to string representation
             else:
-                return f"Encontrei {_fmt_int_ptbr(row_count)} pedidos que ainda não foram entregues."
-        elif any(status in sql_lower for status in ['shipped', 'processing', 'cancelled']):
-            return f"Encontrei {_fmt_int_ptbr(row_count)} pedidos com esse status."
-    
-    # Detect status distribution queries (check this BEFORE general count queries)
-    if 'order_status' in columns:
-        # Find the count column (could be 'count', 'qty', 'total', 'status_count', etc.)
-        count_col = None
-        for col in columns:
-            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total']):
-                count_col = col
-                break
+                return obj
         
-        if count_col:
-            total_orders = sum(_as_int(row.get(count_col, 0)) for row in rows)
-            most_common = max(rows, key=lambda r: _as_int(r.get(count_col, 0)))
-            status = most_common.get('order_status', 'N/A')
-            count = _as_int(most_common.get(count_col, 0))
-            return f"Dos {_fmt_int_ptbr(total_orders)} pedidos, o status mais comum é '{status}' com {_fmt_int_ptbr(count)} pedidos."
-    
-    # Detect count queries
-    if 'count(' in sql_lower or any(col.lower() in ['count', 'qty', 'total_orders'] for col in columns):
-        if len(rows) == 1:
-            count_val = _as_int(list(first_row.values())[0])
-            if 'order' in sql_lower:
-                return f"Existem {_fmt_int_ptbr(count_val)} pedidos no total."
-            elif 'customer' in sql_lower:
-                return f"Existem {_fmt_int_ptbr(count_val)} clientes únicos."
-            elif 'product' in sql_lower:
-                return f"Existem {_fmt_int_ptbr(count_val)} produtos no catálogo."
-            else:
-                return f"O total é {_fmt_int_ptbr(count_val)}."
-    
-    # Detect top-N queries
-    if 'limit' in sql_lower and any(keyword in sql_lower for keyword in ['order by', 'desc']):
-        if 'product_id' in columns:
-            top_product = rows[0].get('product_id', 'N/A')
-            # Find the value column (could be total_sales, contribution_margin, etc.)
-            value_col = None
-            for col in columns:
-                if col != 'product_id' and any(keyword in col.lower() for keyword in ['sales', 'contribution', 'margin', 'revenue', 'total']):
-                    value_col = col
-                    break
-            
-            if value_col:
-                sales = _as_float(rows[0].get(value_col, 0))
-                return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
-            else:
-                # Fallback: use the second column (first is usually product_id)
-                if len(columns) > 1:
-                    sales = _as_float(rows[0].get(columns[1], 0))
-                    return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
-    
-    # Detect time series
-    if 'period' in columns:
-        total = sum(_as_int(row.get('qty', row.get('total_orders', 0))) for row in rows)
-        periods = len(rows)
-        return f"Análise temporal: {_fmt_int_ptbr(total)} pedidos distribuídos em {periods} períodos."
-    
-    # Detect distribution/grouping queries (customer_state, product_category, etc.)
-    if any(col in columns for col in ['customer_state', 'product_category_name', 'seller_state']):
-        # Find the count/frequency column
-        count_col = None
-        for col in columns:
-            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total', 'frequency']):
-                count_col = col
-                break
+        input_data = {
+            "user_query": user_query,
+            "sql": plan.sql,
+            "rows": convert_for_json(result.rows[:5]),  # Convert non-serializable types and limit to 5 rows
+            "row_count": result.row_count,
+            "limit_applied": result.limit_applied
+        }
         
-        if count_col and len(rows) > 1:
-            total = sum(_as_int(row.get(count_col, 0)) for row in rows)
-            
-            # Show all results by default - no artificial limitations
-            show_rows = rows
-            suffix = f"Total: {len(rows)}"
-            
-            # Build response with user-friendly formatting
-            if 'customer_state' in columns:
-                # For states, use line-by-line format for better readability
-                details = "\n".join([f"  {row['customer_state']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
-                return f"Distribuição de clientes por estado (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} estados."
-            elif 'product_category_name' in columns:
-                # For categories, also use line-by-line for clarity
-                details = "\n".join([f"  {row['product_category_name']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
-                return f"Distribuição por categoria (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} categorias."
-            elif 'seller_state' in columns:
-                # For seller states, line-by-line format
-                details = "\n".join([f"  {row['seller_state']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
-                return f"Distribuição de vendedores por estado (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} estados."
+        # Build compact messages
+        messages = [
+            {"role": "system", "content": self._system_prompt}
+        ]
         
-        # Handle cases without clear count columns (like frequency analysis)
-        elif 'customer_state' in columns and len(rows) > 1:
-            # Show the data even if no clear count column
-            details = []
-            for row in rows[:20]:  # Show top 20 for readability
-                state = row.get('customer_state', 'N/A')
-                # Try to find any numeric column to show
-                value = None
-                for col, val in row.items():
-                    if col != 'customer_state' and isinstance(val, (int, float)):
-                        value = val
-                        break
-                if value is not None:
-                    details.append(f"  {state}: {_fmt_int_ptbr(_as_int(value))}")
-                else:
-                    details.append(f"  {state}")
-            
-            return f"Distribuição por estado ({len(rows)} estados):\n" + "\n".join(details)
-    
-    # Fallback to original functions based on shape
-    if shape == "count":
-        return _render_count_ptbr(rows, table)
-    elif shape == "timeseries":
-        return _render_timeseries_ptbr(rows, table, scale)
-    else:
-        return _render_preview_ptbr(rows, table, row_count, limit_applied)
-
-
-def _render_count_ptbr(rows: list[Mapping[str, Any]], table: str | None) -> str:
-    if not rows:
-        return "Não foram encontrados dados para sua consulta."
-    
-    # Get the actual count value
-    first_row = rows[0]
-    
-    # Try different possible column names for counts
-    qty = 0
-    count_col = None
-    for col_name, value in first_row.items():
-        if any(keyword in col_name.lower() for keyword in ['count', 'qty', 'total', 'quantidade']):
-            qty = _as_int(value)
-            count_col = col_name
-            break
-    
-    if qty == 0 and len(first_row) == 1:
-        # Fallback: use the first (and likely only) column
-        qty = _as_int(list(first_row.values())[0])
-        count_col = list(first_row.keys())[0]
-    
-    qfmt = _fmt_int_ptbr(qty)
-    
-    # Determine what we're counting based on table name and column name
-    if table and 'order' in table.lower():
-        if qty == 1:
-            return f"Existe {qfmt} pedido no sistema."
-        else:
-            return f"Existem {qfmt} pedidos no sistema."
-    elif table and 'customer' in table.lower():
-        if qty == 1:
-            return f"Existe {qfmt} cliente cadastrado."
-        else:
-            return f"Existem {qfmt} clientes cadastrados."
-    elif table and 'product' in table.lower():
-        if qty == 1:
-            return f"Existe {qfmt} produto no catálogo."
-        else:
-            return f"Existem {qfmt} produtos no catálogo."
-    else:
-        # Generic fallback
-        return f"O resultado da consulta é {qfmt}."
-
-
-def _render_timeseries_ptbr(
-    rows: list[Mapping[str, Any]], table: str | None, scale: str | None
-) -> str:
-    if not rows:
-        alvo = f" na tabela `{table}`" if table else ""
-        return f"Não encontrei dados de série temporal{alvo}."
-    total = sum(_as_int(r.get("qty", 0)) for r in rows)
-    qfmt = _fmt_int_ptbr(total)
-    nper = len(rows)
-    escala = {"month": "mensal", "week": "semanal", "day": "diária", "year": "anual"}.get(
-        scale or "", "temporal"
-    )
-    alvo = f" na tabela `{table}`" if table else ""
-    # Last 3 points, if available
-    tail = rows[-3:]
-    tail_str = ", ".join(
-        f"{_fmt_period_ptbr(r.get('period'))}: {_fmt_int_ptbr(_as_int(r.get('qty', 0)))}"
-        for r in tail
-    )
-    return (
-        f"Série {escala}{alvo}: {qfmt} ocorrências em {nper} períodos. "
-        f"Últimos pontos: {tail_str}."
-    )
-
-
-def _render_preview_ptbr(
-    rows: list[Mapping[str, Any]],
-    table: str | None,
-    row_count: int,
-    limit_applied: bool,
-) -> str:
-    if not rows:
-        return "Não foram encontrados dados para sua consulta."
-    
-    shown = len(rows)
-    first_row = rows[0]
-    
-    # Try to understand what kind of data this is
-    columns = list(first_row.keys())
-    
-    # Check if this looks like an aggregation result
-    if any(col.lower() in ['revenue', 'receita', 'total_sales', 'total_revenue'] for col in columns):
-        # This is revenue/sales data
-        if 'customer_state' in columns or 'state' in columns:
-            return f"Aqui está a receita por estado. Mostrando os {shown} resultados:"
-        elif 'product_id' in columns:
-            return f"Aqui estão os produtos por receita. Mostrando os {shown} resultados:"
-        else:
-            return f"Aqui estão os resultados de receita. Mostrando {shown} registros:"
-    
-    elif any(col.lower() in ['count', 'qty', 'quantidade', 'total'] for col in columns):
-        # This is count/quantity data - show actual data
-        if 'order_status' in columns:
-            # Show status distribution
-            details = []
-            for row in rows[:10]:  # Show top 10
-                status = row.get('order_status', 'N/A')
-                count = _as_int(row.get(next((col for col in columns if 'count' in col.lower()), columns[1]), 0))
-                details.append(f"  {status}: {_fmt_int_ptbr(count)}")
-            return f"Distribuição por status dos pedidos:\n" + "\n".join(details)
-        elif 'period' in columns:
-            return f"Aqui está a evolução ao longo do tempo. Mostrando {shown} períodos:"
-        else:
-            return f"Aqui estão os totais por categoria. Mostrando {shown} resultados:"
-    
-    elif table and 'order' in table.lower():
-        if limit_applied:
-            return f"Aqui estão alguns pedidos encontrados (limitado a {shown} por segurança):"
-        else:
-            return f"Aqui estão os {shown} pedidos encontrados:"
-    
-    elif table and 'customer' in table.lower():
-        if limit_applied:
-            return f"Aqui estão alguns clientes encontrados (limitado a {shown} por segurança):"
-        else:
-            return f"Aqui estão os {shown} clientes encontrados:"
-    
-    else:
-        # Generic fallback
-        if limit_applied:
-            return f"Aqui estão os resultados encontrados (limitado a {shown} por segurança):"
-        else:
-            return f"Aqui estão os {shown} resultados encontrados:"
-
-
-# ---------------------------------------------------------------------------
-# Extractors & formatting helpers
-# ---------------------------------------------------------------------------
-
-
-def _as_plan(obj: Mapping[str, Any] | _PlanView) -> _PlanView:
-    if isinstance(obj, Mapping):
-        return _PlanView(
-            sql=str(obj.get("sql", "")), limit_applied=bool(obj.get("limit_applied", False))
-        )
-    return obj
-
-
-def _as_result(obj: Mapping[str, Any] | _ResultView) -> _ResultView:
-    if isinstance(obj, Mapping):
-        rows_any = list(obj.get("rows", []) or [])
-        rows: list[Mapping[str, Any]] = [cast(Mapping[str, Any], r) for r in rows_any]
-        return _ResultView(
-            rows=rows,
-            row_count=int(obj.get("row_count", len(rows))),
-            exec_ms=float(obj.get("exec_ms", 0.0)),
-            limit_applied=bool(obj.get("limit_applied", False)),
-        )
-    return obj
-
-
-def _coerce_answer(dec: Mapping[str, Any]) -> Any:
-    if ANSWER_CLS is None:
-        return dict(dec)
-    try:
-        if hasattr(ANSWER_CLS, "from_dict"):
-            return ANSWER_CLS.from_dict(dec)
-        if hasattr(ANSWER_CLS, "from_mapping"):
-            return ANSWER_CLS.from_mapping(dec)
-        return ANSWER_CLS(**dec)
-    except Exception:
-        return dict(dec)
-
-
-def _extract_table_from_sql(sql: str) -> str | None:
-    # Supports: FROM table, FROM schema.table, FROM "Schema"."Table", FROM table AS t
-    m = re.search(
-        r"""
-        \bFROM\s+                              # FROM clause
-        (?:                                     # first identifier (schema or table)
-            "([^"]+)"                           # quoted part 1
-            |                                   # or
-            ([a-zA-Z_][\w$]*)                   # unquoted part 1
-        )
-        (?:                                     # optional .second identifier (table)
-            \.
-            (?:
-                "([^"]+)"                       # quoted part 2
-                |
-                ([a-zA-Z_][\w$]*)               # unquoted part 2
+        # Add only 1 most relevant example for efficiency
+        if self._examples:
+            example = self._examples[0]  # Use first example
+            messages.append({
+                "role": "user", 
+                "content": json.dumps(example["input"], ensure_ascii=False)
+            })
+            messages.append({
+                "role": "assistant", 
+                "content": json.dumps(example["output"], ensure_ascii=False)
+            })
+        
+        # Add current query
+        messages.append({
+            "role": "user",
+            "content": json.dumps(input_data, ensure_ascii=False)
+        })
+        
+        # Call LLM with timeout
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=800,
+                temperature=0.1,
+                timeout=10.0  # 10 second timeout
             )
-        )?
-        """,
-        sql,
-        flags=re.IGNORECASE | re.VERBOSE,
+        except Exception as e:
+            # Silently fail for LLM API issues
+            return None
+        
+        # Parse response
+        response_text = response.choices[0].message.content.strip()
+        try:
+            return json.loads(response_text)
+        except json.JSONDecodeError:
+            # Try to extract JSON from response
+            import re
+            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            return None
+    
+    def _fallback_normalize(
+        self, 
+        user_query: str, 
+        plan: _PlanView, 
+        result: _ResultView
+    ) -> dict[str, Any]:
+        """Simple fallback normalization when LLM fails."""
+        
+        # Basic formatting for common cases
+        if result.row_count == 0:
+            text = f"Nenhum resultado encontrado para a consulta: {user_query}"
+        elif result.row_count == 1 and len(result.rows) == 1:
+            # Single row result
+            row = result.rows[0]
+            if len(row) == 1:
+                # Single value
+                value = list(row.values())[0]
+                if isinstance(value, (int, float)):
+                    if value > 1000:
+                        text = f"O resultado é {value:,.0f}."
+                    else:
+                        text = f"O resultado é {value}."
+                else:
+                    text = f"O resultado é {value}."
+            else:
+                # Multiple columns in single row
+                text = f"Resultado encontrado com {len(row)} campos."
+        else:
+            # Multiple rows
+            text = f"Encontrados {result.row_count} registros."
+            
+            # Try to show some data if reasonable size
+            if result.row_count <= 10 and result.rows:
+                text += "\n\nDados:"
+                for i, row in enumerate(result.rows[:5], 1):
+                    # Show first few meaningful values
+                    values = []
+                    for k, v in row.items():
+                        if v is not None:
+                            if isinstance(v, (int, float)) and v > 1000:
+                                values.append(f"{k}: {v:,.0f}")
+                            else:
+                                values.append(f"{k}: {v}")
+                    if values:
+                        text += f"\n  {i}. {', '.join(values[:3])}"
+        
+        return {
+            "text": text,
+            "meta": {
+                "sql": plan.sql,
+                "row_count": result.row_count,
+                "limit_applied": result.limit_applied,
+                "exec_ms": result.exec_ms,
+                "fallback_used": True
+            }
+        }
+
+
+# Helper functions
+def _as_plan(plan: Mapping[str, Any] | _PlanView) -> _PlanView:
+    """Convert plan to _PlanView."""
+    if isinstance(plan, _PlanView):
+        return plan
+    return _PlanView(
+        sql=plan.get("sql", ""),
+        limit_applied=plan.get("limit_applied", False),
     )
-    if not m:
-        return None
-    parts = [g for g in m.groups() if g]
-    # Return last identifier (table name)
-    return parts[-1]
 
 
-def _extract_timescale_from_sql(sql: str) -> str | None:
-    m = re.search(r"date_trunc\('([a-zA-Z]+)'", sql, flags=re.IGNORECASE)
-    return m.group(1).lower() if m else None
+def _as_result(result: Mapping[str, Any] | _ResultView) -> _ResultView:
+    """Convert result to _ResultView."""
+    if isinstance(result, _ResultView):
+        return result
+    return _ResultView(
+        rows=result.get("rows", []),
+        row_count=result.get("row_count", 0),
+        exec_ms=result.get("exec_ms", 0.0),
+        limit_applied=result.get("limit_applied", False),
+    )
 
 
-def _limit_rows(rows: list[Mapping[str, Any]], cap: int) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for r in rows[:cap]:
-        out.append({k: _coerce_primitive(v) for k, v in r.items()})
-    return out
-
-
-def _coerce_primitive(v: Any) -> Any:
-    if isinstance(v, int | float | str) or v is None:
-        return v
-    if isinstance(v, datetime | date):
-        return v.isoformat()
-    # SQLAlchemy Decimal / UUID / others → try best‑effort str
+def _coerce_answer(payload: dict[str, Any]) -> Any:
+    """Convert payload to Answer if available, else return dict."""
     try:
-        return float(v) if hasattr(v, "as_integer_ratio") or isinstance(v, int | float) else str(v)
+        from app.contracts.answer import Answer
+        return Answer.from_dict(payload)
     except Exception:
-        return str(v)
+        return payload
 
-
-def _as_int(x: Any) -> int:
-    try:
-        return int(round(float(x)))
-    except Exception:
-        return 0
-
-
-def _as_float(x: Any) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return 0.0
-
-
-def _fmt_int_ptbr(n: int) -> str:
-    s = f"{n:,}"
-    return s.replace(",", ".")
-
-
-def _fmt_float_ptbr(x: float, digits: int = 2) -> str:
-    if math.isnan(x) or math.isinf(x):
-        return str(x)
-    s = f"{x:,.{digits}f}"
-    return s.replace(",", "_").replace(".", ",").replace("_", ".")
-
-
-def _fmt_period_ptbr(v: Any) -> str:
-    if isinstance(v, datetime | date):
-        return v.strftime("%Y-%m-%d")
-    if isinstance(v, str):
-        # try to shorten YYYY-MM-DDTHH:MM:SS
-        m = re.match(r"(\d{4}-\d{2}-\d{2})", v)
-        if m:
-            return m.group(1)
-        return v
-    return str(v)
-
-
-def _suggest_followups(shape: str, table: str | None) -> list[str]:
-    if shape == "count":
-        base = f"{table} " if table else ""
-        return [
-            f"Quer ver a evolução mensal de {base}?",
-            f"Deseja detalhar por status em {base}?",
-        ]
-    if shape == "timeseries":
-        base = f"{table} " if table else ""
-        return [
-            f"Filtrar a série por status ou categoria em {base}?",
-            f"Comparar períodos (YoY/MoM) em {base}?",
-        ]
-    if shape == "distribution":
-        return [
-            "Quer ver apenas os top 5?",
-            "Deseja filtrar por período específico?",
-            "Que tal cruzar com dados de vendas?",
-        ]
-    # preview
-    base = f"{table} " if table else ""
-    return [
-        f"Adicionar filtros (ex.: data, status) em {base}?",
-        f"Agregarmos por mês ou por vendedor em {base}?",
-    ]
