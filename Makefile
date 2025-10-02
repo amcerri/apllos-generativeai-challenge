@@ -103,6 +103,7 @@ help: ## Show this help message
 	@echo "                    make query QUERY=\"quantos pedidos temos?\""
 	@echo "                    make query ATTACHMENT=\"data/samples/order.txt\""
 	@echo "                    make query QUERY=\"analise este pedido\" ATTACHMENT=\"data/samples/order.txt\""
+	@echo "  batch-query   - Process multiple queries from YAML file (INPUT='queries.yaml' [OUTPUT='results.md'])"
 	@echo ""
 	@echo "UTILITIES:"
 	@echo "  install-deps  - Install/update Python dependencies from pyproject.toml"
@@ -437,6 +438,12 @@ query: ## Test query (usage: make query QUERY="your question" [ATTACHMENT="path/
 		echo "Testing attachment: $(ATTACHMENT)"; \
 		$(PY) scripts/query_assistant.py --attachment "$(ATTACHMENT)"; \
 	fi
+
+.PHONY: batch-query
+batch-query: ## Process multiple queries from YAML file (INPUT="queries.yaml" [OUTPUT="results.md"])
+	@if [ -z "$(INPUT)" ]; then echo "Error: INPUT parameter required. Usage: make batch-query INPUT=queries.yaml [OUTPUT=results.md]"; exit 1; fi
+	@echo "Processing batch queries from $(INPUT)..."
+	@$(PY) scripts/batch_query.py --input "$(INPUT)" $(if $(OUTPUT),--output "$(OUTPUT)")
 
 # =============================================================================
 # Utilities

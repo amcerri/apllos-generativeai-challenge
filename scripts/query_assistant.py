@@ -141,6 +141,19 @@ class QueryAssistant:
                 title = citation.get('title', 'No title')
                 print(f"  {i}. {title}")
         
+        # Show chunks if available
+        chunks = answer.get('chunks', [])
+        if chunks:
+            print(f"\nDocument Chunks ({len(chunks)}):")
+            for i, chunk in enumerate(chunks, 1):
+                title = chunk.get('title', f'Chunk {i}')
+                content = chunk.get('content', 'No content')
+                # Truncate for console display
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                print(f"  {i}. {title}")
+                print(f"     {content}")
+                print()
         
         # Show metadata
         if meta:

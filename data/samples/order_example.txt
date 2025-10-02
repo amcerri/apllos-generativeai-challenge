@@ -1,0 +1,46 @@
+PEDIDO DE COMPRA #12345
+=======================
+
+Data: 15/10/2024
+Cliente: João Silva
+Email: joao.silva@email.com
+Telefone: (11) 99999-9999
+
+ENDEREÇO DE ENTREGA:
+Rua das Flores, 123
+Bairro Jardim
+São Paulo - SP
+CEP: 01234-567
+
+ITENS DO PEDIDO:
+================
+
+1. Smartphone Samsung Galaxy A54
+   Quantidade: 1
+   Valor unitário: R$ 1.299,00
+   Subtotal: R$ 1.299,00
+
+2. Capinha Transparente
+   Quantidade: 1
+   Valor unitário: R$ 29,90
+   Subtotal: R$ 29,90
+
+3. Película de Vidro
+   Quantidade: 1
+   Valor unitário: R$ 19,90
+   Subtotal: R$ 19,90
+
+RESUMO DO PEDIDO:
+================
+Subtotal: R$ 1.348,80
+Frete: R$ 15,90
+Desconto: R$ 50,00
+TOTAL: R$ 1.314,70
+
+FORMA DE PAGAMENTO:
+==================
+Cartão de Crédito Visa
+Final: ****1234
+Parcelas: 3x de R$ 438,23
+
+STATUS: Aguardando Confirmação de Pagamento

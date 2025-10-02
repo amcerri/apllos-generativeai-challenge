@@ -26,6 +26,14 @@ Hard constraints (non‑negotiable)
 9) **No subqueries unless needed.** Prefer straightforward projections/aggregations.
 10) **Time zones.** Treat timestamps as UTC; use `date_trunc('month', ts)`/`date_trunc('day', ts)` for buckets.
 
+Schema relationships (critical for JOINs)
+- **orders** table contains: order_id (PK), customer_id, order_status, timestamps (purchase, approved, delivered)
+- **order_items** table contains: order_id, product_id, seller_id, price, freight_value
+- **customers** table contains: customer_id (PK), customer_state, customer_city
+- **sellers** table contains: seller_id (PK), seller_state, seller_city
+- **products** table contains: product_id (PK), product_category_name
+- **IMPORTANT**: seller_id is in order_items, NOT in orders. To get seller info, JOIN orders → order_items → sellers
+
 Heuristics & patterns
 - **Top‑N**: ONLY when user explicitly asks for "top 5", "primeiro", "maior", etc., use `ORDER BY <metric> DESC LIMIT N`.
 - **Status distributions**: For "most common status", "status breakdown", use `GROUP BY status ORDER BY count DESC` WITHOUT LIMIT.
@@ -33,6 +41,7 @@ Heuristics & patterns
 - **Rates/percentages**: use `100.0 * num / NULLIF(den, 0)` and round appropriately.
 - **Distinct counts**: use `COUNT(DISTINCT col)` only when explicitly implied.
 - **Filters**: convert friendly terms to filters (e.g., statuses) only if the column exists in the allowlist; otherwise warn.
+- **Seller queries**: Always JOIN through order_items to access seller_id (orders → order_items → sellers).
 - **Ambiguity**: when multiple tables could satisfy a request, prefer the one whose columns best match the requested fields; note the ambiguity in warnings.
 
 Failure/guard behavior

@@ -208,17 +208,40 @@ def _render_intelligent_response(
     first_row = rows[0]
     columns = list(first_row.keys())
     
-    # Detect revenue/financial queries
-    if any(keyword in sql_lower for keyword in ['sum(', 'price', 'freight_value', 'payment_value']):
+    # Detect correlation/analysis queries (freight vs cancellation, etc.)
+    if any(keyword in sql_lower for keyword in ['avg(', 'correlation', 'cancellation']) and 'customer_state' in columns:
+        if 'avg_freight_value' in columns and 'cancellation_rate' in columns:
+            avg_freight = _as_float(first_row.get('avg_freight_value', 0))
+            cancel_rate = _as_float(first_row.get('cancellation_rate', 0))
+            return f"Análise por região: {len(rows)} estados analisados. Frete médio: R$ {_fmt_float_ptbr(avg_freight)}, Taxa de cancelamento média: {_fmt_float_ptbr(cancel_rate)}%."
+    
+    # Detect revenue/financial queries (only for actual revenue calculations)
+    if 'sum(' in sql_lower and any(col in columns for col in ['total_revenue', 'receita', 'revenue']):
         if 'customer_state' in columns:
-            total_revenue = sum(_as_float(row.get('receita', 0)) for row in rows)
-            top_state = rows[0].get('customer_state', 'N/A')
-            top_revenue = _as_float(rows[0].get('receita', 0))
-            return f"A receita total é R$ {_fmt_float_ptbr(total_revenue)}. O estado com maior receita é {top_state} (R$ {_fmt_float_ptbr(top_revenue)})."
+            # Find the revenue column
+            revenue_col = None
+            for col in columns:
+                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
+                    revenue_col = col
+                    break
+            
+            if revenue_col:
+                total_revenue = sum(_as_float(row.get(revenue_col, 0)) for row in rows)
+                top_state = rows[0].get('customer_state', 'N/A')
+                top_revenue = _as_float(rows[0].get(revenue_col, 0))
+                return f"A receita total é R$ {_fmt_float_ptbr(total_revenue)}. O estado com maior receita é {top_state} (R$ {_fmt_float_ptbr(top_revenue)})."
         
-        elif len(rows) == 1 and any(col in columns for col in ['total_revenue', 'receita']):
-            revenue = _as_float(list(first_row.values())[0])
-            return f"A receita total é R$ {_fmt_float_ptbr(revenue)}."
+        elif len(rows) == 1:
+            # Find the revenue column
+            revenue_col = None
+            for col in columns:
+                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
+                    revenue_col = col
+                    break
+            
+            if revenue_col:
+                revenue = _as_float(first_row.get(revenue_col, 0))
+                return f"A receita total é R$ {_fmt_float_ptbr(revenue)}."
     
     # Detect filtered order queries (e.g., undelivered orders)
     if 'order_id' in columns and any(keyword in sql_lower for keyword in ['where', '<>', '!=', 'not']):
@@ -263,8 +286,21 @@ def _render_intelligent_response(
     if 'limit' in sql_lower and any(keyword in sql_lower for keyword in ['order by', 'desc']):
         if 'product_id' in columns:
             top_product = rows[0].get('product_id', 'N/A')
-            sales = _as_float(rows[0].get('total_sales', 0))
-            return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
+            # Find the value column (could be total_sales, contribution_margin, etc.)
+            value_col = None
+            for col in columns:
+                if col != 'product_id' and any(keyword in col.lower() for keyword in ['sales', 'contribution', 'margin', 'revenue', 'total']):
+                    value_col = col
+                    break
+            
+            if value_col:
+                sales = _as_float(rows[0].get(value_col, 0))
+                return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
+            else:
+                # Fallback: use the second column (first is usually product_id)
+                if len(columns) > 1:
+                    sales = _as_float(rows[0].get(columns[1], 0))
+                    return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
     
     # Detect time series
     if 'period' in columns:
@@ -274,10 +310,10 @@ def _render_intelligent_response(
     
     # Detect distribution/grouping queries (customer_state, product_category, etc.)
     if any(col in columns for col in ['customer_state', 'product_category_name', 'seller_state']):
-        # Find the count column
+        # Find the count/frequency column
         count_col = None
         for col in columns:
-            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total']):
+            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total', 'frequency']):
                 count_col = col
                 break
         
@@ -301,6 +337,25 @@ def _render_intelligent_response(
                 # For seller states, line-by-line format
                 details = "\n".join([f"  {row['seller_state']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
                 return f"Distribuição de vendedores por estado (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} estados."
+        
+        # Handle cases without clear count columns (like frequency analysis)
+        elif 'customer_state' in columns and len(rows) > 1:
+            # Show the data even if no clear count column
+            details = []
+            for row in rows[:20]:  # Show top 20 for readability
+                state = row.get('customer_state', 'N/A')
+                # Try to find any numeric column to show
+                value = None
+                for col, val in row.items():
+                    if col != 'customer_state' and isinstance(val, (int, float)):
+                        value = val
+                        break
+                if value is not None:
+                    details.append(f"  {state}: {_fmt_int_ptbr(_as_int(value))}")
+                else:
+                    details.append(f"  {state}")
+            
+            return f"Distribuição por estado ({len(rows)} estados):\n" + "\n".join(details)
     
     # Fallback to original functions based on shape
     if shape == "count":
@@ -406,9 +461,15 @@ def _render_preview_ptbr(
             return f"Aqui estão os resultados de receita. Mostrando {shown} registros:"
     
     elif any(col.lower() in ['count', 'qty', 'quantidade', 'total'] for col in columns):
-        # This is count/quantity data
+        # This is count/quantity data - show actual data
         if 'order_status' in columns:
-            return f"Aqui está a distribuição por status dos pedidos. Mostrando {shown} categorias:"
+            # Show status distribution
+            details = []
+            for row in rows[:10]:  # Show top 10
+                status = row.get('order_status', 'N/A')
+                count = _as_int(row.get(next((col for col in columns if 'count' in col.lower()), columns[1]), 0))
+                details.append(f"  {status}: {_fmt_int_ptbr(count)}")
+            return f"Distribuição por status dos pedidos:\n" + "\n".join(details)
         elif 'period' in columns:
             return f"Aqui está a evolução ao longo do tempo. Mostrando {shown} períodos:"
         else:

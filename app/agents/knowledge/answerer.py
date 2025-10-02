@@ -134,17 +134,20 @@ class KnowledgeAnswerer:
                 return _coerce_answer(payload)
 
             citations = _make_citations(hits[:max_cit])
+            chunks = _make_chunks(hits[:max_cit])  # Add chunks to payload
             text = _compose_summary_ptbr(query, hits, cap_chars)
 
             meta = {
                 "citations_count": len(citations),
                 "hits_considered": min(len(hits), max_cit),
+                "chunks_count": len(chunks),
             }
             followups = _suggest_followups(query)
 
             payload = {
                 "text": text,
                 "citations": citations,
+                "chunks": chunks,  # Include chunks in payload
                 "meta": meta,
                 "followups": followups,
             }
@@ -300,6 +303,22 @@ def _make_citations(hits: Sequence[_HitView]) -> list[dict[str, Any]]:
             item["doc_id"] = h.doc_id
         cites.append(item)
     return cites
+
+
+def _make_chunks(hits: Sequence[_HitView]) -> list[dict[str, Any]]:
+    """Create chunks payload with full text content for each hit."""
+    chunks: list[dict[str, Any]] = []
+    for i, h in enumerate(hits, 1):
+        chunk = {
+            "id": f"chunk_{i}",
+            "title": h.title or f"Documento {i}",
+            "doc_id": h.doc_id,
+            "chunk_id": h.chunk_id,
+            "content": h.text.strip(),
+            "source": h.source,
+        }
+        chunks.append(chunk)
+    return chunks
 
 
 # ---------------------------------------------------------------------------
