@@ -62,6 +62,22 @@ ANSWER_JSON_SCHEMA: dict[str, Any] = {
                 ],
             },
         },
+        "chunks": {
+            "type": ["array", "null"],
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "doc_id": {"type": "string"},
+                    "chunk_id": {"type": "string"},
+                    "content": {"type": "string"},
+                    "source": {"type": ["string", "null"]},
+                },
+                "required": ["id", "title", "doc_id", "chunk_id", "content"],
+            },
+        },
         "meta": {"type": ["object", "null"]},
         "no_context": {"type": ["boolean", "null"]},
         "artifacts": {"type": ["object", "null"]},
@@ -181,6 +197,7 @@ class Answer:
         data: optional table rows (list of rows); used by analytics agent.
         columns: optional list of column names; required when `data` is provided.
         citations: optional list of `Citation`; required by knowledge agent when RAG is used.
+        chunks: optional list of document chunks with full content; used by knowledge agent.
         meta: free-form metadata (e.g., sql, row_count, timings, limit_applied).
         no_context: for knowledge agent; true when retrieval was weak/empty.
         artifacts: arbitrary structured artifacts (e.g., email draft).
@@ -191,6 +208,7 @@ class Answer:
     data: list[list[Any]] | None = None
     columns: list[str] | None = None
     citations: list[Citation] | None = None
+    chunks: list[dict[str, Any]] | None = None
     meta: dict[str, Any] | None = None
     no_context: bool | None = None
     artifacts: dict[str, Any] | None = None
@@ -243,6 +261,7 @@ class Answer:
             "text": self.text,
             "data": self.data,
             "columns": self.columns,
+            "chunks": self.chunks,
             "meta": self.meta,
             "no_context": self.no_context,
             "artifacts": self.artifacts,
@@ -264,6 +283,7 @@ class Answer:
         rows = data.get("data")
         columns = data.get("columns")
         citations_in = data.get("citations")
+        chunks_in = data.get("chunks")
 
         citations_parsed: list[Citation] | None = None
         if citations_in is not None:
@@ -278,6 +298,12 @@ class Answer:
                 else:
                     raise ValueError("citations must be Citation or mapping")
             citations_parsed = tmp
+
+        chunks_parsed: list[dict[str, Any]] | None = None
+        if chunks_in is not None:
+            if not isinstance(chunks_in, Iterable):
+                raise ValueError("chunks must be a list-like of objects")
+            chunks_parsed = [dict(chunk) if isinstance(chunk, Mapping) else chunk for chunk in chunks_in]
 
         # Normalize rows into a list of lists if an iterable is provided
         rows_out: list[list[Any]] | None = None
@@ -313,6 +339,7 @@ class Answer:
             data=rows_out,
             columns=cols_out,
             citations=citations_parsed,
+            chunks=chunks_parsed,
             meta=meta_dict,
             no_context=no_context_val,
             artifacts=artifacts_dict,

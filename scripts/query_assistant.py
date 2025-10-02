@@ -123,27 +123,41 @@ class QueryAssistant:
         router_decision = values.get("router_decision", {})
         agent = values.get("agent", "unknown")
         
-        print(f"\n🎯 Agente: {agent}")
+        print(f"\nAgent: {agent}")
         if router_decision:
-            print(f"📊 Confiança: {router_decision.get('confidence', 'N/A')}")
-            print(f"💭 Razão: {router_decision.get('reason', 'N/A')}")
+            print(f"Confidence: {router_decision.get('confidence', 'N/A')}")
+            print(f"Reason: {router_decision.get('reason', 'N/A')}")
         
-        # Mostrar resposta
-        print(f"\n💬 Resposta:")
+        # Show response
+        print(f"\nResponse:")
         print("=" * 60)
         print(text)
         print("=" * 60)
         
-        # Mostrar citações se houver
+        # Show citations if available
         if citations:
-            print(f"\n📚 Citações ({len(citations)}):")
+            print(f"\nCitations ({len(citations)}):")
             for i, citation in enumerate(citations, 1):
-                title = citation.get('title', 'Sem título')
+                title = citation.get('title', 'No title')
                 print(f"  {i}. {title}")
         
-        # Mostrar metadados
+        # Show chunks if available
+        chunks = answer.get('chunks', [])
+        if chunks:
+            print(f"\nDocument Chunks ({len(chunks)}):")
+            for i, chunk in enumerate(chunks, 1):
+                title = chunk.get('title', f'Chunk {i}')
+                content = chunk.get('content', 'No content')
+                # Truncate for console display
+                if len(content) > 200:
+                    content = content[:200] + "..."
+                print(f"  {i}. {title}")
+                print(f"     {content}")
+                print()
+        
+        # Show metadata
         if meta:
-            print(f"\n📈 Metadados:")
+            print(f"\nMetadata:")
             for key, value in meta.items():
                 print(f"  {key}: {value}")
         
@@ -205,12 +219,12 @@ Exemplos:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{args.base_url}/ok")
             if response.status_code != 200:
-                print(f"❌ Servidor não está respondendo em {args.base_url}")
+                print(f"Server not responding at {args.base_url}")
                 sys.exit(1)
     except Exception as e:
-        print(f"❌ Erro ao conectar com o servidor: {e}")
-        print(f"💡 Certifique-se de que o LangGraph Studio está rodando:")
-        print(f"   make studio-run")
+        print(f"Error connecting to server: {e}")
+        print(f"Make sure LangGraph Studio is running:")
+        print(f"   make studio-up")
         sys.exit(1)
     
     # Executar consulta

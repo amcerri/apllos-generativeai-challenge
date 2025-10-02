@@ -44,6 +44,7 @@ _ALLOWED_KEYS: Final[tuple[str, ...]] = (
     "tables",
     "columns",
     "signals",
+    "thread_id",
 )
 
 __all__: Final[list[str]] = ["AgentName", "RouterDecision", "ROUTER_DECISION_JSON_SCHEMA"]

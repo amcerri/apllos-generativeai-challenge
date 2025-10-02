@@ -134,14 +134,14 @@ class AnalyticsNormalizer:
             table = _extract_table_from_sql(p.sql)
             scale = _extract_timescale_from_sql(p.sql)
 
+            # Enhanced context-aware rendering
+            text = _render_intelligent_response(rows_raw, p.sql, table, shape, scale, r.row_count, p.limit_applied)
+            
             if shape == "count":
-                text = _render_count_ptbr(rows_raw, table)
                 data, cols = None, None
             elif shape == "timeseries":
-                text = _render_timeseries_ptbr(rows_raw, table, scale)
                 data, cols = _limit_rows(rows_raw, self.MAX_PREVIEW_ROWS), columns
             else:  # preview
-                text = _render_preview_ptbr(rows_raw, table, r.row_count, p.limit_applied)
                 data, cols = _limit_rows(rows_raw, self.MAX_PREVIEW_ROWS), columns
 
             meta = {
@@ -182,14 +182,232 @@ def _infer_shape(columns: list[str]) -> str:
         return "count"
     if {"period", "qty"}.issubset(cols):
         return "timeseries"
+    # Check for distribution patterns (grouping column + count column)
+    if any(col in columns for col in ['customer_state', 'product_category_name', 'seller_state']):
+        if any(keyword in col.lower() for col in columns for keyword in ['count', 'qty', 'total']):
+            return "distribution"
     return "preview"
 
 
+def _render_intelligent_response(
+    rows: list[Mapping[str, Any]], 
+    sql: str, 
+    table: str | None, 
+    shape: str, 
+    scale: str | None, 
+    row_count: int, 
+    limit_applied: bool,
+    user_query: str = ""
+) -> str:
+    """Generate intelligent, context-aware response based on SQL and data."""
+    
+    if not rows:
+        return "Não foram encontrados dados para sua consulta."
+    
+    sql_lower = sql.lower()
+    first_row = rows[0]
+    columns = list(first_row.keys())
+    
+    # Detect correlation/analysis queries (freight vs cancellation, etc.)
+    if any(keyword in sql_lower for keyword in ['avg(', 'correlation', 'cancellation']) and 'customer_state' in columns:
+        if 'avg_freight_value' in columns and 'cancellation_rate' in columns:
+            avg_freight = _as_float(first_row.get('avg_freight_value', 0))
+            cancel_rate = _as_float(first_row.get('cancellation_rate', 0))
+            return f"Análise por região: {len(rows)} estados analisados. Frete médio: R$ {_fmt_float_ptbr(avg_freight)}, Taxa de cancelamento média: {_fmt_float_ptbr(cancel_rate)}%."
+    
+    # Detect revenue/financial queries (only for actual revenue calculations)
+    if 'sum(' in sql_lower and any(col in columns for col in ['total_revenue', 'receita', 'revenue']):
+        if 'customer_state' in columns:
+            # Find the revenue column
+            revenue_col = None
+            for col in columns:
+                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
+                    revenue_col = col
+                    break
+            
+            if revenue_col:
+                total_revenue = sum(_as_float(row.get(revenue_col, 0)) for row in rows)
+                top_state = rows[0].get('customer_state', 'N/A')
+                top_revenue = _as_float(rows[0].get(revenue_col, 0))
+                return f"A receita total é R$ {_fmt_float_ptbr(total_revenue)}. O estado com maior receita é {top_state} (R$ {_fmt_float_ptbr(top_revenue)})."
+        
+        elif len(rows) == 1:
+            # Find the revenue column
+            revenue_col = None
+            for col in columns:
+                if any(keyword in col.lower() for keyword in ['revenue', 'receita', 'total']):
+                    revenue_col = col
+                    break
+            
+            if revenue_col:
+                revenue = _as_float(first_row.get(revenue_col, 0))
+                return f"A receita total é R$ {_fmt_float_ptbr(revenue)}."
+    
+    # Detect filtered order queries (e.g., undelivered orders)
+    if 'order_id' in columns and any(keyword in sql_lower for keyword in ['where', '<>', '!=', 'not']):
+        if 'delivered' in sql_lower:
+            if row_count == 0:
+                return "Todos os pedidos já foram entregues."
+            else:
+                return f"Encontrei {_fmt_int_ptbr(row_count)} pedidos que ainda não foram entregues."
+        elif any(status in sql_lower for status in ['shipped', 'processing', 'cancelled']):
+            return f"Encontrei {_fmt_int_ptbr(row_count)} pedidos com esse status."
+    
+    # Detect status distribution queries (check this BEFORE general count queries)
+    if 'order_status' in columns:
+        # Find the count column (could be 'count', 'qty', 'total', 'status_count', etc.)
+        count_col = None
+        for col in columns:
+            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total']):
+                count_col = col
+                break
+        
+        if count_col:
+            total_orders = sum(_as_int(row.get(count_col, 0)) for row in rows)
+            most_common = max(rows, key=lambda r: _as_int(r.get(count_col, 0)))
+            status = most_common.get('order_status', 'N/A')
+            count = _as_int(most_common.get(count_col, 0))
+            return f"Dos {_fmt_int_ptbr(total_orders)} pedidos, o status mais comum é '{status}' com {_fmt_int_ptbr(count)} pedidos."
+    
+    # Detect count queries
+    if 'count(' in sql_lower or any(col.lower() in ['count', 'qty', 'total_orders'] for col in columns):
+        if len(rows) == 1:
+            count_val = _as_int(list(first_row.values())[0])
+            if 'order' in sql_lower:
+                return f"Existem {_fmt_int_ptbr(count_val)} pedidos no total."
+            elif 'customer' in sql_lower:
+                return f"Existem {_fmt_int_ptbr(count_val)} clientes únicos."
+            elif 'product' in sql_lower:
+                return f"Existem {_fmt_int_ptbr(count_val)} produtos no catálogo."
+            else:
+                return f"O total é {_fmt_int_ptbr(count_val)}."
+    
+    # Detect top-N queries
+    if 'limit' in sql_lower and any(keyword in sql_lower for keyword in ['order by', 'desc']):
+        if 'product_id' in columns:
+            top_product = rows[0].get('product_id', 'N/A')
+            # Find the value column (could be total_sales, contribution_margin, etc.)
+            value_col = None
+            for col in columns:
+                if col != 'product_id' and any(keyword in col.lower() for keyword in ['sales', 'contribution', 'margin', 'revenue', 'total']):
+                    value_col = col
+                    break
+            
+            if value_col:
+                sales = _as_float(rows[0].get(value_col, 0))
+                return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
+            else:
+                # Fallback: use the second column (first is usually product_id)
+                if len(columns) > 1:
+                    sales = _as_float(rows[0].get(columns[1], 0))
+                    return f"O produto mais vendido é {top_product} com R$ {_fmt_float_ptbr(sales)} em vendas. Mostrando os {len(rows)} principais produtos."
+    
+    # Detect time series
+    if 'period' in columns:
+        total = sum(_as_int(row.get('qty', row.get('total_orders', 0))) for row in rows)
+        periods = len(rows)
+        return f"Análise temporal: {_fmt_int_ptbr(total)} pedidos distribuídos em {periods} períodos."
+    
+    # Detect distribution/grouping queries (customer_state, product_category, etc.)
+    if any(col in columns for col in ['customer_state', 'product_category_name', 'seller_state']):
+        # Find the count/frequency column
+        count_col = None
+        for col in columns:
+            if any(keyword in col.lower() for keyword in ['count', 'qty', 'total', 'frequency']):
+                count_col = col
+                break
+        
+        if count_col and len(rows) > 1:
+            total = sum(_as_int(row.get(count_col, 0)) for row in rows)
+            
+            # Show all results by default - no artificial limitations
+            show_rows = rows
+            suffix = f"Total: {len(rows)}"
+            
+            # Build response with user-friendly formatting
+            if 'customer_state' in columns:
+                # For states, use line-by-line format for better readability
+                details = "\n".join([f"  {row['customer_state']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
+                return f"Distribuição de clientes por estado (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} estados."
+            elif 'product_category_name' in columns:
+                # For categories, also use line-by-line for clarity
+                details = "\n".join([f"  {row['product_category_name']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
+                return f"Distribuição por categoria (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} categorias."
+            elif 'seller_state' in columns:
+                # For seller states, line-by-line format
+                details = "\n".join([f"  {row['seller_state']}: {_fmt_int_ptbr(_as_int(row.get(count_col, 0)))}" for row in show_rows])
+                return f"Distribuição de vendedores por estado (total: {_fmt_int_ptbr(total)}):\n{details}\n\n{suffix} estados."
+        
+        # Handle cases without clear count columns (like frequency analysis)
+        elif 'customer_state' in columns and len(rows) > 1:
+            # Show the data even if no clear count column
+            details = []
+            for row in rows[:20]:  # Show top 20 for readability
+                state = row.get('customer_state', 'N/A')
+                # Try to find any numeric column to show
+                value = None
+                for col, val in row.items():
+                    if col != 'customer_state' and isinstance(val, (int, float)):
+                        value = val
+                        break
+                if value is not None:
+                    details.append(f"  {state}: {_fmt_int_ptbr(_as_int(value))}")
+                else:
+                    details.append(f"  {state}")
+            
+            return f"Distribuição por estado ({len(rows)} estados):\n" + "\n".join(details)
+    
+    # Fallback to original functions based on shape
+    if shape == "count":
+        return _render_count_ptbr(rows, table)
+    elif shape == "timeseries":
+        return _render_timeseries_ptbr(rows, table, scale)
+    else:
+        return _render_preview_ptbr(rows, table, row_count, limit_applied)
+
+
 def _render_count_ptbr(rows: list[Mapping[str, Any]], table: str | None) -> str:
-    qty = _as_int(rows[0].get("qty")) if rows else 0
+    if not rows:
+        return "Não foram encontrados dados para sua consulta."
+    
+    # Get the actual count value
+    first_row = rows[0]
+    
+    # Try different possible column names for counts
+    qty = 0
+    count_col = None
+    for col_name, value in first_row.items():
+        if any(keyword in col_name.lower() for keyword in ['count', 'qty', 'total', 'quantidade']):
+            qty = _as_int(value)
+            count_col = col_name
+            break
+    
+    if qty == 0 and len(first_row) == 1:
+        # Fallback: use the first (and likely only) column
+        qty = _as_int(list(first_row.values())[0])
+        count_col = list(first_row.keys())[0]
+    
     qfmt = _fmt_int_ptbr(qty)
-    alvo = f" na tabela `{table}`" if table else ""
-    return f"Encontrei {qfmt} registros{alvo}."
+    
+    # Determine what we're counting based on table name and column name
+    if table and 'order' in table.lower():
+        if qty == 1:
+            return f"Existe {qfmt} pedido no sistema."
+        else:
+            return f"Existem {qfmt} pedidos no sistema."
+    elif table and 'customer' in table.lower():
+        if qty == 1:
+            return f"Existe {qfmt} cliente cadastrado."
+        else:
+            return f"Existem {qfmt} clientes cadastrados."
+    elif table and 'product' in table.lower():
+        if qty == 1:
+            return f"Existe {qfmt} produto no catálogo."
+        else:
+            return f"Existem {qfmt} produtos no catálogo."
+    else:
+        # Generic fallback
+        return f"O resultado da consulta é {qfmt}."
 
 
 def _render_timeseries_ptbr(
@@ -224,13 +442,57 @@ def _render_preview_ptbr(
     limit_applied: bool,
 ) -> str:
     if not rows:
-        alvo = f" na tabela `{table}`" if table else ""
-        return f"Não há linhas para exibir{alvo}."
+        return "Não foram encontrados dados para sua consulta."
+    
     shown = len(rows)
-    alvo = f" da tabela `{table}`" if table else ""
-    if limit_applied:
-        return f"Mostrando {shown} linhas{alvo} (cap de segurança). Refine o filtro para mais detalhes."
-    return f"Mostrando {shown} linhas{alvo}."
+    first_row = rows[0]
+    
+    # Try to understand what kind of data this is
+    columns = list(first_row.keys())
+    
+    # Check if this looks like an aggregation result
+    if any(col.lower() in ['revenue', 'receita', 'total_sales', 'total_revenue'] for col in columns):
+        # This is revenue/sales data
+        if 'customer_state' in columns or 'state' in columns:
+            return f"Aqui está a receita por estado. Mostrando os {shown} resultados:"
+        elif 'product_id' in columns:
+            return f"Aqui estão os produtos por receita. Mostrando os {shown} resultados:"
+        else:
+            return f"Aqui estão os resultados de receita. Mostrando {shown} registros:"
+    
+    elif any(col.lower() in ['count', 'qty', 'quantidade', 'total'] for col in columns):
+        # This is count/quantity data - show actual data
+        if 'order_status' in columns:
+            # Show status distribution
+            details = []
+            for row in rows[:10]:  # Show top 10
+                status = row.get('order_status', 'N/A')
+                count = _as_int(row.get(next((col for col in columns if 'count' in col.lower()), columns[1]), 0))
+                details.append(f"  {status}: {_fmt_int_ptbr(count)}")
+            return f"Distribuição por status dos pedidos:\n" + "\n".join(details)
+        elif 'period' in columns:
+            return f"Aqui está a evolução ao longo do tempo. Mostrando {shown} períodos:"
+        else:
+            return f"Aqui estão os totais por categoria. Mostrando {shown} resultados:"
+    
+    elif table and 'order' in table.lower():
+        if limit_applied:
+            return f"Aqui estão alguns pedidos encontrados (limitado a {shown} por segurança):"
+        else:
+            return f"Aqui estão os {shown} pedidos encontrados:"
+    
+    elif table and 'customer' in table.lower():
+        if limit_applied:
+            return f"Aqui estão alguns clientes encontrados (limitado a {shown} por segurança):"
+        else:
+            return f"Aqui estão os {shown} clientes encontrados:"
+    
+    else:
+        # Generic fallback
+        if limit_applied:
+            return f"Aqui estão os resultados encontrados (limitado a {shown} por segurança):"
+        else:
+            return f"Aqui estão os {shown} resultados encontrados:"
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +594,13 @@ def _as_int(x: Any) -> int:
         return 0
 
 
+def _as_float(x: Any) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
+
+
 def _fmt_int_ptbr(n: int) -> str:
     s = f"{n:,}"
     return s.replace(",", ".")
@@ -368,6 +637,12 @@ def _suggest_followups(shape: str, table: str | None) -> list[str]:
         return [
             f"Filtrar a série por status ou categoria em {base}?",
             f"Comparar períodos (YoY/MoM) em {base}?",
+        ]
+    if shape == "distribution":
+        return [
+            "Quer ver apenas os top 5?",
+            "Deseja filtrar por período específico?",
+            "Que tal cruzar com dados de vendas?",
         ]
     # preview
     base = f"{table} " if table else ""

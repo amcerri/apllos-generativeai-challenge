@@ -38,10 +38,13 @@ True
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Final
+from pathlib import Path
+from typing import Any, Final, Protocol, runtime_checkable
 
 start_span: Any
 
@@ -104,6 +107,72 @@ class PlannerPlan:
 
 
 # ---------------------------------------------------------------------------
+# LLM Backend (optional)
+# ---------------------------------------------------------------------------
+@runtime_checkable
+class JSONLLMBackend(Protocol):
+    """Protocol for backends that generate JSON matching a provided schema."""
+
+    def generate_json(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int | None = None,
+    ) -> Mapping[str, Any]: ...
+
+
+class OpenAIJSONBackend:
+    """OpenAI backend using strict JSON Schema response formatting."""
+
+    def __init__(self, *, model: str = "gpt-4o-mini") -> None:
+        try:
+            from openai import OpenAI
+        except Exception as exc:  # pragma: no cover - optional path
+            raise RuntimeError("openai SDK not available") from exc
+        self._client = OpenAI()
+        self._default_model = model
+
+    def generate_json(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int | None = None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON response using OpenAI's structured outputs."""
+        response = self._client.chat.completions.create(
+            model=model or self._default_model,
+            messages=[
+                {"role": "system", "content": system},
+                *messages,
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "analytics_plan",
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            },
+            temperature=temperature,
+            max_completion_tokens=max_output_tokens,
+        )
+        
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("Empty response from OpenAI")
+        
+        return json.loads(content)
+
+
+# ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
 class AnalyticsPlanner:
@@ -116,9 +185,31 @@ class AnalyticsPlanner:
 
     DEFAULT_PREVIEW_LIMIT: Final[int] = 200
     MAX_SAFE_LIMIT: Final[int] = 5000
+    
+    # JSON Schema for LLM structured outputs
+    PLAN_SCHEMA: Final[dict[str, Any]] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "sql": {"type": "string", "minLength": 1},
+            "params": {"type": "object", "additionalProperties": False, "properties": {}},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 220},
+            "limit_applied": {"type": "boolean"},
+            "warnings": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["sql", "params", "reason", "limit_applied", "warnings"],
+    }
 
     def __init__(self) -> None:
         self.log = get_logger("agent.analytics.planner")
+        
+        # Try to initialize LLM backend
+        self._llm_backend = None
+        try:
+            self._llm_backend = OpenAIJSONBackend()
+            self.log.info("LLM backend initialized for analytics planner")
+        except Exception as exc:
+            self.log.warning("LLM backend unavailable; using heuristics only", exc_info=exc)
 
     # Public API -------------------------------------------------------------
     def plan(
@@ -147,6 +238,14 @@ class AnalyticsPlanner:
         with start_span("agent.analytics.plan", {"thread_id": thread_id}):
             logger = self.log.bind(component="agent.analytics", event="plan", thread_id=thread_id)
 
+            # Try LLM first if available
+            if self._llm_backend:
+                try:
+                    return self._plan_with_llm(query, allowlist, logger, default_limit)
+                except Exception as exc:
+                    logger.warning("LLM planning failed; falling back to heuristics", exc_info=exc)
+
+            # Fallback to heuristics
             text = (query or "").strip()
             lw = text.lower()
             tables_index = _normalize_allowlist(allowlist)
@@ -238,6 +337,125 @@ class AnalyticsPlanner:
             return PlannerPlan(
                 sql=sql, params={}, reason=reason, limit_applied=limit_applied, warnings=warnings
             )
+
+    def _plan_with_llm(
+        self,
+        query: str,
+        allowlist: Mapping[str, Iterable[str]],
+        logger: Any,
+        default_limit: int | None = None,
+    ) -> PlannerPlan:
+        """Generate SQL plan using LLM."""
+        
+        # Load system prompt and inject allowlist
+        system_prompt = self._load_system_prompt(allowlist)
+        
+        # Prepare user message
+        user_message = query.strip()
+        if default_limit:
+            user_message += f" (default limit: {default_limit})"
+        
+        messages = [{"role": "user", "content": user_message}]
+        
+        # Generate plan with LLM
+        logger.info("Generating SQL plan with LLM", query=query[:100])
+        
+        response = self._llm_backend.generate_json(
+            system=system_prompt,
+            messages=messages,
+            json_schema=self.PLAN_SCHEMA,
+            temperature=0.0,
+            max_output_tokens=1024,
+        )
+        
+        # Validate and normalize response
+        plan = self._validate_llm_plan(response, allowlist, logger)
+        
+        logger.info("LLM SQL plan generated", sql=plan.sql[:100], reason=plan.reason)
+        return plan
+
+    def _load_system_prompt(self, allowlist: Mapping[str, Iterable[str]]) -> str:
+        """Load system prompt and inject allowlist."""
+        
+        prompt_file = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "planner_system.txt"
+        
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                template = f.read()
+        except Exception as exc:
+            self.log.warning(f"Could not load prompt file {prompt_file}: {exc}")
+            # Minimal fallback prompt
+            template = """You are an Analytics SQL Planner. Generate safe PostgreSQL SELECT queries.
+ALLOWLIST (JSON)
+<<<ALLOWLIST_JSON>>>
+
+Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolean, "params": {}, "warnings": []}"""
+        
+        # Inject allowlist
+        allowlist_json = json.dumps(dict(allowlist), indent=2)
+        return template.replace("<<<ALLOWLIST_JSON>>>", allowlist_json)
+
+    def _validate_llm_plan(
+        self, 
+        response: Mapping[str, Any], 
+        allowlist: Mapping[str, Iterable[str]],
+        logger: Any,
+    ) -> PlannerPlan:
+        """Validate LLM response and create PlannerPlan."""
+        
+        # Extract required fields
+        sql = response.get("sql", "").strip()
+        reason = response.get("reason", "LLM generated plan")
+        limit_applied = response.get("limit_applied", False)
+        params = response.get("params", {})
+        warnings = list(response.get("warnings", []))
+        
+        if not sql:
+            raise ValueError("Empty SQL in LLM response")
+        
+        # Fix schema prefixes
+        sql = self._fix_schema_prefixes(sql)
+        
+        # Basic SQL safety checks
+        sql_lower = sql.lower()
+        
+        # Check for forbidden operations
+        forbidden = ["insert", "update", "delete", "drop", "create", "alter", "truncate"]
+        for op in forbidden:
+            if f" {op} " in sql_lower or sql_lower.startswith(f"{op} "):
+                warnings.append(f"forbidden_operation:{op}")
+                raise ValueError(f"Forbidden SQL operation: {op}")
+        
+        # Check for SELECT * (should be avoided)
+        if "select *" in sql_lower:
+            warnings.append("select_star_detected")
+        
+        return PlannerPlan(
+            sql=sql,
+            params=params,
+            reason=reason,
+            limit_applied=limit_applied,
+            warnings=warnings,
+        )
+
+    def _fix_schema_prefixes(self, sql: str) -> str:
+        """Ensure all table references have analytics schema prefix."""
+        import re
+        
+        # List of table names that should have schema prefix
+        table_names = [
+            'orders', 'customers', 'products', 'sellers', 'order_items', 
+            'order_payments', 'order_reviews', 'geolocation', 'product_category_translation'
+        ]
+        
+        # Add analytics. prefix to table names that don't already have it
+        for table in table_names:
+            # Pattern to match table name not already prefixed with analytics.
+            pattern = rf'\b(?<!analytics\.)({re.escape(table)})\b'
+            replacement = rf'analytics.{table}'
+            sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
+        
+        return sql
 
 
 # ---------------------------------------------------------------------------

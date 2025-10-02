@@ -139,7 +139,12 @@ class IngestOpts:
 
 def _resolve_engine() -> Any:
     if _get_engine is not None:
-        return _get_engine()
+        try:
+            return _get_engine()
+        except RuntimeError:
+            # Fall back to DATABASE_URL if infra engine is not configured
+            pass
+    
     if globals().get("_create_engine") is None:
         raise RuntimeError("SQLAlchemy is required but not available")
     url = os.environ.get("DATABASE_URL")
