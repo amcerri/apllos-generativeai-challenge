@@ -32,7 +32,8 @@ class QueryAssistant:
     async def query(
         self, 
         query: Optional[str] = None, 
-        attachment_path: Optional[str] = None
+        attachment_path: Optional[str] = None,
+        thread_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Fazer uma consulta ao assistente."""
         
@@ -42,29 +43,74 @@ class QueryAssistant:
         if query:
             input_data["query"] = query
         
+        # Processar attachment apenas se fornecido
         if attachment_path:
             # Verificar se o arquivo existe
             if not os.path.exists(attachment_path):
                 raise FileNotFoundError(f"Arquivo não encontrado: {attachment_path}")
             
-            # Ler conteúdo do arquivo
-            with open(attachment_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Determinar se é arquivo binário baseado na extensão
+            file_ext = Path(attachment_path).suffix.lower()
+            is_binary = file_ext in {'.pdf', '.docx', '.doc', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
+            
+            if is_binary:
+                # Ler como binário e codificar em base64 para JSON
+                import base64
+                with open(attachment_path, 'rb') as f:
+                    content_bytes = f.read()
+                content = base64.b64encode(content_bytes).decode('utf-8')
+                
+                # Determinar MIME type baseado na extensão
+                mime_types = {
+                    '.pdf': 'application/pdf',
+                    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                    '.doc': 'application/msword',
+                    '.png': 'image/png',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.tiff': 'image/tiff',
+                    '.bmp': 'image/bmp'
+                }
+                mime_type = mime_types.get(file_ext, 'application/octet-stream')
+            else:
+                # Ler como texto
+                with open(attachment_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                mime_type = 'text/plain'
             
             input_data["attachment"] = {
                 "filename": Path(attachment_path).name,
                 "content": content,
-                "type": "text/plain"  # Por enquanto, apenas texto
+                "mime_type": mime_type
             }
+        elif thread_id and not attachment_path:
+            # Se estamos reusing o thread mas não temos attachment novo, não envie attachment
+            # (deixa o campo ausente do input_data para não sobrescrever o contexto)
+            pass
         
         if not input_data:
             raise ValueError("Deve fornecer pelo menos uma query ou attachment")
         
-        # Criar thread
-        response = await self.http_client.post(f"{self.base_url}/threads", json={})
-        response.raise_for_status()
-        thread_data = response.json()
-        thread_id = thread_data["thread_id"]
+        # Usar thread existente ou criar novo
+        if thread_id:
+            # Verificar se o thread existe
+            try:
+                response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}")
+                response.raise_for_status()
+                print(f"🔄 Reutilizando thread: {thread_id}")
+            except Exception:
+                print(f"⚠️ Thread {thread_id} não encontrado, criando novo...")
+                thread_id = None
+        
+        if not thread_id:
+            # Criar novo thread
+            response = await self.http_client.post(f"{self.base_url}/threads", json={})
+            response.raise_for_status()
+            thread_data = response.json()
+            thread_id = thread_data["thread_id"]
+            # Salvar thread_id para próxima execução (apenas para referência)
+            with open(".last_thread_id", "w") as f:
+                f.write(thread_id)
         
         print(f"🔗 Thread ID: {thread_id}")
         print(f"📝 Input: {json.dumps(input_data, indent=2, ensure_ascii=False)}")
@@ -207,6 +253,12 @@ Exemplos:
         help="URL base do LangGraph (padrão: http://localhost:2024)"
     )
     
+    parser.add_argument(
+        "--thread-id", 
+        type=str, 
+        help="ID do thread para reutilizar contexto existente"
+    )
+    
     args = parser.parse_args()
     
     if not args.query and not args.attachment:
@@ -230,7 +282,7 @@ Exemplos:
     # Executar consulta
     assistant = QueryAssistant(args.base_url)
     try:
-        result = await assistant.query(args.query, args.attachment)
+        result = await assistant.query(args.query, args.attachment, args.thread_id)
         
         if "error" in result:
             sys.exit(1)

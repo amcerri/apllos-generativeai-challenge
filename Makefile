@@ -283,7 +283,7 @@ db-wait: ## Wait for database to be ready
 			exit 0; \
 		fi; \
 		echo "Waiting... ($$i/60)"; \
-		sleep 1; \
+	  sleep 1; \
 	done; \
 	echo "Database not ready after 60 seconds"; \
 	exit 1
@@ -379,13 +379,13 @@ studio-up: ## Start LangGraph Studio (recommended for development)
 	@echo "Starting LangGraph Studio..."
 	@$(MAKE) docker-build
 	@$(DOCKER) run --rm --name $(APP_CONTAINER)-studio \
-		-p $(APP_PORT):$(APP_PORT) \
-		-v "$(CURDIR)":/workspace \
-		$(ENV_ARGS) \
-		-e DATABASE_URL="$(DSN_HOST)" \
-		-e REQUIRE_SQL_APPROVAL=false \
-		-w /workspace \
-		$(APP_IMAGE) langgraph dev --host 0.0.0.0 --port $(APP_PORT) --allow-blocking
+	  -p $(APP_PORT):$(APP_PORT) \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -e REQUIRE_SQL_APPROVAL=false \
+	  -w /workspace \
+	  $(APP_IMAGE) langgraph dev --host 0.0.0.0 --port $(APP_PORT) --allow-blocking
 	@echo "LangGraph Studio started."
 
 .PHONY: studio-down
@@ -400,12 +400,12 @@ api-up: ## Start FastAPI server
 	@echo "Starting FastAPI server..."
 	@$(MAKE) docker-build
 	@$(DOCKER) run --rm --name $(APP_CONTAINER)-api \
-		-p 8000:8000 \
-		-v "$(CURDIR)":/workspace \
-		$(ENV_ARGS) \
-		-e DATABASE_URL="$(DSN_HOST)" \
-		-w /workspace \
-		$(APP_IMAGE) uvicorn app.api.server:get_app --host 0.0.0.0 --port 8000
+	  -p 8000:8000 \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
+	  $(APP_IMAGE) uvicorn app.api.server:get_app --host 0.0.0.0 --port 8000
 	@echo "FastAPI server started."
 
 .PHONY: api-down
@@ -462,14 +462,20 @@ validate: ## Validate system health
 	@echo "System validation completed."
 
 .PHONY: query
-query: ## Test query (usage: make query QUERY="your question" [ATTACHMENT="path/to/file"])
+query: ## Test query (usage: make query QUERY="your question" [ATTACHMENT="path/to/file"] [THREAD_ID="thread_id"])
 	@if [ -z "$(QUERY)" ] && [ -z "$(ATTACHMENT)" ]; then \
-		echo "Please provide a query or attachment: make query QUERY=\"your question\" [ATTACHMENT=\"path/to/file\"]"; \
+		echo "Please provide a query or attachment: make query QUERY=\"your question\" [ATTACHMENT=\"path/to/file\"] [THREAD_ID=\"thread_id\"]"; \
 		exit 1; \
 	fi
-	@if [ -n "$(QUERY)" ] && [ -n "$(ATTACHMENT)" ]; then \
+	@if [ -n "$(QUERY)" ] && [ -n "$(ATTACHMENT)" ] && [ -n "$(THREAD_ID)" ]; then \
+		echo "Testing query with attachment: $(QUERY) + $(ATTACHMENT) (Thread: $(THREAD_ID))"; \
+		$(PY) scripts/query_assistant.py --query "$(QUERY)" --attachment "$(ATTACHMENT)" --thread-id "$(THREAD_ID)"; \
+	elif [ -n "$(QUERY)" ] && [ -n "$(ATTACHMENT)" ]; then \
 		echo "Testing query with attachment: $(QUERY) + $(ATTACHMENT)"; \
 		$(PY) scripts/query_assistant.py --query "$(QUERY)" --attachment "$(ATTACHMENT)"; \
+	elif [ -n "$(QUERY)" ] && [ -n "$(THREAD_ID)" ]; then \
+		echo "Testing query: $(QUERY) (Thread: $(THREAD_ID))"; \
+		$(PY) scripts/query_assistant.py --query "$(QUERY)" --thread-id "$(THREAD_ID)"; \
 	elif [ -n "$(QUERY)" ]; then \
 		echo "Testing query: $(QUERY)"; \
 		$(PY) scripts/query_assistant.py --query "$(QUERY)"; \
@@ -512,10 +518,10 @@ logs-db: ## Show database logs
 shell: ## Open shell in application container
 	@echo "Opening shell in application container..."
 	@$(DOCKER) run --rm -it \
-		-v "$(CURDIR)":/workspace \
-		$(ENV_ARGS) \
-		-e DATABASE_URL="$(DSN_HOST)" \
-		-w /workspace \
+	  -v "$(CURDIR)":/workspace \
+	  $(ENV_ARGS) \
+	  -e DATABASE_URL="$(DSN_HOST)" \
+	  -w /workspace \
 		$(APP_IMAGE) /bin/bash
 
 .PHONY: shell-db

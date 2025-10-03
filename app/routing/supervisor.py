@@ -52,6 +52,9 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+# Initialize logger
+log = get_logger(__name__)
+
 
 # Tracing (optional; keep a single alias to avoid mypy signature clashes)
 start_span: Any
@@ -142,6 +145,10 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
 
         # Hard guard: explicit commerce cues dominate
         if "commerce_doc" in signals:
+            log.info("Supervisor applying commerce guard", 
+                    original_agent=agent, 
+                    signals=list(signals),
+                    confidence=confidence)
             final = _finalize(
                 dec,
                 agent="commerce",
