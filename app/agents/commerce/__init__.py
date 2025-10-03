@@ -2,11 +2,10 @@
 Commerce agent package initializer
 
 Overview
-    Side‑effect‑free initializer for the **commerce** agent. This package will
-    contain three stages executed in order: **detector** → **extractor** → **summarizer**.
-    The agent normalizes heterogeneous commercial documents (PO/Order Form/BEO/
-    invoice, etc.) into a canonical schema and produces a humanized summary in
-    pt‑BR with risks/insights when applicable.
+    Side‑effect‑free initializer for the **commerce** agent. This package contains
+    a modern LLM-powered pipeline: **processor** → **extractor_llm** → **context** → **conversation** → **summarizer**.
+    The agent processes attachments (PDF/DOCX/images), extracts structured data using LLM,
+    stores context for follow-up questions, and produces humanized summaries in pt‑BR.
 
 Design
     - Keep this module lightweight (no I/O, no dynamic imports).
@@ -20,11 +19,11 @@ Integration
 Usage
     >>> from app.agents.commerce import stages, has_stage, stage_path
     >>> stages()
-    ('detector', 'extractor', 'summarizer')
-    >>> has_stage('extractor')
+    ('processor', 'extractor_llm', 'context', 'conversation', 'summarizer')
+    >>> has_stage('processor')
     True
-    >>> stage_path('summarizer').name
-    'summarizer.py'
+    >>> stage_path('extractor_llm').name
+    'extractor_llm.py'
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ from typing import Final
 # Constants
 # ---------------------------------------------------------------------------
 _BASE_DIR: Final[Path] = Path(__file__).resolve().parent
-_STAGES: Final[tuple[str, ...]] = ("detector", "extractor", "summarizer")
+_STAGES: Final[tuple[str, ...]] = ("processor", "extractor_llm", "context", "conversation", "summarizer", "memory")
 
 __all__ = [
     "base_dir",

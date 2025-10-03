@@ -244,55 +244,121 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
     simbolo = _currency_symbol(moeda)
     total_txt = _fmt_money(doc.totals.get("grand_total"), simbolo)
 
-    linhas = [
-        f"Documento: {tipo} — ID: {doc.doc_id or '(sem ID)'} — Moeda: {moeda}",
-    ]
+    linhas = []
 
+    # === CABEÇALHO ===
+    linhas.append("INFORMAÇÕES DO DOCUMENTO")
+    linhas.append("=" * 50)
+    linhas.append(f"Tipo: {tipo}")
+    linhas.append(f"ID: {doc.doc_id or '(sem ID)'}")
+    linhas.append(f"Moeda: {moeda}")
+    linhas.append("")
+
+    # === DATAS ===
     if doc.issue_date or doc.due_date:
-        quando = []
+        linhas.append("DATAS")
+        linhas.append("-" * 30)
         if doc.issue_date:
-            quando.append(f"emissão {doc.issue_date}")
+            linhas.append(f"Emissão: {doc.issue_date}")
         if doc.due_date:
-            quando.append(f"vencimento {doc.due_date}")
-        linhas.append("Datas: " + ", ".join(quando))
+            linhas.append(f"Vencimento: {doc.due_date}")
+        linhas.append("")
 
-    # Totais
+    # === TOTAIS ===
+    linhas.append("VALORES TOTAIS")
+    linhas.append("-" * 30)
     sub = _fmt_money(doc.totals.get("subtotal"), simbolo)
     frete = _fmt_money(doc.totals.get("freight"), simbolo)
-    linhas.append(f"Totais: Subtotal {sub}; Frete {frete}; Total {total_txt}.")
+    linhas.append(f"Subtotal: {sub}")
+    linhas.append(f"Frete: {frete}")
+    linhas.append(f"TOTAL GERAL: {total_txt}")
+    linhas.append("")
 
-    # Itens (top-N por valor)
+    # === ITENS PRINCIPAIS ===
     itens_ordenados = sorted(
         doc.items,
         key=lambda it: (it.line_total or 0.0),
         reverse=True,
     )
     if itens_ordenados:
-        linhas.append("Itens principais:")
-        for it in itens_ordenados[: max(1, int(top_k))]:
-            qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
-            up = _fmt_money(it.unit_price, simbolo)
-            lt = _fmt_money(it.line_total, simbolo)
-            nome = it.name or "(sem descrição)"
-            linhas.append(f"• {nome} — {qtd} × {up} = {lt}")
+        linhas.append("ITENS PRINCIPAIS")
+        linhas.append("-" * 30)
+        
+        # Para poucos itens (até 10), mostrar todos. Para muitos, usar top_k
+        total_itens = len(itens_ordenados)
+        if total_itens <= 10:
+            # Mostrar todos os itens
+            for i, it in enumerate(itens_ordenados, 1):
+                qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
+                up = _fmt_money(it.unit_price, simbolo)
+                lt = _fmt_money(it.line_total, simbolo)
+                nome = it.name or "(sem descrição)"
+                linhas.append(f"{i}. {nome}")
+                linhas.append(f"   Quantidade: {qtd}")
+                linhas.append(f"   Preço unitário: {up}")
+                linhas.append(f"   Total da linha: {lt}")
+                linhas.append("")
+        else:
+            # Para muitos itens, usar top_k e mostrar resumo
+            for i, it in enumerate(itens_ordenados[: max(1, int(top_k))], 1):
+                qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
+                up = _fmt_money(it.unit_price, simbolo)
+                lt = _fmt_money(it.line_total, simbolo)
+                nome = it.name or "(sem descrição)"
+                linhas.append(f"{i}. {nome}")
+                linhas.append(f"   Quantidade: {qtd}")
+                linhas.append(f"   Preço unitário: {up}")
+                linhas.append(f"   Total da linha: {lt}")
+                linhas.append("")
+            
+            # Mostrar total de itens se houver mais que os mostrados
+            if total_itens > top_k:
+                linhas.append(f"... e mais {total_itens - top_k} itens")
+                linhas.append("")
 
-    # Riscos/alertas
+    # === RISCOS E ALERTAS ===
     if doc.risks:
-        linhas.append("Riscos/alertas:")
+        linhas.append("RISCOS E ALERTAS")
+        linhas.append("-" * 30)
         for r in doc.risks[:10]:
-            linhas.append(f"• {r}")
+            # Explicar cada risco de forma clara
+            explicacao = _explicar_risco(r)
+            linhas.append(f"- {r}: {explicacao}")
+        linhas.append("")
 
-    # Close with guidance
+    # === INTERAÇÃO ===
+    linhas.append("INTERAÇÃO")
+    linhas.append("-" * 30)
     if total_txt != "(não informado)":
-        linhas.append(
-            "Se quiser, posso comparar este total com pedidos anteriores ou simular cenários."
-        )
+        linhas.append("Gostaria de alguma análise específica sobre este pedido?")
+        linhas.append("Posso ajudar com comparações, simulações ou análises detalhadas.")
     else:
-        linhas.append(
-            "Total não informado — posso tentar recuperar a partir das linhas ou do PDF original."
-        )
+        linhas.append("Este documento apresenta algumas inconsistências nos valores.")
+        linhas.append("Posso ajudar a investigar ou analisar os dados disponíveis.")
 
     return "\n".join(linhas)
+
+
+def _explicar_risco(risco: str) -> str:
+    """Explica o significado de cada tipo de risco de forma clara."""
+    explicacoes = {
+        "sum_mismatch": "A soma dos itens não confere com o subtotal declarado",
+        "grand_total_mismatch": "O total geral não confere com subtotal + frete",
+        "missing_core_fields": "Campos essenciais como ID, data ou valores estão ausentes",
+        "incomplete_lines": "Alguns itens não possuem informações completas",
+        "currency_mismatch": "Há inconsistências na moeda utilizada",
+        "date_inconsistency": "As datas apresentam inconsistências ou estão ausentes",
+        "price_anomaly": "Preços muito altos ou baixos que podem indicar erro",
+        "quantity_anomaly": "Quantidades muito altas ou baixas que podem indicar erro",
+        "duplicate_items": "Itens duplicados encontrados no pedido",
+        "tax_calculation_error": "Erro no cálculo de impostos ou taxas",
+        "shipping_cost_anomaly": "Custo de frete muito alto ou baixo",
+        "vendor_mismatch": "Inconsistências nos dados do fornecedor",
+        "payment_terms_missing": "Condições de pagamento não especificadas",
+        "delivery_address_missing": "Endereço de entrega não informado",
+        "contact_info_missing": "Informações de contato ausentes",
+    }
+    return explicacoes.get(risco, "Risco não identificado - requer análise manual")
 
 
 def _label_doc_type(t: str | None) -> str:
