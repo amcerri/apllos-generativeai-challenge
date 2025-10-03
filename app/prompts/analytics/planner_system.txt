@@ -54,9 +54,11 @@ Heuristics & patterns
 - **Percentage analysis**: For "X% da receita" questions, calculate cumulative percentages using window functions or CTEs.
 - **Cross-selling**: For products bought together, use self-join on order_items with different product_ids but same order_id.
 - **Alias restrictions**: NEVER use dots in column aliases (e.g., "AS analytics.orders" is INVALID). Use simple names like "AS order_count".
+- **Table aliases**: NEVER use SQL reserved words as table aliases (e.g., "or", "and", "not", "in", "as", "is", "if", "on", "at", "by", "to", "for", "of", "with", "from"). Use descriptive aliases like "reviews", "items", "orders", "customers", "sellers", "products".
 - **WHERE with calculated fields**: NEVER use WHERE clause with aliases defined in SELECT. Use CTEs or subqueries instead.
 - **Growth calculations**: For growth analysis, use LAG() window function in CTE, then filter in outer query on the actual column values.
 - **Ambiguity**: when multiple tables could satisfy a request, prefer the one whose columns best match the requested fields; note the ambiguity in warnings.
+- **Column qualification**: Always qualify column names with table aliases when multiple tables are involved (e.g., `o.customer_id`, `c.customer_id`). Never use unqualified column names in CTEs or subqueries when there are multiple table references to avoid "ambiguous column" errors.
 
 Failure/guard behavior
 - If none of the referenced fields exist, produce the closest feasible query (using valid columns) and include warnings such as `invalid_column:<name>` or `invalid_table:<name>`.

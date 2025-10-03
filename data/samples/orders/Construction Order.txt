@@ -1,0 +1,87 @@
+ORDEM DE SERVIÇOS - CONSTRUÇÃO
+
+==========================================
+DADOS DA OBRA
+==========================================
+Cliente: Construtora ABC Ltda
+Obra: Residencial Alto Padrão
+Endereço: Rua das Palmeiras, 1000
+Bairro: Jardim das Flores
+Cidade: São Paulo - SP
+Engenheiro Responsável: Carlos Mendes
+CREA: 123456-SP
+
+==========================================
+SERVIÇOS SOLICITADOS
+==========================================
+
+1. FUNDAÇÃO E ESTRUTURA
+   - Escavação: 200m³
+   - Concreto C25: 50m³
+   - Aço CA-50: 5.000kg
+   - Formas: 500m²
+   Valor: R$ 45.000,00
+
+2. ALVENARIA E REVESTIMENTOS
+   - Tijolos cerâmicos: 15.000 unidades
+   - Cimento: 200 sacos
+   - Areia: 20m³
+   - Pedra brita: 15m³
+   - Argamassa: 5m³
+   Valor: R$ 28.500,00
+
+3. INSTALAÇÕES ELÉTRICAS
+   - Fios e cabos: 2.000m
+   - Quadros elétricos: 3 unidades
+   - Tomadas e interruptores: 50 unidades
+   - Luminárias: 25 unidades
+   Valor: R$ 12.000,00
+
+4. INSTALAÇÕES HIDRÁULICAS
+   - Tubos PVC: 500m
+   - Conexões: 200 unidades
+   - Registros: 30 unidades
+   - Caixa d'água: 1.000L
+   Valor: R$ 8.500,00
+
+5. PISOS E ACABAMENTOS
+   - Porcelanato: 200m²
+   - Cerâmica: 150m²
+   - Tinta: 50 latas
+   - Massa corrida: 20 latas
+   Valor: R$ 18.000,00
+
+==========================================
+CRONOGRAMA DE EXECUÇÃO
+==========================================
+Semana 1-2: Fundação e estrutura
+Semana 3-6: Alvenaria
+Semana 7-8: Instalações elétricas e hidráulicas
+Semana 9-10: Pisos e acabamentos
+Semana 11-12: Limpeza e entrega
+
+==========================================
+RESUMO FINANCEIRO
+==========================================
+Subtotal dos Serviços: R$ 112.000,00
+Mão de obra (30%): R$ 33.600,00
+Equipamentos e ferramentas: R$ 5.000,00
+Transporte: R$ 2.500,00
+Impostos (12%): R$ 18.372,00
+TOTAL: R$ 171.472,00
+
+==========================================
+CONDIÇÕES ESPECIAIS
+==========================================
+- Garantia: 5 anos para estrutura
+- Seguro: Cobertura total durante obra
+- Licenças: Todas inclusas
+- Limpeza: Inclusa na entrega
+- Documentação: ART e laudos técnicos
+
+==========================================
+APROVAÇÕES
+==========================================
+Solicitante: Carlos Mendes (Engenheiro)
+Aprovado por: Maria Silva (Diretora)
+Data: 25/01/2025

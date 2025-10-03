@@ -1,0 +1,106 @@
+ORDEM DE COMPRA - COMPLEXA
+
+==========================================
+INFORMAÇÕES DO CLIENTE
+==========================================
+Empresa: Tech Solutions Ltda
+CNPJ: 12.345.678/0001-90
+Endereço: Rua das Flores, 123 - Centro
+Cidade: São Paulo - SP
+CEP: 01234-567
+Contato: Maria Santos
+Telefone: (11) 99999-9999
+Email: maria@techsolutions.com
+
+==========================================
+DADOS DO PEDIDO
+==========================================
+Número: PO-2025-001234
+Data de Emissão: 20/01/2025
+Data de Entrega: 30/01/2025
+Vendedor: Carlos Oliveira
+Condições de Pagamento: 30 dias
+Transportadora: Logística Express
+
+==========================================
+ITENS SOLICITADOS
+==========================================
+
+1. SERVIDOR DELL POWEREDGE R750
+   Código: SRV-DELL-R750-001
+   Quantidade: 2 unidades
+   Preço Unitário: R$ 15.000,00
+   Desconto: 5%
+   Valor com Desconto: R$ 14.250,00
+   Subtotal: R$ 28.500,00
+
+2. SWITCH CISCO CATALYST 2960
+   Código: SW-CISCO-2960-001
+   Quantidade: 4 unidades
+   Preço Unitário: R$ 1.200,00
+   Desconto: 3%
+   Valor com Desconto: R$ 1.164,00
+   Subtotal: R$ 4.656,00
+
+3. CABOS DE REDE CAT6
+   Código: CAB-CAT6-001
+   Quantidade: 100 metros
+   Preço Unitário: R$ 8,50
+   Desconto: 0%
+   Subtotal: R$ 850,00
+
+4. RACK 19" 42U
+   Código: RACK-19-42U-001
+   Quantidade: 1 unidade
+   Preço Unitário: R$ 2.500,00
+   Desconto: 10%
+   Valor com Desconto: R$ 2.250,00
+   Subtotal: R$ 2.250,00
+
+5. NO-BREAK APC SMART-UPS 3000VA
+   Código: UPS-APC-3000VA-001
+   Quantidade: 2 unidades
+   Preço Unitário: R$ 3.500,00
+   Desconto: 7%
+   Valor com Desconto: R$ 3.255,00
+   Subtotal: R$ 6.510,00
+
+==========================================
+RESUMO FINANCEIRO
+==========================================
+Subtotal dos Itens: R$ 42.766,00
+Desconto Adicional: R$ 1.000,00
+Subtotal com Desconto: R$ 41.766,00
+ICMS (18%): R$ 7.517,88
+IPI (10%): R$ 4.176,60
+PIS (1,65%): R$ 689,14
+COFINS (7,6%): R$ 3.174,22
+Frete: R$ 500,00
+Seguro: R$ 200,00
+TOTAL GERAL: R$ 58.023,84
+
+==========================================
+OBSERVAÇÕES
+==========================================
+- Instalação inclusa para servidores e switches
+- Garantia estendida de 3 anos para equipamentos
+- Treinamento básico para 2 técnicos
+- Suporte técnico 24/7 por 1 ano
+
+==========================================
+APROVAÇÕES
+==========================================
+Solicitante: Maria Santos
+Aprovado por: João Silva (Gerente TI)
+Data de Aprovação: 20/01/2025
+
+==========================================
+CONDIÇÕES GERAIS
+==========================================
+1. Prazo de entrega: 10 dias úteis
+2. Forma de pagamento: Boleto bancário
+3. Garantia: Conforme especificações técnicas
+4. Instalação: Inclusa no valor
+5. Suporte: 1 ano de suporte técnico gratuito
+
+Este pedido está sujeito à aprovação final do departamento financeiro.

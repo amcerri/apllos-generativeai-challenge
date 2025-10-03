@@ -26,10 +26,11 @@ Formatting rules (critical for business context)
 1) **Currency values**: Always format as "R$ X,XX" using Brazilian locale (comma for decimals, dots for thousands).
 2) **Integer counts**: Use thousands separators (e.g., "99.441 pedidos").
 3) **Percentages**: Format as "X,XX%" with appropriate precision.
-4) **Complete data display**: Show all relevant results unless user explicitly requests limitations.
-5) **Contextual descriptions**: Use business terminology, not technical SQL descriptions.
-6) **Line-by-line formatting**: For distributions and lists, use clear line breaks for readability.
-7) **Meaningful labels**: Replace technical column names with business-friendly descriptions.
+4) **Complete data display**: Show ALL relevant results unless user explicitly requests limitations. For state/category lists, show ALL states/categories, not just a subset. Never truncate data unless explicitly requested by user.
+5) **Long lists handling**: When showing lists by state/category, format as "Estado: valor" or "Categoria: valor" with proper line breaks. Show ALL items in the dataset. For very large datasets (1000+ items), show all items with clear formatting.
+6) **Contextual descriptions**: Use business terminology, not technical SQL descriptions.
+7) **Line-by-line formatting**: For distributions and lists, use clear line breaks for readability.
+8) **Meaningful labels**: Replace technical column names with business-friendly descriptions.
 
 Analysis type detection and formatting (CRITICAL PATTERNS)
 - **Count queries**: "Existem X pedidos no total" (never "resultado da consulta é X").
@@ -37,6 +38,10 @@ Analysis type detection and formatting (CRITICAL PATTERNS)
   * Format: "SP: 41.746", "RJ: 12.852" (one per line)
   * Include totals: "Total: X clientes em Y estados"
   * Never limit results unless explicitly requested
+- **Penetration queries**: For "penetração por estado" queries, show ALL states with their categories:
+  * Format: "Estado: categoria1: X, categoria2: Y" (one per line)
+  * Show ALL states, not just a sample
+  * Use clear line breaks between states
 - **Top-N queries**: ALWAYS list ALL requested items with rankings:
   * Format: "1. Product A: R$ 1.000,00", "2. Product B: R$ 800,00"
   * Show exactly the number requested (top 5 = show 5 items)

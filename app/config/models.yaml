@@ -1,65 +1,109 @@
-# Model catalog and defaults (environment variables may override values at runtime)
-version: 1
+# ----------------------------------------------------------------------------
+# LLM Models Configuration
+# Notes
+#   - Model names, parameters, and provider settings
+#   - Environment variables may override values at runtime
+#   - Booleans are lowercase (YAML spec)
+# ----------------------------------------------------------------------------
 
-defaults:
-  provider: openai
-  api_base: ${OPENAI_API_BASE:-}
+# ----------------------------------------------------------------------------
+# Global LLM Settings
+# ----------------------------------------------------------------------------
+openai:
+  # Global settings
   request_timeout_ms: 30000
   max_retries: 3
+  api_base: ${OPENAI_API_BASE:-}
+  
+  # Model names (for backward compatibility)
+  router_model: gpt-4o-mini
+  analytics_planner_model: gpt-4o-mini
+  analytics_planner_fallback: gpt-4o-mini
+  analytics_normalizer_model: gpt-4o-mini
+  knowledge_model: gpt-4o-mini
+  knowledge_model_mini: gpt-4o-mini
+  commerce_model: gpt-4o-mini
+  commerce_conversation_model: gpt-4o-mini
+  embeddings_model: text-embedding-3-small
 
+# ----------------------------------------------------------------------------
+# Model-Specific Parameters
+# ----------------------------------------------------------------------------
 models:
   # Router: lightweight classifier that produces RouterDecision
   router:
     provider: ${ROUTER_PROVIDER:-openai}
     name: ${ROUTER_MODEL:-gpt-4o-mini}
-    parameters:
-      temperature: 0.0
-      max_tokens: 400
+    temperature: 0.0
+    max_tokens: 400
+    timeout_seconds: 10
 
   # Analytics planner: reasoning model that synthesizes safe SQL
   analytics_planner:
-    primary:
-      provider: ${ANALYTICS_PROVIDER:-openai}
-      name: ${ANALYTICS_PLANNER_MODEL:-gpt-4o-mini}
-      parameters:
-        temperature: 0.0
-        max_tokens: 800
-    fallback:
-      provider: ${ANALYTICS_PROVIDER:-openai}
-      name: ${ANALYTICS_PLANNER_MODEL_FALLBACK:-gpt-4o-mini}
-      parameters:
-        temperature: 0.0
-        max_tokens: 800
+    provider: ${ANALYTICS_PROVIDER:-openai}
+    name: ${ANALYTICS_PLANNER_MODEL:-gpt-4o-mini}
+    temperature: 0.0
+    max_tokens: 800
+    timeout_seconds: 120
 
-  # Knowledge: answerer used after retrieval; mini is a budget mode
+  # Analytics normalizer: formats SQL results into business-friendly responses
+  analytics_normalizer:
+    provider: ${ANALYTICS_PROVIDER:-openai}
+    name: ${ANALYTICS_NORMALIZER_MODEL:-gpt-4o-mini}
+    temperature: 0.1
+    max_tokens: 2000
+    timeout_seconds: 120
+
+  # Knowledge answerer: composes answers from RAG hits
   knowledge_answerer:
-    primary:
-      provider: ${KNOWLEDGE_PROVIDER:-openai}
-      name: ${KNOWLEDGE_MODEL:-gpt-4o-mini}
-      parameters:
-        temperature: 0.2
-        max_tokens: 900
-    mini:
-      provider: ${KNOWLEDGE_PROVIDER:-openai}
-      name: ${KNOWLEDGE_MODEL_MINI:-gpt-4o-mini}
-      parameters:
-        temperature: 0.2
-        max_tokens: 700
+    provider: ${KNOWLEDGE_PROVIDER:-openai}
+    name: ${KNOWLEDGE_MODEL:-gpt-4o-mini}
+    temperature: 0.2
+    max_tokens: 900
+    timeout_seconds: 60
 
-  # Commerce: extraction with structured outputs (JSON)
+  # Knowledge answerer mini: budget mode for knowledge
+  knowledge_answerer_mini:
+    provider: ${KNOWLEDGE_PROVIDER:-openai}
+    name: ${KNOWLEDGE_MODEL_MINI:-gpt-4o-mini}
+    temperature: 0.2
+    max_tokens: 700
+    timeout_seconds: 60
+
+  # Commerce extractor: structured extraction from documents
   commerce_extractor:
     provider: ${COMMERCE_PROVIDER:-openai}
     name: ${COMMERCE_MODEL:-gpt-4o-mini}
-    parameters:
-      temperature: 0.1
-      max_tokens: 900
+    temperature: 0.1
+    max_tokens: 4000
+    timeout_seconds: 60
     output:
       format: json_schema
+      strict: false
+
+  # Commerce conversation: answers questions about processed documents
+  commerce_conversation:
+    provider: ${COMMERCE_PROVIDER:-openai}
+    name: ${COMMERCE_CONVERSATION_MODEL:-gpt-4o-mini}
+    temperature: 0.3
+    max_tokens: 1000
+    timeout_seconds: 60
+
+  # Commerce summarizer: creates business-friendly summaries
+  commerce_summarizer:
+    provider: ${COMMERCE_PROVIDER:-openai}
+    name: ${COMMERCE_MODEL:-gpt-4o-mini}
+    temperature: 0.2
+    max_tokens: 600
+    timeout_seconds: 60
 
   # Embeddings: pgvector ingestion & retrieval
   embeddings:
     provider: ${EMBEDDINGS_PROVIDER:-openai}
     name: ${EMBEDDINGS_MODEL:-text-embedding-3-small}
+    temperature: 0.0  # Not used for embeddings, but kept for consistency
+    max_tokens: 0     # Not used for embeddings, but kept for consistency
+    timeout_seconds: 60
     parameters:
       dimensions: 1536   # default dims for text-embedding-3-small
       batch_size: 256

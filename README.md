@@ -1,316 +1,716 @@
-# apllos-generativeai-challenge
+# APLLOS Generative AI Challenge
 
-Assistente de engenharia baseado em **LangGraph** que roteia solicitações do usuário entre quatro agentes especializados — **analytics**, **knowledge**, **commerce** e **triage** — e responde ao usuário final em **pt-BR**. O runtime oferece persistência (checkpointer), interrupções *human‑in‑the‑loop*, *logging* estruturado e *tracing* opcional.
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.4+-green.svg)](https://langchain-ai.github.io/langgraph/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://postgresql.org)
+[![Docker](https://img.shields.io/badge/Docker-20+-blue.svg)](https://docker.com)
 
----
-
-## Visão geral
-Este projeto implementa um **roteador "context‑first"** + quatro agentes:
-
-- **analytics** — SQL seguro sobre dados de analytics do Olist (apenas allowlist; sem `SELECT *`; `LIMIT` obrigatório em *preview*). A resposta final é humanizada/negócio em pt‑BR.
-- **knowledge** — RAG com pgvector; quando usa recuperação **sempre cita as fontes** (título + id/URL + linhas).
-- **commerce** — documentos comerciais heterogêneos (PO/Order Form/BEO/invoice etc.) → **schema canônico** (buyer/vendor/items/totals/terms/signatures/risks) + resumo em pt‑BR.
-- **triage** — orientação breve e redirecionamento quando o contexto é insuficiente.
-
-**Regras de roteamento (com *fallback* de uma passagem; sem loops):**
-1. Se respondível por documentos → **knowledge**.
-2. Se envolver tabelas/colunas/medidas/agrupamentos → **analytics**.
-3. Se houver indícios de documento comercial → **commerce**.
-4. Caso contrário → **triage**.
-
-**Modelos (OpenAI apenas):** roteador `gpt-4.1-mini`; *analytics planner* `o3` (ou `o4-mini`); RAG `gpt-4.1` (ou `gpt-4.1-mini`); *commerce extractor* `gpt-4.1`.
-
-**Contratos (dataclasses):**
-- `RouterDecision`: `{ agent ∈ {analytics,knowledge,commerce,triage}, confidence, reason, tables[], columns[], signals[], thread_id? }`.
-- `Answer`: `{ text, data?, columns?, citations?, meta?, no_context?, artifacts?, followups? }`.
+> **Multi-Agent Intelligent System for E-commerce Data Analysis**  
+> Advanced generative AI platform that combines Knowledge Retrieval, Analytics, and Commerce Processing in a unified architecture.
 
 ---
 
-## Arquitetura
-- **LangGraph** orquestra o grafo (nós = agentes/etapas do pipeline).
-- **LangGraph Server + Studio** expõem endpoints HTTP/stream e UI visual. O Server importa `app.graph.assistant:get_assistant`.
-- **Postgres** (com **pgvector**) armazena dados tabulares e embeddings de documentos.
-- **Checkpointer** persiste estado/thread para retomada.
-- **Observabilidade**: `structlog` (campos `component`/`event`/`thread_id`) e spans opcionais via OpenTelemetry.
-- **Config**: `app/config/config.yaml` (ex.: `confidence_min`, `retrieval_min_score`, *timeouts* e *row caps*) e `app/config/models.yaml` (nomes dos modelos).
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Installation & Configuration](#installation--configuration)
+- [Usage Guide](#usage-guide)
+- [Agents](#agents)
+- [Development](#development)
+- [Monitoring](#monitoring)
 
-**Estrutura (resumo):**
+---
 
-```text
-app/                # agents, routing, contracts, prompts, api, config, graph, infra, utils
-├── agents/         # 4 agentes especializados (analytics, knowledge, commerce, triage)
-├── api/            # FastAPI server
-├── config/         # configurações YAML
-├── contracts/      # dataclasses de resposta
-├── graph/          # LangGraph assembly e assistant factory
-├── infra/          # logging, tracing, db, checkpointer
-├── prompts/        # prompts organizados por agente
-├── routing/        # LLM classifier e supervisor
-└── utils/          # utilitários (ids, time, validation, typing)
-scripts/            # ingest_analytics.py, ingest_vectors.py, explain_sql.py, gen_allowlist.py
-data/raw/analytics # CSVs do Olist (NÃO versionados)
-data/docs/         # PDFs/TXT para RAG (NÃO versionados)
+## Overview
+
+The **APLLOS Generative AI Challenge** is a generative AI platform that implements a multi-agent system specialized in e-commerce data analysis. The system combines three main agents that work in a coordinated manner to provide deep insights into commercial data.
+
+### Key Features
+
+- **Multi-Agent Intelligence**: Coordinated system with specialized agents
+- **Advanced Analytics**: Complex SQL analysis with security and validation
+- **Knowledge Retrieval**: RAG system for documents and knowledge
+- **Commerce Processing**: Intelligent processing of commercial documents
+- **Security**: Rigorous SQL query validation and access control
+- **Observability**: Structured logging and distributed tracing
+- **Containerized**: Simplified deployment with Docker
+
+### Use Cases
+
+- **Performance Analysis**: Sales metrics, churn rate, growth analysis
+- **Product Insights**: Top products, categories, contribution margin
+- **Geographic Analysis**: Performance by state, region, city
+- **Document Processing**: Orders, invoices, commercial contracts
+- **Business Consulting**: Questions about strategies and best practices
+
+---
+
+## Architecture
+
+### Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "Frontend Layer"
+        UI[Web Interface]
+        CLI[Command Line]
+        API[REST API]
+    end
+    
+    subgraph "Orchestration Layer"
+        LG[LangGraph Studio]
+        RT[Router & Triage]
+    end
+    
+    subgraph "Agent Layer"
+        KA[Knowledge Agent]
+        AA[Analytics Agent]
+        CA[Commerce Agent]
+    end
+    
+    subgraph "Data Layer"
+        PG[(PostgreSQL)]
+        VEC[(pgvector)]
+        DOCS[Document Store]
+    end
+    
+    subgraph "External Services"
+        OAI[OpenAI API]
+        EMB[Embeddings]
+    end
+    
+    UI --> LG
+    CLI --> API
+    API --> RT
+    RT --> KA
+    RT --> AA
+    RT --> CA
+    KA --> VEC
+    AA --> PG
+    CA --> DOCS
+    KA --> OAI
+    AA --> OAI
+    CA --> OAI
+    VEC --> EMB
 ```
 
+### Core Components
+
+#### **1. LangGraph Orchestrator**
+- **Function**: Request coordination and routing
+- **Technology**: LangGraph 0.4+
+- **Features**: Native checkpointing, persistent state
+
+#### **2. Router & Triage System**
+- **Function**: Intelligent request classification
+- **Technology**: OpenAI GPT-4o-mini
+- **Features**: Context and intent-based routing
+
+#### **3. Knowledge Agent**
+- **Function**: Retrieval Augmented Generation (RAG)
+- **Technology**: pgvector + OpenAI Embeddings
+- **Features**: Semantic search, citations, context
+
+#### **4. Analytics Agent**
+- **Function**: Complex SQL analysis and data insights
+- **Technology**: PostgreSQL + SQLAlchemy
+- **Features**: Security validation, LLM normalization
+
+#### **5. Commerce Agent**
+- **Function**: Commercial document processing
+- **Technology**: python-docx + OCR + LLM
+- **Features**: Structured extraction, intelligent summaries
+
 ---
 
-## Requisitos
-- **Python 3.11+**
-- **Docker** + **Docker Compose**
-- **GNU Make**
+## Quick Start
 
-> Dica: os *targets* do Make já encapsulam os comandos Docker e utilitários comuns.
+### Option 1: Docker (Recommended)
 
----
-
-## Configuração de ambiente
-1) Crie seu arquivo `.env` a partir do exemplo:
 ```bash
+# 1. Clone the repository
+git clone <repository-url>
+cd apllos-generativeai-challenge
+
+# 2. Configure environment variables
 cp .env.example .env
+# Edit .env with your OpenAI keys
+
+# 3. Start the complete system
+make bootstrap-complete
+
+# 4. Access LangGraph Studio
+make studio-up
+# Open https://smith.langchain.com/studio/?baseUrl=http://localhost:2024
 ```
 
-2) Preencha as variáveis principais (exemplo):
-```dotenv
-# OpenAI (obrigatório para ingestão de vetores e execução de LLMs)
-OPENAI_API_KEY=sk-...
+### Option 2: Local Development
 
-# Postgres (Makefile também define defaults)
-POSTGRES_USER=app
-POSTGRES_PASSWORD=app
-POSTGRES_DB=app
-POSTGRES_PORT=5432
+```bash
+# 1. Install dependencies
+pip install -e .
 
-DATABASE_URL=postgresql+psycopg://app:app@db:5432/app
-LANGGRAPH_DEV_CONFIG=langgraph.json
+# 2. Configure database
+make db-start
+make db-wait
+make db-init
+make db-seed
+
+# 3. Ingest data
+make ingest-analytics
+make ingest-vectors
+
+# 4. Start services
+make studio-up
 ```
 
-> **Nota:** se você **não** estiver usando Docker/Compose e rodar a API localmente, use `localhost` no `DATABASE_URL`:
-```dotenv
-DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app
+### Quick Test
+
+```bash
+# Test a simple query
+make query QUERY="How many orders exist in total?"
+
+# Test with document
+make query QUERY="Analyze this order" ATTACHMENT="data/samples/orders/Simple Order.docx"
 ```
 
 ---
 
-## Primeiros passos (modo Docker‑first)
-Os comandos abaixo sobem o Postgres (com pgvector), preparam o schema mínimo e deixam tudo pronto para ingestão e execução.
+## Installation & Configuration
+
+### Prerequisites
+
+- **Python**: 3.11+
+- **Docker**: 20.0+
+- **Docker Compose**: 2.0+
+- **OpenAI API Key**: For LLM functionality
+
+### Environment Configuration
+
+#### 1. **Environment Variables**
+
+Create a `.env` file based on `.env.example`:
 
 ```bash
-# 1) Criar pastas de dados
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+
+# Database Configuration
+DATABASE_URL=postgresql://postgres:password@localhost:5432/apllos_db
+
+# Application Configuration
+LOG_LEVEL=INFO
+DEBUG=false
+```
+
+#### 2. **Database Configuration**
+
+```bash
+# Start PostgreSQL
+make db-start
+
+# Wait for initialization
+make db-wait
+
+# Create schema and tables
+make db-init
+
+# Load sample data
+make db-seed
+```
+
+#### 3. **Data Ingestion**
+
+```bash
+# Ingest analytics data (CSVs)
+make ingest-analytics
+
+# Ingest documents (PDFs)
+make ingest-vectors
+
+# Ingest everything at once
+make ingest-all
+```
+
+### Docker Configuration
+
+#### **Docker Compose**
+
+The system uses Docker Compose for orchestration:
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: apllos_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/apllos_db
+    depends_on:
+      - postgres
+```
+
+#### **Useful Docker Commands**
+
+```bash
+# Build image
+make docker-build
+
+# Stop all containers
+make docker-stop
+
+# Remove all containers
+make docker-remove
+
+# Clean everything (containers + images + volumes)
+make docker-clean
+
+# Complete Docker reset
+make docker-reset
+
+# View logs
+make logs
+```
+
+---
+
+## Usage Guide
+
+### Web Interface (LangGraph Studio)
+
+1. **Access Studio**: https://smith.langchain.com/studio/?baseUrl=http://localhost:2024
+2. **Configure Thread**: Use a thread ID to maintain context
+3. **Ask Questions**: Type queries in natural language
+4. **Attach Documents**: For commercial document analysis
+
+### Command Line Interface
+
+#### **Simple Query**
+
+```bash
+make query QUERY="What is the total sales revenue?"
+```
+
+#### **Query with Thread ID**
+
+```bash
+make query QUERY="What was the growth in the last quarter?" THREAD_ID="thread_123"
+```
+
+#### **Query with Attachment**
+
+```bash
+make query QUERY="Analyze this order" ATTACHMENT="data/samples/orders/Order.docx"
+```
+
+#### **Batch Processing**
+
+```bash
+# Process multiple queries
+make batch-query INPUT="tests/batch_queries_complete.yaml"
+
+# Test commerce agent with specific input
+make test-commerce INPUT="test_commerce.yaml"
+```
+
+#### **Application Management**
+
+```bash
+# Start LangGraph Studio
+make studio-up
+
+# Stop LangGraph Studio
+make studio-down
+
+# Start FastAPI server
+make api-up
+
+# Stop FastAPI server
+make api-down
+
+# Show application status
+make app-status
+```
+
+### Query Examples
+
+#### **Analytics Queries**
+
+```bash
+# Basic metrics
+"How many orders exist in total?"
+"What is the total sales revenue?"
+
+# Temporal analysis
+"What was the month-over-month sales growth in 2017?"
+"Calculate the monthly customer churn rate"
+
+# Geographic analysis
+"What are the top 10 states by revenue?"
+"What is the penetration of each category by state?"
+
+# Product analysis
+"Identify the top 10 products by contribution margin"
+"Which categories have the highest quarterly growth?"
+```
+
+#### **Knowledge Queries**
+
+```bash
+# Business strategies
+"How to structure a pricing model for e-commerce?"
+"What are the best practices for customer retention?"
+
+# Technologies
+"What emerging technologies are impacting e-commerce?"
+"How to implement artificial intelligence in online sales?"
+```
+
+#### **Commerce Queries**
+
+```bash
+# Document analysis
+"Analyze this commercial order"
+"Extract information from this invoice"
+"Summarize this supply contract"
+```
+
+---
+
+## Agents
+
+### Knowledge Agent
+
+**Function**: RAG system for conceptual and strategic queries
+
+#### **Features**
+- **Retrieval**: Semantic search in documents
+- **Ranking**: Intelligent result re-ranking
+- **Answering**: Contextual response generation
+- **Citations**: References to source documents
+
+#### **Technologies**
+- **Vector Store**: pgvector with OpenAI embeddings
+- **Embeddings**: text-embedding-3-small
+- **LLM**: GPT-4o-mini for generation
+
+#### **Configuration**
+```yaml
+knowledge:
+  retrieval:
+    index: doc_chunks
+    top_k: 5
+    min_score: 0.7
+  answerer:
+    max_citations: 3
+    max_chars: 2000
+```
+
+### Analytics Agent
+
+**Function**: Complex SQL analysis with security and insights
+
+#### **Components**
+
+##### **1. Planner**
+- **Function**: SQL generation from natural language
+- **Security**: Validation against allowlist
+- **Examples**: Few-shot learning with 67 examples
+- **Limits**: Row caps and timeout control
+
+##### **2. Executor**
+- **Function**: Safe SQL query execution
+- **Validation**: Syntax and permission verification
+- **Timeouts**: Execution time control
+- **Read-only**: Data modification prevention
+
+##### **3. Normalizer**
+- **Function**: Result formatting for users
+- **LLM**: GPT-4o-mini for normalization
+- **Fallback**: Robust fallback system
+- **Formatting**: Currency, percentages, lists
+
+#### **Configuration**
+```yaml
+analytics:
+  planner:
+    default_limit: 200
+    max_limit: 1000
+    examples_count: 3
+  executor:
+    default_timeout_seconds: 60
+    default_row_cap: 2000
+  normalizer:
+    max_tokens: 2000
+    timeout_seconds: 120
+```
+
+### Commerce Agent
+
+**Function**: Intelligent processing of commercial documents
+
+#### **Components**
+
+##### **1. Processor**
+- **Function**: Multi-format document processing
+- **Formats**: DOCX, PDF, TXT
+- **OCR**: Optical character recognition
+- **Encoding**: Base64 for transmission
+
+##### **2. Extractor**
+- **Function**: Structured data extraction
+- **LLM**: GPT-4o-mini with JSON Schema
+- **Validation**: Consistent data structure
+- **Fallback**: Robust error handling
+
+##### **3. Summarizer**
+- **Function**: Executive summary generation
+- **Formatting**: Structured markdown
+- **Insights**: Risk and opportunity analysis
+- **Interaction**: Follow-up questions
+
+#### **Configuration**
+```yaml
+commerce:
+  extractor:
+    model: gpt-4o-mini
+    max_tokens: 4000
+    temperature: 0.1
+  summarizer:
+    max_tokens: 600
+    temperature: 0.2
+```
+
+---
+
+## Development
+
+### Project Structure
+
+```
+apllos-generativeai-challenge/
+├── app/                          # Main code
+│   ├── agents/                   # Specialized agents
+│   │   ├── analytics/            # Analytics Agent
+│   │   ├── knowledge/            # Knowledge Agent
+│   │   ├── commerce/             # Commerce Agent
+│   │   └── triage/               # Triage Handler
+│   ├── api/                      # REST API
+│   ├── config/                   # Configurations
+│   ├── contracts/                # Data classes
+│   ├── graph/                    # LangGraph definitions
+│   ├── infra/                    # Infrastructure
+│   ├── prompts/                  # LLM prompts
+│   ├── routing/                  # Routing system
+│   └── utils/                    # Utilities
+├── data/                         # Data and documents
+│   ├── docs/                     # PDF documents
+│   ├── raw/                      # Raw data (CSV)
+│   └── samples/                  # Examples
+├── scripts/                      # Utility scripts
+├── tests/                        # Tests
+├── docker-compose.yml            # Docker Compose
+├── Dockerfile                    # Docker image
+├── Makefile                      # Automation commands
+└── pyproject.toml               # Python dependencies
+```
+
+### Development Commands
+
+#### **Initial Setup**
+```bash
+# Install dependencies
+make install-deps
+
+# Create required directories
 make dirs
 
-# 2) Subir Postgres + esperar ficar pronto + inicializar extensões/roles/db
-make db-start db-wait db-init
-
-# 3) (Opcional) Popular amostras mínimas de schema/dados
-make db-seed   # usa data/samples/schema.sql e data/samples/seed.sql
-
-# 4) (Quando o Dockerfile existir) build e run da imagem
-make app-build
-make app-run CMD="python -m app.graph.assistant"
+# Complete bootstrap
+make bootstrap-complete
 ```
 
-> Você pode inspecionar ajuda dos *targets* com `make help`.
-
----
-
-## Executar LangGraph Studio (via Docker Compose)
-O fluxo recomendado para desenvolvimento visual é rodar o **LangGraph Dev Server** dentro do container e abrir o Studio no navegador.
-
+#### **Testing**
 ```bash
-# Banco de dados ativo (se ainda não estiver rodando)
-make db-start db-wait db-init
+# All tests
+make test
 
-# Sobe o Dev Server (exporá a API e abrirá o Studio)
-make studio-compose
+# Unit tests
+make test-unit
+
+# End-to-end tests
+make test-e2e
+
+# System validation
+make validate
 ```
 
-- API: `http://127.0.0.1:2024`
-- Studio UI: `https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024`
-- Docs (OpenAPI): `http://127.0.0.1:2024/docs`
-
-> Observação: versões recentes do CLI usam `langgraph dev` (e **não** `langgraph server`). O `make studio-compose` já usa o modo correto e injeta `LANGGRAPH_SERVER_APP="app.graph.assistant:get_assistant"`.
-
----
-
-## Ingestão — Analytics (CSV → Postgres)
-1) Coloque os CSVs do Olist em `data/raw/analytics/` (não versionados neste repositório).
-
-2) Execute o *script* de ingestão:
+#### **Code Quality**
 ```bash
-python scripts/ingest_analytics.py --help
-python scripts/ingest_analytics.py \
-  --dsn "$DATABASE_URL" \
-  --csv-root data/raw/analytics \
-  --schema-sql data/samples/schema.sql
+# Clean temporary files
+make clean
+
+# Clean data directories (WARNING: deletes CSVs and PDFs)
+make clean-data
 ```
 
-3) (Opcional) Gere um **allowlist** a partir do schema ativo (para o planner SQL):
+#### **Database**
 ```bash
-python scripts/gen_allowlist.py --help
-python scripts/gen_allowlist.py --dsn "$DATABASE_URL" --out app/routing/allowlist.json
+# Complete reset
+make db-reset
+
+# Database status
+make db-status
+
+# Connect to database
+make db-psql
 ```
 
-> O agente **analytics** NUNCA usa colunas/tabelas fora do allowlist.
+#### **Bootstrap & Reset**
 
----
-
-## Ingestão — Knowledge (RAG com pgvector)
-1) Coloque PDFs/TXT em `data/docs/`.
-
-2) Gere embeddings e upsert no Postgres/pgvector:
 ```bash
-python scripts/ingest_vectors.py --help
-python scripts/ingest_vectors.py \
-  --dsn "$DATABASE_URL" \
-  --docs-root data/docs \
-  --model $(yq '.embeddings_model' app/config/models.yaml)
+# Complete bootstrap: reset + minimal setup + start + ingest real data + test
+make bootstrap
+
+# GUARANTEED complete bootstrap with step-by-step data loading
+make bootstrap-complete
+
+# Complete reset: stop all + remove containers + clean volumes (keeps data)
+make reset
 ```
 
-> Requer `OPENAI_API_KEY`. O script cria/atualiza índices (HNSW/IVFFlat) conforme disponível.
-
----
-
-## Execução
-Há duas formas principais: **API FastAPI** ou **LangGraph Server + Studio**.
-
-### 1) API (FastAPI)
-```bash
-# inicia a API (hot-reload em desenvolvimento)
-uvicorn app.api.server:get_app --reload --port 8000
-```
-Abra `http://localhost:8000/docs` para explorar os endpoints.
-
-### 2) LangGraph Server + Studio
-O Server importa `app.graph.assistant:get_assistant`.
+#### **Utilities**
 
 ```bash
-# se o CLI do LangGraph estiver instalado
-export LANGGRAPH_SERVER_APP="app.graph.assistant:get_assistant"
-# CLI recente: use o modo "dev"
-langgraph dev --config langgraph.json --host 0.0.0.0 --port 2024
-```
+# Install/update dependencies
+make install-deps
 
-> Alternativamente, alguns setups aceitam: `python -m app.graph.assistant` para validar a compilação do grafo.
-
-### Gate de aprovação (Human‑in‑the‑loop)
-- Por padrão, `require_sql_approval: true` (ver `config.yaml`).
-- O nó de *analytics* pode pausar antes de executar SQL; aprove o *gate* pelo Server/Studio ou desabilite (defina `require_sql_approval=false`).
-
----
-
-## Testes
-Executa unitários + e2e:
-```bash
-pytest -q
-```
-Rode seleções específicas:
-```bash
-pytest tests/unit -q
-pytest tests/e2e -q
-```
-
----
-
-## Observabilidade
-- **Logging**: `structlog` com chaves `component`, `event`, `thread_id` em todos os nós.
-- **Tracing (opcional)**: spans por nó via OpenTelemetry (configure `OTEL_EXPORTER_OTLP_ENDPOINT`).
-
----
-
-## Convenções de código e *prompts*
-- **Idioma**: código em **inglês**; respostas de runtime (Answer.text) em **pt‑BR**.
-- **Estilo**: PEP‑8, PEP‑257, *type hints* completos.
-- **Documentação**: Headers padronizados com Overview/Design/Integration/Usage em todos os módulos.
-- **Prompts versionados** em `app/prompts/**` (routing, analytics, knowledge, commerce).
-- **Arquivos temporários**: Removidos todos os arquivos de debug e fallbacks antigos.
-
----
-
-## Segurança & *guardrails*
-- **Analytics**: *allowlist‑only*, somente leitura, sem DDL/DML, **sem** `SELECT *`, `LIMIT` obrigatório em *preview*.
-- **Knowledge**: nunca inventa base inexistente; **citações obrigatórias** quando usa RAG; se *retrieval* fraco → `no_context=true` + *follow‑ups*.
-- **Commerce**: normaliza moeda/datas/quantidades; checagem de soma de linhas ≈ subtotal; campos opcionais de *risks/warnings*.
-
----
-
-## Fluxos ponta‑a‑ponta (resumo)
-**A. Setup e ingestão**
-```bash
+# Create required directories
 make dirs
-make db-start db-wait db-init db-seed
-python scripts/ingest_analytics.py --dsn "$DATABASE_URL" --csv-root data/raw/analytics --schema-sql data/samples/schema.sql
-python scripts/ingest_vectors.py --dsn "$DATABASE_URL" --docs-root data/docs
-python scripts/gen_allowlist.py --dsn "$DATABASE_URL" --out app/routing/allowlist.json
+
+# Generate allowlist from database schema
+make gen-allowlist
+
+# Clean temporary files
+make clean
+
+# Clean data directories (WARNING: deletes CSVs and PDFs)
+make clean-data
+
+# Open shell in application container
+make shell
+
+# Open shell in database container
+make shell-db
 ```
 
-**B. Execução**
+### Testing
+
+#### **Available Tests**
+
 ```bash
-uvicorn app.api.server:get_app --reload --port 8000
-# ou
-export LANGGRAPH_SERVER_APP="app.graph.assistant:get_assistant" && langgraph server
+# All tests
+make test
+
+# Unit tests
+make test-unit
+
+# End-to-end tests
+make test-e2e
+
+# System validation
+make validate
 ```
 
-**C. Testes**
+### Logs and Debugging
+
+#### **Logs and Debugging**
+
 ```bash
-pytest -q
+# Application logs
+make logs
+
+# Database logs
+make logs-db
+
+# Full debug
+LOG_LEVEL=DEBUG make query QUERY="test"
+```
+
+#### **Tracing**
+
+The system uses OpenTelemetry for distributed tracing:
+
+```python
+from app.infra.tracing import get_tracer
+
+tracer = get_tracer(__name__)
+
+@tracer.start_as_current_span("custom_operation")
+def custom_function():
+    # Your logic here
+    pass
 ```
 
 ---
 
-## Make — atalhos úteis
-- `make dirs` — cria `data/raw/analytics` e `data/docs`
-- `make db-start` / `make db-wait` / `make db-init` — sobe e prepara o Postgres (pgvector)
-- `make db-seed` — aplica `data/samples/schema.sql` e `data/samples/seed.sql`
-- `make ingest-analytics` — carrega CSVs do Olist (ordem segura para FKs)
-- `make ingest-vectors` — indexa documentos em pgvector
-- `make gen-allowlist` — gera allowlist a partir do schema atual
-- `make studio-compose` — inicia LangGraph Dev Server (API + Studio)
-- `make studio-down` — encerra a sessão do Studio
-- `make compose-down` — derruba containers e volumes (cuidado)
+## Monitoring
 
----
+### Available Metrics
 
-## Limpeza e Padronização
-O projeto passou por uma limpeza completa e padronização:
+#### **Performance**
+- **Query Latency**: Response time per agent
+- **Throughput**: Queries per minute
+- **Error Rate**: Error rate per component
 
-### ✅ **Arquivos Removidos**
-- `get_full_response.py` - script de debug temporário
-- `test_api.py` - teste temporário  
-- `test_queries.sh` - script de teste temporário
-- `app/agents/analytics/*_simple.py` - versões fallback antigas
-- `app/routing/allowlist_snapshot.py` - snapshot temporário
+#### **Quality**
+- **Classification Accuracy**: Routing precision
+- **Response Quality**: Response quality
+- **User Satisfaction**: User feedback
 
-### ✅ **Padronização Aplicada**
-- **Headers uniformes**: Todos os módulos seguem o padrão Overview/Design/Integration/Usage
-- **PEP8/PEP257**: Código totalmente conforme com docstrings completas
-- **Organização**: Estrutura de diretórios clara e lógica
-- **Documentação**: Comentários em inglês, respostas em PT-BR
-- **Zero erros**: Linting e compilação sem problemas
+#### **Resources**
+- **Database Connections**: Connection pool
+- **Memory Usage**: Memory consumption
+- **CPU Usage**: CPU utilization
 
-### ✅ **Estrutura Final**
+### Observability
 
-```text
-app/
-├── agents/         # 4 agentes especializados
-├── api/            # FastAPI server
-├── config/         # configurações YAML
-├── contracts/      # dataclasses de resposta
-├── graph/          # LangGraph assembly
-├── infra/          # logging, tracing, db
-├── prompts/        # prompts organizados
-├── routing/        # LLM classifier e supervisor
-└── utils/          # utilitários
+#### **Structured Logging**
+
+```python
+from app.infra.logging import get_logger
+
+logger = get_logger(__name__)
+
+logger.info("Query processed", 
+    query="test query",
+    agent="analytics",
+    duration_ms=1500,
+    success=True
+)
 ```
 
----
+#### **Distributed Tracing**
 
-## *Troubleshooting*
-- **Studio 400 / `InvalidUpdateError: ... Can receive only one value per step`**: garanta que cada nó do grafo escreva **apenas um** valor por passo na mesma chave; no projeto já ajustamos isso em `app/graph/build.py`.
-- **LangGraph: "No such command 'server'"**: use `langgraph dev --config langgraph.json`. Os alvos do Make já fazem isso para você.
-- **Studio URL com 0.0.0.0**: substitua `0.0.0.0` por `localhost` na URL do Studio (ex: `http://localhost:2024`).
-- **Ruff UP038**: troque `isinstance(x, (A, B))` por `isinstance(x, A | B)`.
-- **mypy: Unused "type: ignore"**: remova comentários supérfluos; tipagem foi ajustada nos módulos.
-- **Falta do pgvector**: garanta que `make db-init` rodou (criação da extensão); verifique logs do container.
-- **OPENAI_API_KEY ausente**: embeddings/LLM falharão; defina no `.env`.
-- **Permissões de arquivo CSV**: confira `data/raw/analytics` e *paths* passados aos scripts.
-- **Arquivos temporários**: Todos os arquivos de debug e fallbacks antigos foram removidos na limpeza.
+```python
+from app.infra.tracing import get_tracer
+
+tracer = get_tracer(__name__)
+
+with tracer.start_as_current_span("query_processing") as span:
+    span.set_attribute("query.type", "analytics")
+    span.set_attribute("query.complexity", "high")
+    # Query processing
+```
+

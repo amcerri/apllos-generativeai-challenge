@@ -1,0 +1,89 @@
+PEDIDO MÉDICO - HOSPITAL
+
+Hospital: Santa Maria
+Setor: Cardiologia
+Data: 25/01/2025
+Solicitante: Dr. João Santos
+CRM: 123456
+
+EQUIPAMENTOS SOLICITADOS:
+
+1. MONITOR CARDIACO MULTIPARAMETRICO
+   Modelo: Philips IntelliVue MP70
+   Quantidade: 3 unidades
+   Preço unitário: R$ 45.000,00
+   Total: R$ 135.000,00
+
+2. DESFIBRILADOR AUTOMATICO
+   Modelo: Zoll AED Plus
+   Quantidade: 5 unidades
+   Preço unitário: R$ 8.500,00
+   Total: R$ 42.500,00
+
+3. VENTILADOR MECANICO
+   Modelo: Drager Evita V300
+   Quantidade: 2 unidades
+   Preço unitário: R$ 120.000,00
+   Total: R$ 240.000,00
+
+4. BOMBA DE INFUSAO
+   Modelo: B. Braun Infusomat Space
+   Quantidade: 10 unidades
+   Preço unitário: R$ 3.200,00
+   Total: R$ 32.000,00
+
+5. OXIMETRO DE PULSO
+   Modelo: Masimo Radical-7
+   Quantidade: 15 unidades
+   Preço unitário: R$ 1.800,00
+   Total: R$ 27.000,00
+
+6. ELETROCARDIOGRAFO
+   Modelo: GE MAC 5500
+   Quantidade: 2 unidades
+   Preço unitário: R$ 25.000,00
+   Total: R$ 50.000,00
+
+ACESSORIOS E CONSUMIVEIS:
+
+- Cabos de ECG: 50 unidades - R$ 2.500,00
+- Sensores de oximetria: 100 unidades - R$ 5.000,00
+- Cateteres venosos: 200 unidades - R$ 8.000,00
+- Seringas descartáveis: 500 unidades - R$ 1.500,00
+- Luvas cirúrgicas: 1.000 pares - R$ 2.000,00
+
+TREINAMENTO E SUPORTE:
+
+- Treinamento técnico: 40 horas - R$ 15.000,00
+- Suporte técnico: 2 anos - R$ 25.000,00
+- Manutenção preventiva: 2 anos - R$ 30.000,00
+
+RESUMO FINANCEIRO:
+
+Subtotal equipamentos: R$ 526.500,00
+Acessórios e consumíveis: R$ 19.000,00
+Treinamento e suporte: R$ 70.000,00
+Frete e instalação: R$ 10.000,00
+Impostos (18%): R$ 112.650,00
+TOTAL: R$ 738.150,00
+
+CONDIÇÕES ESPECIAIS:
+
+- Garantia: 3 anos para equipamentos
+- Calibração: Inclusa por 2 anos
+- Treinamento: Para toda equipe médica
+- Instalação: Inclusa com certificação
+- Suporte 24h: Incluso por 2 anos
+
+APROVAÇÕES:
+
+Solicitante: Dr. João Santos
+Chefe do Setor: Dr. Maria Costa
+Diretor Médico: Dr. Pedro Oliveira
+Data: 25/01/2025
+
+OBSERVAÇÕES:
+
+Este pedido é urgente devido à necessidade de modernização
+do setor de cardiologia. Os equipamentos devem ser entregues
+em até 30 dias para não comprometer o atendimento aos pacientes.

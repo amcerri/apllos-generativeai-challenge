@@ -1,0 +1,17 @@
+PEDIDO DE COMPRA - SIMPLES
+
+Cliente: João Silva
+Data: 15/01/2025
+Pedido: #12345
+
+Itens:
+- Notebook Dell Inspiron 15: 1 unidade - R$ 2.500,00
+- Mouse sem fio: 2 unidades - R$ 50,00 cada
+- Teclado mecânico: 1 unidade - R$ 200,00
+
+Subtotal: R$ 2.800,00
+Frete: R$ 25,00
+Total: R$ 2.825,00
+
+Forma de pagamento: Cartão de crédito
+Prazo de entrega: 5 dias úteis

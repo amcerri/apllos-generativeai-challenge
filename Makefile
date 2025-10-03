@@ -7,7 +7,7 @@
 
 # ----- Core tools & project metadata -----------------------------------------
 SHELL          := /bin/bash
-PROJECT        ?= $(notdir $(CURDIR))
+PROJECT        ?= apllos-generativeai-challenge
 DOCKER         ?= docker
 COMPOSE        ?= docker compose
 COMPOSE_FILE   ?= docker-compose.yml
@@ -245,7 +245,12 @@ docker-remove: ## Remove all containers
 docker-clean: ## Remove containers + images + volumes
 	@echo "Cleaning Docker resources..."
 	@$(MAKE) docker-remove
+	@echo "Removing images..."
 	@$(DOCKER) rmi $(APP_IMAGE) 2>/dev/null || true
+	@$(DOCKER) image prune -f
+	@echo "Removing volumes..."
+	@$(DOCKER) volume rm $(PROJECT)_pgdata 2>/dev/null || true
+	@$(DOCKER) volume rm $(PROJECT)_postgres_data 2>/dev/null || true
 	@$(DOCKER) volume prune -f
 	@echo "Docker resources cleaned."
 
@@ -489,6 +494,12 @@ batch-query: ## Process multiple queries from YAML file (INPUT="queries.yaml" [O
 	@if [ -z "$(INPUT)" ]; then echo "Error: INPUT parameter required. Usage: make batch-query INPUT=queries.yaml [OUTPUT=results.md]"; exit 1; fi
 	@echo "Processing batch queries from $(INPUT)..."
 	@$(PY) scripts/batch_query.py --input "$(INPUT)" $(if $(OUTPUT),--output "$(OUTPUT)")
+
+.PHONY: test-commerce
+test-commerce: ## Test Commerce Agent with batch queries (INPUT="test_commerce.yaml" [OUTPUT="commerce_test.md"])
+	@if [ -z "$(INPUT)" ]; then echo "Error: INPUT parameter required. Usage: make test-commerce INPUT=test_commerce.yaml [OUTPUT=commerce_test.md]"; exit 1; fi
+	@echo "Testing Commerce Agent with $(INPUT)..."
+	@$(PY) scripts/test_commerce_batch.py --input "$(INPUT)" $(if $(OUTPUT),--output "$(OUTPUT)")
 
 .PHONY: logs
 logs: ## Show real-time logs from LangGraph Studio container

@@ -47,6 +47,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 # Tracing (optional; single alias)
 start_span: Any
@@ -91,10 +97,20 @@ __all__ = ["CommerceSummarizer"]
 class CommerceSummarizer:
     """Compose a PT‑BR summary from a normalized commerce document."""
 
-    TOP_ITEMS: Final[int] = 3
-
     def __init__(self) -> None:
         self.log = get_logger("agent.commerce.summarizer")
+        self._config = get_config()
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            self.top_items = 3
+            self.top_items_display = 10
+            self.max_items_display = 5
+        else:
+            summarizer_config = self._config.get_commerce_summarizer_config()
+            self.top_items = summarizer_config.get("top_items", 3)
+            self.top_items_display = summarizer_config.get("top_items_display", 10)
+            self.max_items_display = summarizer_config.get("max_items_display", 5)
 
     def summarize(self, doc: CommerceDocLike | Mapping[str, Any]) -> Any:
         """Return an Answer-like payload with a business-friendly summary.
@@ -105,7 +121,7 @@ class CommerceSummarizer:
         """
         with start_span("agent.commerce.summarize"):
             dv = _DocView.from_obj(doc)
-            text = _render_ptbr(dv, top_k=self.TOP_ITEMS)
+            text = _render_ptbr(dv, top_k=self.top_items, top_items_display=self.top_items_display, max_items_display=self.max_items_display)
 
             meta = {
                 "doc_type": dv.doc_type,
@@ -238,7 +254,7 @@ class _DocView:
 # ---------------------------------------------------------------------------
 
 
-def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
+def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_items_display: int = 5) -> str:
     tipo = _label_doc_type(doc.doc_type)
     moeda = doc.currency or "(não informada)"
     simbolo = _currency_symbol(moeda)
@@ -284,9 +300,9 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
         linhas.append("ITENS PRINCIPAIS")
         linhas.append("-" * 30)
         
-        # Para poucos itens (até 10), mostrar todos. Para muitos, usar top_k
+        # Para poucos itens (até top_items_display), mostrar todos. Para muitos, usar max_items_display
         total_itens = len(itens_ordenados)
-        if total_itens <= 10:
+        if total_itens <= top_items_display:
             # Mostrar todos os itens
             for i, it in enumerate(itens_ordenados, 1):
                 qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
@@ -299,8 +315,8 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
                 linhas.append(f"   Total da linha: {lt}")
                 linhas.append("")
         else:
-            # Para muitos itens, usar top_k e mostrar resumo
-            for i, it in enumerate(itens_ordenados[: max(1, int(top_k))], 1):
+            # Para muitos itens, usar max_items_display e mostrar resumo
+            for i, it in enumerate(itens_ordenados[: max(1, int(max_items_display))], 1):
                 qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
                 up = _fmt_money(it.unit_price, simbolo)
                 lt = _fmt_money(it.line_total, simbolo)
@@ -312,8 +328,8 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
                 linhas.append("")
             
             # Mostrar total de itens se houver mais que os mostrados
-            if total_itens > top_k:
-                linhas.append(f"... e mais {total_itens - top_k} itens")
+            if total_itens > max_items_display:
+                linhas.append(f"... e mais {total_itens - max_items_display} itens")
                 linhas.append("")
 
     # === RISCOS E ALERTAS ===
@@ -321,9 +337,14 @@ def _render_ptbr(doc: _DocView, *, top_k: int) -> str:
         linhas.append("RISCOS E ALERTAS")
         linhas.append("-" * 30)
         for r in doc.risks[:10]:
-            # Explicar cada risco de forma clara
-            explicacao = _explicar_risco(r)
-            linhas.append(f"- {r}: {explicacao}")
+            # Verificar se é um erro de LLM
+            if r.startswith("llm_error:"):
+                error_type = r.replace("llm_error:", "")
+                linhas.append(f"- Erro de processamento ({error_type}): Falha na análise automática do documento")
+            else:
+                # Explicar cada risco de forma clara
+                explicacao = _explicar_risco(r)
+                linhas.append(f"- {r}: {explicacao}")
         linhas.append("")
 
     # === INTERAÇÃO ===

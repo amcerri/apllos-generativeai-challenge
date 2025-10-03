@@ -56,6 +56,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 try:  # Optional tracing
     from app.infra.tracing import start_span as _start_span
@@ -183,8 +189,6 @@ class AnalyticsPlanner:
     prompts authored under `app/prompts/analytics/`.
     """
 
-    DEFAULT_PREVIEW_LIMIT: Final[int] = 200
-    MAX_SAFE_LIMIT: Final[int] = 5000
     
     # JSON Schema for LLM structured outputs
     PLAN_SCHEMA: Final[dict[str, Any]] = {
@@ -202,6 +206,20 @@ class AnalyticsPlanner:
 
     def __init__(self) -> None:
         self.log = get_logger("agent.analytics.planner")
+        self._config = get_config()
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            self.default_preview_limit = 200
+            self.max_safe_limit = 5000
+            self.examples_count = 3
+            self.max_examples = 5
+        else:
+            planner_config = self._config.get_analytics_planner_config()
+            self.default_preview_limit = planner_config.get("default_limit", 200)
+            self.max_safe_limit = planner_config.get("max_limit", 5000)
+            self.examples_count = planner_config.get("examples_count", 3)
+            self.max_examples = planner_config.get("max_examples", 5)
         
         # Try to initialize LLM backend
         self._llm_backend = None
@@ -235,8 +253,8 @@ class AnalyticsPlanner:
             PlannerPlan: Structured plan with SQL and guardrail metadata.
         """
 
-        cap = int(default_limit or self.DEFAULT_PREVIEW_LIMIT)
-        cap = max(1, min(cap, self.MAX_SAFE_LIMIT))
+        cap = int(default_limit or self.default_preview_limit)
+        cap = max(1, min(cap, self.max_safe_limit))
 
         with start_span("agent.analytics.plan", {"thread_id": thread_id}):
             logger = self.log.bind(component="agent.analytics", event="plan", thread_id=thread_id)
@@ -358,7 +376,7 @@ class AnalyticsPlanner:
         # Prepare messages with few-shot examples
         messages = []
         
-        # Add relevant examples (use up to 3 most relevant ones)
+        # Add relevant examples (use configured number of most relevant ones)
         if self._examples:
             # Simple relevance: find examples with similar keywords
             query_lower = query.lower()
@@ -375,9 +393,10 @@ class AnalyticsPlanner:
                 if score > 0:
                     relevant_examples.append((score, example))
             
-            # Sort by relevance and take top 3
+            # Sort by relevance and take configured number
             relevant_examples.sort(key=lambda x: x[0], reverse=True)
-            for _, example in relevant_examples[:3]:
+            examples_count = self.examples_count if hasattr(self, 'examples_count') else 3
+            for _, example in relevant_examples[:examples_count]:
                 messages.append({"role": "user", "content": example["input"]})
                 messages.append({"role": "assistant", "content": json.dumps(example["output"], ensure_ascii=False)})
         
@@ -440,6 +459,10 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
                     line = line.strip()
                     if line:
                         examples.append(json.loads(line))
+            
+            # Limit examples based on configuration
+            max_examples = self.max_examples if hasattr(self, 'max_examples') else 5
+            examples = examples[:max_examples]
             
             self.log.info(f"Loaded {len(examples)} examples for few-shot prompting")
             return examples
