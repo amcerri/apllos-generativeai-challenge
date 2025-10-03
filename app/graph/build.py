@@ -214,13 +214,6 @@ except Exception:
     LLMCommerceExtractor = None
 
 
-CommerceConversationHandler: Any
-try:
-    from app.agents.commerce.conversation import CommerceConversationHandler as _CommerceConversationHandler
-
-    CommerceConversationHandler = _CommerceConversationHandler
-except Exception:
-    CommerceConversationHandler = None
 
 CommerceSummarizer: Any
 try:
@@ -296,10 +289,7 @@ class GraphState(TypedDict, total=False):
     params: Annotated[Mapping[str, Any] | None, _pick_last]
     limit: Annotated[int | None, _pick_last]
 
-    # Commerce
-    processed_document: Annotated[Mapping[str, Any] | None, _pick_last]
-    document_context: Annotated[Mapping[str, Any] | None, _pick_last]
-    conversation_mode: Annotated[bool, _pick_last]
+    # Analytics
     analytics_rows: Annotated[list[Mapping[str, Any]] | None, _pick_last]
 
     # Knowledge
@@ -309,8 +299,6 @@ class GraphState(TypedDict, total=False):
 
     # Commerce
     processed_document: Annotated[Mapping[str, Any] | None, _pick_last]
-    document_context: Annotated[Mapping[str, Any] | None, _pick_last]
-    conversation_mode: Annotated[bool, _pick_last]
 
     # Final answer
     answer: Annotated[Mapping[str, Any] | None, _pick_last]
@@ -359,7 +347,6 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
     document_processor = DocumentProcessor() if DocumentProcessor is not None else _StubDocumentProcessor()
     llm_extractor = LLMCommerceExtractor() if LLMCommerceExtractor is not None else _StubLLMCommerceExtractor()
-    conversation_handler = CommerceConversationHandler() if CommerceConversationHandler is not None else _StubCommerceConversationHandler()
     summarizer = (
         CommerceSummarizer() if CommerceSummarizer is not None else _StubCommerceSummarizer()
     )
@@ -380,7 +367,6 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 "knowledge.answer",
             "commerce.process_doc",
             "commerce.extract_llm",
-            "commerce.conversation",
             "commerce.summarize",
                 "triage.handle",
             ],
@@ -394,7 +380,6 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
         def node_route(state: GraphState) -> dict[str, Any]:
             q = str(state.get("query", "")).strip()
             attachment = state.get("attachment")
-            document_context = state.get("document_context")
             
             # If there's an attachment, modify the query to include attachment context
             if attachment:
@@ -402,17 +387,9 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 content_preview = attachment.get("content", "")[:200] + "..." if len(attachment.get("content", "")) > 200 else attachment.get("content", "")
                 q = f"{q} (Anexo: {filename} - {content_preview})"
             
-            # If there's existing document context (follow-up question), add context hint
-            if document_context and not attachment:
-                doc_type = document_context.get("doc_type", "documento")
-                q = f"{q} (Pergunta sobre {doc_type} já processado anteriormente)"
-            
             log.info("Route node debug", 
                     original_query=q,
-                    has_attachment=bool(attachment),
-                    has_document_context=bool(document_context),
-                    document_context_type=document_context.get("doc_type") if document_context else None,
-                    document_context_keys=list(document_context.keys()) if document_context else None)
+                    has_attachment=bool(attachment))
             
             with start_span("node.route"):
                 dec = classifier.classify(q)
@@ -584,11 +561,9 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
         # Commerce pipeline
         def node_co_process_doc(state: GraphState) -> dict[str, Any]:
-            """Process attachment and extract text, or check for existing context."""
+            """Process attachment and extract text."""
             with start_span("node.commerce.process_doc"):
                 attachment = state.get("attachment")
-                document_context = state.get("document_context")
-                query = state.get("query", "")
                 
                 # Check if attachment is valid (has both filename and content)
                 has_valid_attachment = attachment and attachment.get("filename") and attachment.get("content")
@@ -596,57 +571,26 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 # Debug logging
                 log.info("Commerce process_doc debug", 
                         has_attachment=bool(attachment),
-                        has_valid_attachment=has_valid_attachment,
-                        has_document_context=bool(document_context),
-                        has_query=bool(query),
-                        state_keys=list(state.keys()),
-                        document_context_keys=list(document_context.keys()) if document_context else None)
+                        has_valid_attachment=has_valid_attachment)
                 
-                # If we have document context and this is a follow-up question (no valid new attachment),
-                # switch to conversation mode
-                if document_context and not has_valid_attachment and query:
-                    log.info("Found existing document context with query, no new attachment, switching to conversation mode")
-                    return {"conversation_mode": True}
+                # If no valid attachment, return error
+                if not has_valid_attachment:
+                    log.info("No valid attachment, returning error")
+                    return {"processed_document": {"text": "", "success": False, "warnings": ["no_attachment"]}}
                 
-                # If we have document context but no query, this is a new document processing
-                # We should not be here if there's no query, but let's handle it
-                if document_context and not query:
-                    log.info("Found existing document context but no query, returning existing context")
-                    return {"conversation_mode": False}
-                
-                # If we have document context and a valid new attachment, this is a new document
-                # Clear the old context and process the new attachment
-                # BUT: if we also have a query, this might be a follow-up question with stale attachment
-                if document_context and has_valid_attachment:
-                    if query:
-                        # This is likely a follow-up question with stale attachment from previous processing
-                        # Don't process the attachment again, just use the existing context
-                        log.info("Follow-up question with stale attachment, using existing context")
-                        return {"conversation_mode": True}
-                    else:
-                        # This is a new document processing
-                        log.info("New attachment with existing context, clearing old context")
-                        result = document_processor.process_attachment(attachment)
-                        return {"processed_document": result, "conversation_mode": False, "document_context": None}
-                
-                # If no valid attachment and no context, return error
-                if not has_valid_attachment and not document_context:
-                    log.info("No valid attachment and no context, returning error")
-                    return {"processed_document": {"text": "", "success": False, "warnings": ["no_attachment", "no_context"]}}
-                
-                # Process new attachment
+                # Process attachment
                 result = document_processor.process_attachment(attachment)
-                return {"processed_document": result, "conversation_mode": False}
+                return {"processed_document": result}
 
         def node_co_extract_llm(state: GraphState) -> dict[str, Any]:
-            """Extract structured data using LLM and store in context."""
+            """Extract structured data using LLM."""
             with start_span("node.commerce.extract_llm"):
                 processed = state.get("processed_document", {})
                 text = processed.get("text", "")
                 metadata = processed.get("metadata", {})
                 
                 if not text or not processed.get("success", False):
-                    return {"processed_document": processed, "document_context": None}
+                    return {"processed_document": processed}
                 
                 # Extract using LLM
                 document = llm_extractor.extract(text=text, metadata=metadata)
@@ -654,42 +598,15 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 # Update processed document with extraction result
                 processed["document"] = document
                 
-                # Store document in context for future conversations
-                return {
-                    "processed_document": processed,
-                    "document_context": document
-                }
+                return {"processed_document": processed}
 
 
-        def node_co_conversation(state: GraphState) -> dict[str, Any]:
-            """Handle questions about existing document."""
-            with start_span("node.commerce.conversation"):
-                query = state.get("query", "")
-                document_context = state.get("document_context")
-                
-                # Debug logging
-                log.info("Commerce conversation debug", 
-                        query=query, 
-                        has_document_context=bool(document_context),
-                        state_keys=list(state.keys()))
-                
-                if not document_context:
-                    return {"answer": {"text": "❌ Nenhum documento encontrado no contexto da sessão. Por favor, envie um documento primeiro.", "meta": {"error": "no_context"}}}
-                
-                # Answer question using document context
-                response = conversation_handler.answer_question(
-                    question=query,
-                    context={"document": document_context}
-                )
-                
-                return {"answer": response}
 
         def node_co_summarize(state: GraphState) -> dict[str, Any]:
             """Summarize processed document."""
             with start_span("node.commerce.summarize"):
                 processed = state.get("processed_document", {})
                 document = processed.get("document")
-                document_context = state.get("document_context")
                 
                 if not document:
                     return {"answer": {"text": "❌ Erro ao processar documento.", "meta": {"error": "no_document"}}}
@@ -701,12 +618,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 if isinstance(ans, dict) and "meta" in ans:
                     ans["meta"]["processing_method"] = processed.get("method", "unknown")
                     ans["meta"]["processing_warnings"] = processed.get("warnings", [])
-                
-                # Preserve document_context for future conversations
-                return {
-                    "answer": ans,
-                    "document_context": document_context
-                }
+
+                return {"answer": ans}
 
         # Triage
         def node_tr_handle(state: GraphState) -> dict[str, Any]:
@@ -728,7 +641,6 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
         sg.add_node("commerce.process_doc", node_co_process_doc)
         sg.add_node("commerce.extract_llm", node_co_extract_llm)
-        sg.add_node("commerce.conversation", node_co_conversation)
         sg.add_node("commerce.summarize", node_co_summarize)
 
         sg.add_node("triage.handle", node_tr_handle)
@@ -748,22 +660,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             },
         )
         
-        # Commerce routing: check if there's an attachment or if we should go to conversation
-        def commerce_route(state: GraphState) -> str:
-            conversation_mode = state.get("conversation_mode", False)
-            log.info("Commerce routing decision", 
-                    conversation_mode=conversation_mode,
-                    state_keys=list(state.keys()))
-            return "commerce.conversation" if conversation_mode else "commerce.extract_llm"
-        
-        sg.add_conditional_edges(
-            "commerce.process_doc",
-            commerce_route,
-            {
-                "commerce.conversation": "commerce.conversation",
-                "commerce.extract_llm": "commerce.extract_llm",
-            },
-        )
+        # Commerce routing: always go to extract_llm after processing
+        sg.add_edge("commerce.process_doc", "commerce.extract_llm")
 
         # Pipelines
         sg.add_edge("analytics.plan", "analytics.exec")
@@ -776,7 +674,6 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
         sg.add_edge("commerce.extract_llm", "commerce.summarize")
         sg.add_edge("commerce.summarize", END)
-        sg.add_edge("commerce.conversation", END)
 
         sg.add_edge("triage.handle", END)
 
@@ -937,14 +834,6 @@ class _StubLLMCommerceExtractor:
 
 
 
-class _StubCommerceConversationHandler:
-    def answer_question(self, *, question: str, context: dict[str, Any], thread_id: str | None = None) -> dict[str, Any]:
-        return {
-            "text": "Resposta sobre o documento comercial (modo stub).",
-            "meta": {"stub": True},
-            "artifacts": {},
-            "followups": []
-        }
 
 
 class _StubCommerceSummarizer:

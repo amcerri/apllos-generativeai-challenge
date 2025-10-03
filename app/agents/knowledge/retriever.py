@@ -59,6 +59,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 # Tracing (optional; single alias to avoid mypy signature clashes)
 start_span: Any
@@ -136,28 +142,48 @@ class KnowledgeRetriever:
         distance: str = "cosine",
         candidate_factor: int = 4,
     ) -> None:
-        self.table = _validate_table_name(table or self.DEFAULT_TABLE)
-        self.model = model or self.DEFAULT_MODEL
+        self.log = get_logger("agent.knowledge.retriever")
+        self._config = get_config()
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            default_table = self.DEFAULT_TABLE
+            default_model = self.DEFAULT_MODEL
+        else:
+            retrieval_config = self._config.get_knowledge_retrieval_config()
+            default_table = retrieval_config.get("index", self.DEFAULT_TABLE)
+            default_model = self._config.get_llm_model("embeddings")
+        
+        self.table = _validate_table_name(table or default_table)
+        self.model = model or default_model
         self.distance = distance
         self.candidate_factor = max(1, int(candidate_factor))
-        self.log = get_logger("agent.knowledge.retriever")
 
     # Public API -------------------------------------------------------------
     def retrieve(
         self,
         query: str,
         *,
-        top_k: int = 5,
-        min_score: float = 0.6,
+        top_k: int | None = None,
+        min_score: float | None = None,
         filters: Mapping[str, Any] | None = None,
     ) -> RetrievalResult:
         """Return top‑K hits above `min_score` with light deduplication.
 
         If there are zero hits ≥ `min_score`, `no_context` will be True.
         """
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            default_top_k = 5
+            default_min_score = 0.6
+        else:
+            retrieval_config = self._config.get_knowledge_retrieval_config()
+            default_top_k = retrieval_config.get("top_k", 5)
+            default_min_score = retrieval_config.get("min_score", 0.6)
 
-        top_k_i = max(1, int(top_k))
-        min_score_f = min(1.0, max(0.0, float(min_score)))
+        top_k_i = max(1, int(top_k or default_top_k))
+        min_score_f = min(1.0, max(0.0, float(min_score or default_min_score)))
 
         if not (query or "").strip():
             return RetrievalResult(hits=[], elapsed_ms=0.0, used_filters={}, no_context=True)

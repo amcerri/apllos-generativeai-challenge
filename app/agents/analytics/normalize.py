@@ -58,6 +58,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 # Tracing (optional; keep a single alias)
 start_span: Any
@@ -146,6 +152,14 @@ class AnalyticsNormalizer:
         result_view = _as_result(result)
         user_query = question or "Consulta de dados"
         
+        # For penetration queries with large datasets, use fallback directly
+        if (result_view.row_count > 500 and 
+            ('penetração' in user_query.lower() or 'penetration' in user_query.lower()) and
+            result_view.rows and 
+            'state' in result_view.rows[0] and 'category' in result_view.rows[0]):
+            self.log.info("Using fallback for large penetration query")
+            return self._fallback_normalize(user_query, plan_view, result_view)
+        
         # Try LLM-powered normalization with fallback
         try:
             llm_result = self._normalize_with_llm(user_query, plan_view, result_view)
@@ -189,6 +203,22 @@ class AnalyticsNormalizer:
         if not api_key:
             return None
         
+        # Get configuration
+        config = get_config()
+        if config is None:
+            # Fallback to hardcoded values if config not available
+            model = "gpt-4o-mini"
+            max_tokens = 800
+            temperature = 0.1
+            timeout = 10.0
+            max_examples = 1
+        else:
+            model = config.get_llm_model("analytics_normalizer")
+            max_tokens = config.get_llm_max_tokens("analytics_normalizer")
+            temperature = config.get_llm_temperature("analytics_normalizer")
+            timeout = config.get_llm_timeout("analytics_normalizer")
+            max_examples = config.get("analytics.normalizer.max_examples_in_prompt", 1)
+        
         client = OpenAI(api_key=api_key)
         
         # Prepare compact input for LLM (convert non-serializable types)
@@ -208,12 +238,17 @@ class AnalyticsNormalizer:
             else:
                 return obj
         
+        # For large datasets, use a sample for LLM processing but show all data in response
+        sample_size = min(50, len(result.rows)) if result.rows else 0
+        sample_rows = result.rows[:sample_size] if result.rows else []
+        
         input_data = {
             "user_query": user_query,
             "sql": plan.sql,
-            "rows": convert_for_json(result.rows[:5]),  # Convert non-serializable types and limit to 5 rows
+            "rows": convert_for_json(sample_rows),  # Convert non-serializable types - use sample for LLM
             "row_count": result.row_count,
-            "limit_applied": result.limit_applied
+            "limit_applied": result.limit_applied,
+            "has_more_data": len(result.rows) > sample_size
         }
         
         # Build compact messages
@@ -221,17 +256,17 @@ class AnalyticsNormalizer:
             {"role": "system", "content": self._system_prompt}
         ]
         
-        # Add only 1 most relevant example for efficiency
-        if self._examples:
-            example = self._examples[0]  # Use first example
-            messages.append({
-                "role": "user", 
-                "content": json.dumps(example["input"], ensure_ascii=False)
-            })
-            messages.append({
-                "role": "assistant", 
-                "content": json.dumps(example["output"], ensure_ascii=False)
-            })
+        # Add examples based on configuration
+        if self._examples and max_examples > 0:
+            for example in self._examples[:max_examples]:
+                messages.append({
+                    "role": "user", 
+                    "content": json.dumps(example["input"], ensure_ascii=False)
+                })
+                messages.append({
+                    "role": "assistant", 
+                    "content": json.dumps(example["output"], ensure_ascii=False)
+                })
         
         # Add current query
         messages.append({
@@ -239,14 +274,14 @@ class AnalyticsNormalizer:
             "content": json.dumps(input_data, ensure_ascii=False)
         })
         
-        # Call LLM with timeout
+        # Call LLM with configured parameters
         try:
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model,
                 messages=messages,
-                max_tokens=800,
-                temperature=0.1,
-                timeout=10.0  # 10 second timeout
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout
             )
         except Exception as e:
             # Silently fail for LLM API issues
@@ -255,14 +290,150 @@ class AnalyticsNormalizer:
         # Parse response
         response_text = response.choices[0].message.content.strip()
         try:
-            return json.loads(response_text)
+            response_data = json.loads(response_text)
+            
+            # For large datasets, append all data after LLM analysis
+            if input_data.get("has_more_data", False) and result.rows:
+                if "text" in response_data:
+                    response_data["text"] += self._format_all_data(result.rows, user_query)
+            
+            return response_data
         except json.JSONDecodeError:
-            # Try to extract JSON from response
-            import re
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
+            # Try to extract JSON from response if enabled in config
+            if config and config.get("analytics.normalizer.json_extraction_regex", True):
+                import re
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    response_data = json.loads(json_match.group())
+                    # For large datasets, append all data after LLM analysis
+                    if input_data.get("has_more_data", False) and result.rows:
+                        if "text" in response_data:
+                            response_data["text"] += self._format_all_data(result.rows, user_query)
+                    return response_data
             return None
+    
+    def _format_all_data(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Format all data for large datasets."""
+        if not rows:
+            return ""
+        
+        # For very large datasets, limit the display to prevent timeout
+        max_display = 2000  # Increased limit for penetration queries
+        if len(rows) > max_display:
+            rows = rows[:max_display]
+            truncated = True
+        else:
+            truncated = False
+        
+        # Check if this is a penetration query (state + category)
+        if len(rows) > 0:
+            first_row = rows[0]
+            if 'state' in first_row and 'category' in first_row:
+                result = self._format_penetration_data(rows)
+                if truncated:
+                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
+                return result
+            elif 'state' in first_row:
+                result = self._format_state_data(rows)
+                if truncated:
+                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
+                return result
+            elif 'category' in first_row:
+                result = self._format_category_data(rows)
+                if truncated:
+                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
+                return result
+        
+        # Generic formatting for other queries
+        text_parts = ["\n\nDados completos:"]
+        for i, row in enumerate(rows, 1):
+            values = []
+            for k, v in row.items():
+                if v is not None:
+                    if isinstance(v, (int, float)) and v > 1000:
+                        values.append(f"{k}: {v:,.0f}")
+                    else:
+                        values.append(f"{k}: {v}")
+            if values:
+                text_parts.append(f"{i}. {', '.join(values)}")
+        
+        if truncated:
+            text_parts.append(f"\n(Exibindo {max_display} de {len(rows)} registros)")
+        
+        return "\n".join(text_parts)
+    
+    def _format_penetration_data(self, rows: list[Mapping[str, Any]]) -> str:
+        """Format penetration data by state and category."""
+        from collections import defaultdict
+        
+        # Group by state
+        state_data = defaultdict(dict)
+        for row in rows:
+            state = row.get('state', 'Unknown')
+            category = row.get('category', 'Unknown')
+            penetration = row.get('penetration', 0)
+            
+            # Skip None values
+            if state is None or category is None:
+                continue
+                
+            state_data[state][category] = penetration
+        
+        # Use more efficient string building
+        text_parts = ["\n\nPenetração por estado:"]
+        for state in sorted(state_data.keys()):
+            categories = state_data[state]
+            # Filter out None values and sort safely
+            category_parts = []
+            for cat, val in categories.items():
+                if cat is not None and val is not None:
+                    category_parts.append(f"{cat}: {val}")
+            
+            if category_parts:
+                category_parts.sort()  # Sort the list instead of using sorted() on dict items
+                text_parts.append(f"{state}: {', '.join(category_parts)}")
+        
+        return "\n".join(text_parts)
+    
+    def _format_state_data(self, rows: list[Mapping[str, Any]]) -> str:
+        """Format data grouped by state."""
+        text_parts = ["\n\nDados por estado:"]
+        for row in rows:
+            state = row.get('state', 'Unknown')
+            if state is None:
+                continue
+                
+            values = []
+            for k, v in row.items():
+                if k != 'state' and v is not None:
+                    if isinstance(v, (int, float)) and v > 1000:
+                        values.append(f"{k}: {v:,.0f}")
+                    else:
+                        values.append(f"{k}: {v}")
+            if values:
+                text_parts.append(f"{state}: {', '.join(values)}")
+        
+        return "\n".join(text_parts)
+    
+    def _format_category_data(self, rows: list[Mapping[str, Any]]) -> str:
+        """Format data grouped by category."""
+        text_parts = ["\n\nDados por categoria:"]
+        for row in rows:
+            category = row.get('category', 'Unknown')
+            if category is None:
+                continue
+                
+            values = []
+            for k, v in row.items():
+                if k != 'category' and v is not None:
+                    if isinstance(v, (int, float)) and v > 1000:
+                        values.append(f"{k}: {v:,.0f}")
+                    else:
+                        values.append(f"{k}: {v}")
+            if values:
+                text_parts.append(f"{category}: {', '.join(values)}")
+        
+        return "\n".join(text_parts)
     
     def _fallback_normalize(
         self, 
@@ -295,20 +466,9 @@ class AnalyticsNormalizer:
             # Multiple rows
             text = f"Encontrados {result.row_count} registros."
             
-            # Try to show some data if reasonable size
-            if result.row_count <= 10 and result.rows:
-                text += "\n\nDados:"
-                for i, row in enumerate(result.rows[:5], 1):
-                    # Show first few meaningful values
-                    values = []
-                    for k, v in row.items():
-                        if v is not None:
-                            if isinstance(v, (int, float)) and v > 1000:
-                                values.append(f"{k}: {v:,.0f}")
-                            else:
-                                values.append(f"{k}: {v}")
-                    if values:
-                        text += f"\n  {i}. {', '.join(values[:3])}"
+            # Show all data for any size dataset
+            if result.rows:
+                text += self._format_all_data(result.rows, user_query)
         
         return {
             "text": text,

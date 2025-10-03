@@ -1,0 +1,24 @@
+PEDIDO URGENTE!!!
+
+Cliente: Ana Costa
+Data: 22/01/2025
+Ref: PO-URG-001
+
+ITENS:
+1. Laptop HP Pavilion 15 - 1 pç - R$ 3.200,00
+2. Mouse Logitech - 3 pçs - R$ 45,00 cada
+3. Teclado USB - 2 pçs - R$ 120,00 cada
+4. Monitor 24" - 1 pç - R$ 800,00
+5. Webcam HD - 1 pç - R$ 180,00
+
+OBS: Preciso urgente para projeto que começa segunda!
+
+Subtotal: R$ 3.200 + 135 + 240 + 800 + 180 = R$ 4.555,00
+Frete: R$ 35,00
+Total: R$ 4.590,00
+
+Pagamento: PIX
+Entrega: Hoje se possível!
+
+Contato: ana.costa@empresa.com
+Tel: (11) 98765-4321

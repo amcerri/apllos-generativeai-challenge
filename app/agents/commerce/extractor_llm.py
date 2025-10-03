@@ -42,6 +42,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
+# Load environment variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 try:  # Optional logger
     from app.infra.logging import get_logger
 except Exception:  # pragma: no cover - optional
@@ -49,6 +56,12 @@ except Exception:  # pragma: no cover - optional
 
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
+
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
 
 
 # Tracing (optional; single alias)
@@ -85,6 +98,7 @@ class LLMCommerceExtractor:
 
     def __init__(self) -> None:
         self.log = get_logger("agent.commerce.extractor_llm")
+        self._config = get_config()
         self._system_prompt = self._load_system_prompt()
         self._json_schema = self._load_json_schema()
 
@@ -155,9 +169,21 @@ class LLMCommerceExtractor:
         # Create OpenAI client
         client = openai.OpenAI(api_key=api_key)
         
+        # Get configuration values with fallbacks
+        if self._config is None:
+            model = "gpt-4o-mini"
+            temperature = 0.1
+            max_tokens = 4000
+            strict = False
+        else:
+            model = self._config.get_llm_model("commerce_extractor")
+            temperature = self._config.get_llm_temperature("commerce_extractor")
+            max_tokens = self._config.get_llm_max_tokens("commerce_extractor")
+            strict = self._config.get("commerce.extraction.json_schema_strict", False)
+        
         # Call OpenAI with structured output
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Use the configured model
+            model=model,
             messages=[
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": user_message}
@@ -167,11 +193,11 @@ class LLMCommerceExtractor:
                 "json_schema": {
                     "name": "commerce_document",
                     "schema": self._json_schema,
-                    "strict": False
+                    "strict": strict
                 }
             },
-            temperature=0.1,  # Low temperature for consistency
-            max_tokens=4000,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         
         # Parse response
@@ -185,7 +211,7 @@ class LLMCommerceExtractor:
             raise ValueError(f"Invalid JSON response: {e}")
         
         # Add metadata
-        if "meta" not in result:
+        if "meta" not in result or result["meta"] is None:
             result["meta"] = {}
         
         result["meta"].update({

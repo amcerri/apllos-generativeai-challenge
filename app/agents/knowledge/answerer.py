@@ -44,6 +44,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 # Tracing (optional; single alias)
 start_span: Any
@@ -98,11 +104,18 @@ class _HitView:
 class KnowledgeAnswerer:
     """Compose pt‑BR answers from RAG hits with mandatory citations."""
 
-    MAX_CITATIONS: Final[int] = 5
-    MAX_CHARS: Final[int] = 2000
-
     def __init__(self) -> None:
         self.log = get_logger("agent.knowledge.answerer")
+        self._config = get_config()
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            self.max_citations = 5
+            self.max_chars = 2000
+        else:
+            answerer_config = self._config.get_knowledge_answerer_config()
+            self.max_citations = answerer_config.get("max_citations", 5)
+            self.max_chars = answerer_config.get("max_chars_summary", 2000)
 
     def answer(
         self,
@@ -125,8 +138,8 @@ class KnowledgeAnswerer:
         """
 
         hits = _coerce_hits(ranked)
-        max_cit = max_citations or self.MAX_CITATIONS
-        cap_chars = max_chars or self.MAX_CHARS
+        max_cit = max_citations or self.max_citations
+        cap_chars = max_chars or self.max_chars
 
         with start_span("agent.knowledge.answer"):
             if no_context is True or not hits:

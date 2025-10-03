@@ -1,0 +1,108 @@
+PURCHASE ORDER - INTERNATIONAL
+
+==========================================
+VENDOR INFORMATION
+==========================================
+Company: Global Tech Solutions Inc.
+Address: 123 Business Ave, Suite 456
+City: New York, NY 10001
+Country: United States
+Phone: +1 (555) 123-4567
+Email: orders@globaltech.com
+Tax ID: 12-3456789
+
+==========================================
+BUYER INFORMATION
+==========================================
+Company: TechCorp Brasil Ltda
+Address: Av. Paulista, 1000 - Bela Vista
+City: São Paulo - SP 01310-100
+Country: Brazil
+Contact: Roberto Silva
+Phone: +55 11 99999-8888
+Email: roberto@techcorp.com.br
+
+==========================================
+ORDER DETAILS
+==========================================
+PO Number: PO-BR-2025-INT-001
+Order Date: January 25, 2025
+Delivery Date: February 15, 2025
+Payment Terms: Net 30 days
+Currency: USD
+Incoterms: FOB New York
+
+==========================================
+ITEMS REQUESTED
+==========================================
+
+1. CISCO CATALYST 9300 SWITCH
+   Part Number: WS-C9300-48P
+   Quantity: 6 units
+   Unit Price: $2,500.00
+   Extended Price: $15,000.00
+
+2. CISCO ASR 1001-X ROUTER
+   Part Number: ASR1001-X
+   Quantity: 2 units
+   Unit Price: $8,500.00
+   Extended Price: $17,000.00
+
+3. CISCO FIREPOWER 2110
+   Part Number: FPR-2110
+   Quantity: 2 units
+   Unit Price: $12,000.00
+   Extended Price: $24,000.00
+
+4. CISCO WIRELESS CONTROLLER 5520
+   Part Number: AIR-CT5520-K9
+   Quantity: 1 unit
+   Unit Price: $3,500.00
+   Extended Price: $3,500.00
+
+5. CISCO ACCESS POINT 9120
+   Part Number: AIR-AP9120I-B-K9
+   Quantity: 20 units
+   Unit Price: $800.00
+   Extended Price: $16,000.00
+
+==========================================
+FINANCIAL SUMMARY
+==========================================
+Subtotal: $75,500.00
+Discount (5%): -$3,775.00
+Subtotal after discount: $71,725.00
+Shipping: $2,500.00
+Insurance: $500.00
+Duties & Taxes: $8,607.00
+TOTAL: $83,332.00
+
+==========================================
+SPECIAL INSTRUCTIONS
+==========================================
+- All equipment must be new and unused
+- Include original documentation and licenses
+- Provide 3-year warranty on all equipment
+- Include installation and configuration services
+- Deliver to São Paulo, Brazil
+- All customs documentation must be included
+
+==========================================
+APPROVALS
+==========================================
+Requested by: Roberto Silva
+Approved by: Maria Santos (IT Director)
+Finance Approval: João Costa (CFO)
+Date: January 25, 2025
+
+==========================================
+TERMS AND CONDITIONS
+==========================================
+1. Payment: Wire transfer within 30 days
+2. Delivery: FOB New York, USA
+3. Warranty: 3 years manufacturer warranty
+4. Support: 1 year technical support included
+5. Installation: Professional installation included
+6. Training: 2-day technical training for 4 people
+
+This purchase order is subject to our standard terms and conditions.

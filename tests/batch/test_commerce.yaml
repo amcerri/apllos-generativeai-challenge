@@ -1,0 +1,32 @@
+# Comprehensive Batch Query Test Suite
+# 8 diverse queries testing the commerce agent with document processing
+
+queries:
+  # =============================================================================
+  # COMMERCE AGENT QUERIES (8) - Document processing
+  # =============================================================================
+  
+  # Document Processing Tests
+  - query: "Analise este documento comercial"
+    attachment: "data/samples/orders/Simple Order.txt"
+  
+  - query: "Processe este pedido de compra"
+    attachment: "data/samples/orders/Complex Order.docx"
+  
+  - query: "Extraia as informações deste pedido"
+    attachment: "data/samples/orders/Messy Order.txt"
+  
+  - query: "Analise este documento internacional"
+    attachment: "data/samples/orders/International Order.txt"
+  
+  - query: "Processe esta ordem de construção"
+    attachment: "data/samples/orders/Construction Order.txt"
+  
+  - query: "Analise este pedido médico"
+    attachment: "data/samples/orders/Medical Order.txt"
+  
+  - query: "Processe este pedido de catering"
+    attachment: "data/samples/orders/Restaurant Order.docx"
+  
+  - query: "Analise este documento incompleto"
+    attachment: "data/samples/orders/Incomplete Order.txt"

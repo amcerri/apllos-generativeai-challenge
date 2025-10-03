@@ -1,0 +1,34 @@
+# ----------------------------------------------------------------------------
+# Observability Configuration
+# Notes
+#   - Logging, tracing, and debugging settings
+#   - Environment variables may override values at runtime
+#   - Booleans are lowercase (YAML spec)
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Logging Configuration
+# ----------------------------------------------------------------------------
+logging:
+  level: INFO
+  structlog_json: false
+  component_prefix: true     # Include component name in logs
+
+# ----------------------------------------------------------------------------
+# Tracing Configuration
+# ----------------------------------------------------------------------------
+tracing:
+  enabled: false
+  sample_ratio: 0.0
+  span_timeout_seconds: 30
+
+# ----------------------------------------------------------------------------
+# Development/Debug Configuration
+# ----------------------------------------------------------------------------
+debug:
+  enable_verbose_logging: false
+  log_sql_queries: false
+  log_llm_requests: false
+  log_llm_responses: false
+  save_debug_files: false
+  debug_output_dir: debug_output

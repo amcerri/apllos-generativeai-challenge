@@ -108,9 +108,6 @@ class QueryAssistant:
             response.raise_for_status()
             thread_data = response.json()
             thread_id = thread_data["thread_id"]
-            # Salvar thread_id para próxima execução (apenas para referência)
-            with open(".last_thread_id", "w") as f:
-                f.write(thread_id)
         
         print(f"🔗 Thread ID: {thread_id}")
         print(f"📝 Input: {json.dumps(input_data, indent=2, ensure_ascii=False)}")

@@ -1,0 +1,13 @@
+PEDIDO INCOMPLETO
+
+Cliente: Empresa Teste
+Data: 25/01/2025
+
+ITENS:
+- Notebook: 1 unidade
+- Mouse: 2 unidades
+- Teclado: 1 unidade
+
+OBS: Preciso urgente!
+
+Contato: teste@empresa.com

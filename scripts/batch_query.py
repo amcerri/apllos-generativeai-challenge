@@ -39,6 +39,12 @@ import httpx
 import yaml
 from dotenv import load_dotenv
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 # Load environment variables
 load_dotenv()
 
@@ -103,11 +109,19 @@ async def process_query(
                 "success": False
             }
         
+        # Get configuration values with fallbacks
+        config = get_config()
+        if config is None:
+            timeout_seconds = 120.0
+        else:
+            batch_config = config.get_batch_processing_config()
+            timeout_seconds = batch_config.get("query_timeout_seconds", 120.0)
+        
         # Create empty thread (like query_assistant.py)
         response = await client.post(
             "http://localhost:2024/threads",
             json={},
-            timeout=120.0
+            timeout=timeout_seconds
         )
         
         if response.status_code != 200:
@@ -203,8 +217,6 @@ async def process_query(
         }
         
     except Exception as e:
-        if files:
-            files["attachment"].close()
         return {
             "query_index": query_index,
             "input": query_data,
@@ -367,8 +379,18 @@ async def main():
     
     print("Processing queries...")
     
+    # Get configuration values with fallbacks
+    config = get_config()
+    if config is None:
+        sequential_processing = True
+        concurrent_limit = 1
+    else:
+        batch_config = config.get_batch_processing_config()
+        sequential_processing = batch_config.get("sequential_processing", True)
+        concurrent_limit = 1 if sequential_processing else args.concurrent
+    
     # Process queries with limited concurrency
-    semaphore = asyncio.Semaphore(args.concurrent)
+    semaphore = asyncio.Semaphore(concurrent_limit)
     
     async def process_with_semaphore(client, query_data, index):
         async with semaphore:
@@ -376,14 +398,19 @@ async def main():
             return await process_query(client, query_data, index)
     
     async with httpx.AsyncClient() as client:
-        # Process queries sequentially to avoid overloading LangGraph Studio
-        results = []
-        for i, query_data in enumerate(queries):
-            try:
-                result = await process_with_semaphore(client, query_data, i)
-                results.append(result)
-            except Exception as e:
-                results.append(e)
+        if sequential_processing:
+            # Process queries sequentially to avoid overloading LangGraph Studio
+            results = []
+            for i, query_data in enumerate(queries):
+                try:
+                    result = await process_with_semaphore(client, query_data, i)
+                    results.append(result)
+                except Exception as e:
+                    results.append(e)
+        else:
+            # Process queries concurrently (if enabled)
+            tasks = [process_with_semaphore(client, query_data, i) for i, query_data in enumerate(queries)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
     
     # Handle any exceptions
     processed_results = []

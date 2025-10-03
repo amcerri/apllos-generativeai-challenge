@@ -1,0 +1,134 @@
+# ----------------------------------------------------------------------------
+# Agent-Specific Configuration
+# Notes
+#   - Configuration specific to individual agents and their behavior
+#   - Environment variables may override values at runtime
+#   - Booleans are lowercase (YAML spec)
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Analytics Agent Configuration
+# ----------------------------------------------------------------------------
+analytics:
+  planner:
+    default_limit: 200      # Applied to non-aggregated queries
+    max_limit: 1000
+    disallow_select_star: true
+    require_limit_on_non_aggregate: true
+    examples_count: 3       # Number of examples to include in prompts
+    max_examples: 5         # Maximum examples to load from file
+  
+  sql:
+    readonly: true
+    max_rows: 5000
+    timeout_ms: 15000
+    allowlist_path: app/routing/allowlist.json
+  
+  executor:
+    explain_analyze: false  # Enable only in staging if needed
+    default_timeout_seconds: 60
+    default_row_cap: 2000
+    max_row_cap: 10000      # Hard upper bound safeguard
+  
+  normalizer:
+    fallback_enabled: true
+    max_examples_in_prompt: 1  # For efficiency
+    json_extraction_regex: true  # Try to extract JSON from malformed responses
+
+# ----------------------------------------------------------------------------
+# Knowledge Agent Configuration
+# ----------------------------------------------------------------------------
+knowledge:
+  retrieval:
+    top_k: 8
+    min_score: 0.18         # Below this -> no_context=true
+    deduplicate: true
+    index: doc_chunks       # pgvector collection/table name
+    default_min_score: 0.01  # Fallback min_score in graph
+  
+  ranker:
+    rerank_top_k: 6
+  
+  answerer:
+    max_tokens: 800
+    require_citations: true
+    max_chars_summary: 2000  # For hit summaries
+    max_citations: 5
+
+# ----------------------------------------------------------------------------
+# Commerce Agent Configuration
+# ----------------------------------------------------------------------------
+commerce:
+  extraction:
+    min_confidence: 0.50
+    json_schema_strict: false  # Allow flexible JSON parsing
+  
+  validation:
+    line_total_tolerance: 0.02   # Accept ±2% difference between sum(lines) and subtotal
+    currency_default: BRL
+  
+  summarizer:
+    max_tokens: 600
+    top_items_display: 10   # Show all items if <= this number
+    max_items_display: 5    # Show top N items if more than top_items_display
+    top_items: 3            # For risk analysis
+  
+  conversation:
+    max_tokens: 1000
+    temperature: 0.3
+    timeout_seconds: 60
+
+# ----------------------------------------------------------------------------
+# Document Processing Configuration
+# ----------------------------------------------------------------------------
+document_processing:
+  # OCR settings
+  ocr:
+    enabled: true
+    language: por  # Portuguese
+    dpi: 300
+  
+  # File size limits
+  max_file_size_mb: 50
+  max_pages_for_ocr: 20
+  
+  # Supported formats
+  supported_formats:
+    - pdf
+    - docx
+    - txt
+    - doc
+
+# ----------------------------------------------------------------------------
+# Batch Processing Configuration
+# ----------------------------------------------------------------------------
+batch_processing:
+  # Query processing
+  sequential_processing: true  # Process queries one by one to avoid overload
+  query_timeout_seconds: 60
+  batch_id_timestamp: true     # Add unique timestamp to prevent caching
+  
+  # Output formatting
+  markdown:
+    include_toc: true
+    include_back_to_top: true
+    separator_style: "---"     # Official markdown separators
+    max_chunk_length: 1000     # For document chunks display
+
+# ----------------------------------------------------------------------------
+# Routing Configuration
+# ----------------------------------------------------------------------------
+routing:
+  confidence_min: 0.55      # Minimum confidence from router for a primary route
+  fallback_enabled: true    # Allow a single analytics<->knowledge fallback
+  rag_hits_threshold: 2     # Minimum RAG hits for knowledge routing
+  rag_min_score_threshold: 0.78  # Minimum RAG score for knowledge routing
+
+# ----------------------------------------------------------------------------
+# Interruptions Configuration
+# ----------------------------------------------------------------------------
+interruptions:
+  require_approval_for:
+    - analytics.execute_sql
+    - commerce.external_call
+  approval_timeout_seconds: 300  # 5 minutes for human approval

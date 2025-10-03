@@ -1,0 +1,26 @@
+# ----------------------------------------------------------------------------
+# Database Configuration
+# Notes
+#   - Database connection and performance settings
+#   - Environment variables may override values at runtime
+#   - Booleans are lowercase (YAML spec)
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# Database Connection Settings
+# ----------------------------------------------------------------------------
+database:
+  url: postgresql+psycopg://app:app@localhost:5432/app
+  pool_size: 10
+  pool_timeout_sec: 10
+  echo: false                  # SQL query logging
+  readonly_default: true       # Default to read-only transactions
+
+# ----------------------------------------------------------------------------
+# Checkpointer Configuration
+# ----------------------------------------------------------------------------
+checkpointer:
+  enabled: true
+  backend: postgres
+  table: checkpoints
+  cleanup_interval_hours: 24   # Clean old checkpoints

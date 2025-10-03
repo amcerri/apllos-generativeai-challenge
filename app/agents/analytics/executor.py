@@ -52,6 +52,12 @@ except Exception:  # pragma: no cover - optional
     def get_logger(component: str, **initial_values: Any) -> Any:
         return _logging.getLogger(component)
 
+try:  # Optional config
+    from app.config import get_config
+except Exception:  # pragma: no cover - optional
+    def get_config():
+        return None
+
 
 # Tracing (optional; use a single alias to avoid mypy signature clashes)
 start_span: Any
@@ -111,11 +117,20 @@ class ExecutorResult:
 class AnalyticsExecutor:
     """Read-only SQL executor with server-side timeout and row cap."""
 
-    DEFAULT_TIMEOUT_S: Final[int] = 30
-    DEFAULT_ROW_CAP: Final[int] = 2000
-
     def __init__(self) -> None:
         self.log = get_logger("agent.analytics.executor")
+        self._config = get_config()
+        
+        # Get configuration values with fallbacks
+        if self._config is None:
+            self.default_timeout_s = 60
+            self.default_row_cap = 2000
+            self.max_row_cap = 10000
+        else:
+            executor_config = self._config.get_analytics_executor_config()
+            self.default_timeout_s = executor_config.get("default_timeout_seconds", 60)
+            self.default_row_cap = executor_config.get("default_row_cap", 2000)
+            self.max_row_cap = executor_config.get("max_row_cap", 10000)
 
     def execute(
         self,
@@ -149,9 +164,9 @@ class AnalyticsExecutor:
         # Safety gate: must be a pure SELECT, without DDL/DML verbs
         _assert_safe_select(sql)
 
-        cap = int(max_rows or self.DEFAULT_ROW_CAP)
-        cap = max(1, min(cap, 10000))  # hard upper bound safeguard
-        timeout = int(timeout_s or self.DEFAULT_TIMEOUT_S)
+        cap = int(max_rows or self.default_row_cap)
+        cap = max(1, min(cap, self.max_row_cap))  # hard upper bound safeguard
+        timeout = int(timeout_s or self.default_timeout_s)
 
         # Get engine lazily (avoid hard import on module import)
         engine = _get_engine()
