@@ -113,11 +113,18 @@ class CommerceSummarizer:
             self.max_items_display = summarizer_config.get("max_items_display", 5)
 
     def summarize(self, doc: CommerceDocLike | Mapping[str, Any]) -> Any:
-        """Return an Answer-like payload with a business-friendly summary.
+        """
+        Return an Answer-like payload with a business-friendly summary.
 
-        Parameters
-        ----------
-        doc: `CommerceDoc` or mapping with the same structure.
+        Args:
+            doc: `CommerceDoc` or mapping with the same structure.
+
+        Returns:
+            Answer-like payload with text, meta, and artifacts.
+
+        Raises:
+            ValueError: If document structure is invalid.
+            RuntimeError: If summarization fails.
         """
         with start_span("agent.commerce.summarize"):
             dv = _DocView.from_obj(doc)

@@ -108,17 +108,20 @@ class CommerceConversationHandler:
         context: dict[str, Any] | None = None,
         thread_id: str | None = None
     ) -> dict[str, Any]:
-        """Answer question about commerce documents using document context.
+        """
+        Answer question about commerce documents using document context.
 
-        Parameters
-        ----------
-        question: User's question about documents
-        context: Document context containing the processed document
-        thread_id: Optional thread ID for logging
+        Args:
+            question: User's question about documents.
+            context: Document context containing the processed document.
+            thread_id: Optional thread ID for logging.
 
-        Returns
-        -------
-        Answer-compatible response with text, meta, and insights
+        Returns:
+            Answer-compatible response with text, meta, and insights.
+
+        Raises:
+            ValueError: If question is empty or invalid.
+            RuntimeError: If document context is invalid or missing.
         """
         with start_span("agent.commerce.conversation"):
             question = (question or "").strip()
@@ -488,29 +491,29 @@ FORMATO DE RESPOSTA:
 
     def _build_system_prompt(self) -> str:
         """Build system prompt for commerce conversation."""
-        return """Você é um assistente especializado em análise de documentos comerciais. Sua função é responder perguntas sobre pedidos de compra, faturas, orçamentos e outros documentos comerciais de forma precisa e útil.
+        return """You are a specialized assistant for commercial document analysis. Your function is to answer questions about purchase orders, invoices, quotes, and other commercial documents accurately and helpfully.
 
-INSTRUÇÕES:
-- Responda sempre em português brasileiro
-- Use os dados exatos do documento fornecido
-- Seja preciso com valores, datas e quantidades
-- Forneça insights de negócio quando relevante
-- Se uma informação não estiver no documento, diga claramente
-- Use formatação clara com valores monetários (R$ X,XX)
-- Destaque informações importantes com emojis apropriados
+INSTRUCTIONS:
+- Always respond in Brazilian Portuguese
+- Use exact data from the provided document
+- Be precise with values, dates, and quantities
+- Provide business insights when relevant
+- If information is not in the document, say so clearly
+- Use clear formatting with monetary values (R$ X,XX)
+- Highlight important information with appropriate emojis
 
-TIPOS DE PERGUNTAS COMUNS:
-- Valores e totais: "Qual o valor total?", "Quanto custa o item X?"
-- Itens e quantidades: "Quais são os itens?", "Quantos produtos tem?"
-- Datas e prazos: "Quando vence?", "Qual a data de entrega?"
-- Fornecedores e clientes: "Quem é o fornecedor?", "Dados do cliente?"
-- Análises: "Há algum problema?", "O que você recomenda?"
+COMMON QUESTION TYPES:
+- Values and totals: "What is the total value?", "How much does item X cost?"
+- Items and quantities: "What are the items?", "How many products are there?"
+- Dates and deadlines: "When does it expire?", "What is the delivery date?"
+- Suppliers and customers: "Who is the supplier?", "Customer data?"
+- Analysis: "Is there any problem?", "What do you recommend?"
 
-FORMATO DE RESPOSTA:
-- Resposta direta à pergunta
-- Dados específicos do documento
-- Insights ou observações relevantes (quando aplicável)
-- Formatação clara e profissional"""
+RESPONSE FORMAT:
+- Direct answer to the question
+- Specific document data
+- Relevant insights or observations (when applicable)
+- Clear and professional formatting"""
 
     def _build_user_message(
         self,

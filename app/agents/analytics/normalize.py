@@ -145,7 +145,21 @@ class AnalyticsNormalizer:
         result: Mapping[str, Any] | _ResultView,
         question: str | None = None,
     ) -> Any:
-        """Normalize using LLM-powered approach with fallback."""
+        """
+        Normalize using LLM-powered approach with fallback.
+
+        Args:
+            plan: Plan view containing SQL and limit information.
+            result: Result view containing rows, count, and execution metadata.
+            question: Original user question for context.
+
+        Returns:
+            Answer-like object with formatted text and metadata.
+
+        Raises:
+            ValueError: If plan or result data is invalid.
+            RuntimeError: If normalization fails completely.
+        """
         
         # Convert inputs to standard format
         plan_view = _as_plan(plan)

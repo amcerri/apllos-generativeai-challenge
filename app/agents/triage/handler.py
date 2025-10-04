@@ -198,12 +198,18 @@ class TriageHandler:
     """Produce a PT‑BR guidance answer with suggested next steps."""
 
     def handle(self, query: str, *, signals: Mapping[str, Any] | Sequence[Any] | None = None) -> Any:
-        """Return an Answer-like object with guidance and follow-ups.
+        """
+        Return an Answer-like object with guidance and follow-ups.
 
-        Parameters
-        ----------
-        query: The raw user query.
-        signals: Optional router/supervisor signals to refine hints.
+        Args:
+            query: The raw user query.
+            signals: Optional router/supervisor signals to refine hints.
+
+        Returns:
+            Answer-like object with text, meta, and followups.
+
+        Raises:
+            ValueError: If query is empty or invalid.
         """
         with start_span("agent.triage.handle"):
             agent, reasons = triage_suggested_agent(query, signals)
