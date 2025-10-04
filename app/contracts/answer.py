@@ -132,11 +132,12 @@ def _norm_rows(rows: Iterable[Iterable[Any]] | None, expected_len: int | None) -
 # ---------------------------------------------------------------------------
 @dataclass(slots=True)
 class Citation:
-    """Reference to a supporting source used in an answer.
+    """
+    Reference to a supporting source used in an answer.
 
-    Fields
-        title: short human-readable title for the source
-        url: public URL (preferred when available)
+    Attributes:
+        title: Short human-readable title for the source.
+        url: Public URL (preferred when available).
         doc_id: internal document id (used for private corpora)
         chunk_id: internal chunk identifier (optional)
         lines: human-readable line range (e.g., "L10-L20")
