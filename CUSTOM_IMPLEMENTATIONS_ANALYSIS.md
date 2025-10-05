@@ -21,10 +21,11 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 - Sem validação de schema
 
 **Alternativas Nativas:**
-- **Pydantic Settings** com `BaseSettings`
+- **Pydantic Settings** com `BaseSettings` (RECOMENDADO)
 - **Dynaconf** para configuração multi-fonte
 - **python-dotenv** + **Pydantic** para validação
 - **Hydra** para configuração hierárquica
+- **PydanticAI** para agentes de IA com validação rigorosa (NOVO)
 
 ### 1.2 Sistema de Logging
 **Arquivo:** `app/infra/logging.py`
@@ -237,7 +238,7 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 - Sem retry logic
 
 **Alternativas Nativas:**
-- **httpx** com retry automático
+- **httpx** com retry automático (RECOMENDADO - estado da arte 2024)
 - **aiohttp** para async HTTP
 - **requests** com session management
 - **urllib3** com connection pooling
@@ -260,18 +261,20 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 - JSON Schema generation automática
 - Melhor integração com FastAPI
 
-#### 2.1.2 Migração para LangChain LLMs
+#### 2.1.2 Migração para LangChain LLMs + PydanticAI
 **Impacto:** Reduz código em ~30%, melhora integração, retry automático
 **Arquivos Afetados:**
 - `app/routing/llm_classifier.py` → LangChain ChatOpenAI
 - `app/agents/analytics/planner.py` → LangChain ChatOpenAI
 - `app/agents/analytics/normalize.py` → LangChain ChatOpenAI
+- `app/agents/commerce/` → **PydanticAI** para agentes de IA
 
 **Benefícios:**
 - Structured outputs nativos
 - Retry logic automático
 - Streaming support
 - Melhor error handling
+- **PydanticAI** para validação rigorosa de agentes
 
 #### 2.1.3 Migração para LangChain RAG
 **Impacto:** Reduz código em ~50%, melhora performance, integração nativa
@@ -324,7 +327,7 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 
 ### 2.3 Baixa Prioridade (Impacto Baixo, Esforço Baixo)
 
-#### 2.3.1 Migração para httpx com retry
+#### 2.3.1 Migração para httpx com retry (ESTADO DA ARTE 2024)
 **Impacto:** Melhora reliability, reduz código
 **Arquivos Afetados:**
 - `scripts/query_assistant.py` → httpx com retry
@@ -332,9 +335,10 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 
 **Benefícios:**
 - Retry automático
-- Connection pooling
+- Connection pooling automático
 - Melhor error handling
-- Menos código customizado
+- Async/sync híbrido nativo
+- **Estado da arte** para HTTP clients Python
 
 #### 2.3.2 Migração para structlog com YAML config
 **Impacto:** Reduz configuração, melhora logging
@@ -352,7 +356,8 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 ### Fase 1: Fundação (2-3 semanas)
 1. **Migração para Pydantic** (contracts, validation, config)
 2. **Migração para LangChain LLMs** (routing, analytics, knowledge)
-3. **Migração para LangChain RAG** (knowledge agent)
+3. **Migração para PydanticAI** (commerce agents com validação rigorosa)
+4. **Migração para LangChain RAG** (knowledge agent)
 
 ### Fase 2: Otimização (2-3 semanas)
 1. **Migração para LangChain Document Loaders** (commerce)
@@ -360,7 +365,7 @@ Este documento mapeia todas as implementações customizadas no projeto Apllos A
 3. **Migração para OpenTelemetry Auto-instrumentation** (tracing)
 
 ### Fase 3: Refinamento (1-2 semanas)
-1. **Migração para httpx com retry** (HTTP clients)
+1. **Migração para httpx com retry** (HTTP clients - ESTADO DA ARTE 2024)
 2. **Migração para structlog YAML** (logging)
 3. **Testes e validação** (regression testing)
 
@@ -412,5 +417,11 @@ O projeto possui **12 implementações customizadas principais** que podem ser s
 - **Melhoria de ~60% na manutenibilidade**
 - **Melhoria de ~50% na performance**
 - **Melhoria de ~70% na observabilidade**
+
+### 🚀 **Descobertas da Pesquisa (2024):**
+- **PydanticAI** é superior para agentes de IA com validação rigorosa
+- **httpx** é o estado da arte para HTTP clients Python
+- **SQLAlchemy 2.0 async** é o futuro para performance
+- **OpenTelemetry auto-instrumentation** é muito superior ao setup manual
 
 A migração deve ser feita **incrementalmente** por módulo, com **testes extensivos** e **monitoring** contínuo para garantir que não haja regressões.
