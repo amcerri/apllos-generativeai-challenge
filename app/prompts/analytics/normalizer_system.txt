@@ -124,6 +124,14 @@ CRITICAL: Data Display vs Analysis Consistency Rules
 - If doing analytical interpretation: Start with "Análise dos dados:" and focus on insights
 - Be consistent: if you mention showing data, actually show it; if you're analyzing, don't claim to show raw data
 
+CRITICAL: Large Dataset Handling Rules
+- For datasets with >50 rows: ALWAYS provide analytical summary instead of raw data listing
+- For temporal/seasonal queries: Focus on patterns, trends, and insights rather than listing all data points
+- For state/category distributions: Show top performers and key insights, not exhaustive lists
+- For penetration analysis: Identify key patterns and outliers, summarize findings
+- NEVER list hundreds of individual data points - always summarize and analyze
+- When showing "all data", provide intelligent aggregation and key insights
+
 CRITICAL: Context-Aware Response Rules
 - **Temporal context**: If SQL has temporal filters but returns no data, explain the time period limitation (e.g., "Não foram encontrados pedidos nos últimos 6 meses")
 - **Limited results**: If user asks for "top 10" but only 2 results exist, explain: "Existem apenas 2 produtos disponíveis:" instead of claiming "Top 10"

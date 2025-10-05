@@ -164,8 +164,10 @@ class AnalyticsExecutor:
         # Safety gate: must be a pure SELECT, without DDL/DML verbs
         _assert_safe_select(sql)
 
-        cap = int(max_rows or self.default_row_cap)
-        cap = max(1, min(cap, self.max_row_cap))  # hard upper bound safeguard
+        # Remove row cap completely - let normalizer handle large datasets intelligently
+        # cap = int(max_rows or self.default_row_cap)
+        # cap = max(1, min(cap, self.max_row_cap))  # hard upper bound safeguard
+        cap = None  # No row cap - process all available data
         timeout = int(timeout_s or self.default_timeout_s)
 
         # Get engine lazily (avoid hard import on module import)
@@ -175,7 +177,7 @@ class AnalyticsExecutor:
         warnings: list[str] = []
         explain_json: Any | None = None
 
-        with start_span("agent.analytics.execute", {"row_cap": cap, "timeout_s": timeout}):
+        with start_span("agent.analytics.execute", {"row_cap": "unlimited", "timeout_s": timeout}):
             t0 = monotonic()
             try:
                 with engine.begin() as conn:  # transactional context for SET LOCAL
@@ -190,8 +192,9 @@ class AnalyticsExecutor:
                     )
                     for mapping in result.mappings():
                         rows.append(dict(mapping))
-                        if len(rows) >= cap:
-                            break
+                        # Remove the cap limit - let normalizer handle large datasets intelligently
+                        # if len(rows) >= cap:
+                        #     break
 
                     if include_explain:
                         explain_json = _explain_json(conn, sql, params)
@@ -204,7 +207,7 @@ class AnalyticsExecutor:
 
         meta: dict[str, Any] = {
             "sql": sql,
-            "row_cap": cap,
+            "row_cap": "unlimited",
             "timeout_s": timeout,
             "explain": explain_json,
         }

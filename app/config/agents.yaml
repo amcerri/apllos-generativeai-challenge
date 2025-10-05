@@ -21,7 +21,7 @@ analytics:
   sql:
     readonly: true
     max_rows: 5000
-    timeout_ms: 15000
+    timeout_ms: 60000
     allowlist_path: app/routing/allowlist.json
   
   executor:
