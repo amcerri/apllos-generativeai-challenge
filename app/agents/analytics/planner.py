@@ -342,10 +342,11 @@ class AnalyticsPlanner:
                     f"FROM {table}\n"
                     f"{where}\n"
                     f"ORDER BY 1 DESC\n"
-                    f"LIMIT {cap}"
+                    # Remove LIMIT for full analysis - let normalizer handle large datasets intelligently
+                    # f"LIMIT {cap}"
                 ).replace("\n\n", "\n")
-                limit_applied = True
-                reason = "capped preview"
+                limit_applied = False  # No limit applied - full data for analysis
+                reason = "full preview"
 
             # Final safety checks (syntactic only; executor enforces read‑only)
             if "*" in sql:

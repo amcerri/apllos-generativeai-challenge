@@ -327,38 +327,72 @@ class AnalyticsNormalizer:
             return None
     
     def _format_all_data(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
-        """Format all data for large datasets."""
+        """Format all data for large datasets with intelligent summarization."""
         if not rows:
             return ""
         
-        # For very large datasets, limit the display to prevent timeout
-        max_display = 2000  # Increased limit for penetration queries
-        if len(rows) > max_display:
-            rows = rows[:max_display]
-            truncated = True
-        else:
-            truncated = False
+        # For very large datasets, provide intelligent analysis instead of raw data
+        if len(rows) > 50:
+            return self._format_large_dataset_analysis(rows, user_query)
         
-        # Check if this is a penetration query (state + category)
-        if len(rows) > 0:
-            first_row = rows[0]
-            if 'state' in first_row and 'category' in first_row:
-                result = self._format_penetration_data(rows)
-                if truncated:
-                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
-                return result
-            elif 'state' in first_row:
-                result = self._format_state_data(rows)
-                if truncated:
-                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
-                return result
-            elif 'category' in first_row:
-                result = self._format_category_data(rows)
-                if truncated:
-                    result += f"\n\n(Exibindo {max_display} de {len(rows)} registros)"
-                return result
+        # For medium datasets (20-50 rows), show key insights + sample data
+        if len(rows) > 20:
+            return self._format_medium_dataset_analysis(rows, user_query)
         
-        # Generic formatting for other queries
+        # For small datasets, show all data with proper formatting
+        return self._format_small_dataset_data(rows)
+    
+    def _format_large_dataset_analysis(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Provide intelligent analysis for large datasets instead of raw data listing."""
+        if not rows:
+            return ""
+        
+        # Analyze the data structure to determine the best summarization approach
+        first_row = rows[0]
+        
+        # Check for temporal/seasonal patterns
+        if 'period' in first_row or 'month' in first_row or 'year' in first_row:
+            return self._analyze_temporal_patterns(rows, user_query)
+        
+        # Check for state/category distributions
+        if 'state' in first_row and 'category' in first_row:
+            return self._analyze_penetration_patterns(rows, user_query)
+        elif 'state' in first_row:
+            return self._analyze_state_distribution(rows, user_query)
+        elif 'category' in first_row:
+            return self._analyze_category_distribution(rows, user_query)
+        
+        # Generic large dataset analysis
+        return self._analyze_generic_patterns(rows, user_query)
+    
+    def _format_medium_dataset_analysis(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Show key insights + sample data for medium datasets."""
+        if not rows:
+            return ""
+        
+        # Get top performers and key insights
+        insights = self._get_key_insights(rows)
+        
+        # Detect patterns and add intelligent insights
+        pattern_insights = self._detect_patterns_and_insights(rows, user_query)
+        
+        # Show sample of data (top 10-15 items)
+        sample_size = min(15, len(rows))
+        sample_data = self._format_small_dataset_data(rows[:sample_size], user_query)
+        
+        if len(rows) > sample_size:
+            sample_data += f"\n\n(Exibindo {sample_size} de {len(rows)} registros - análise completa acima)"
+        
+        return insights + pattern_insights + "\n\n" + sample_data
+    
+    def _format_small_dataset_data(self, rows: list[Mapping[str, Any]], user_query: str = "") -> str:
+        """Format small datasets with all data shown."""
+        if not rows:
+            return ""
+        
+        # Detect patterns and add intelligent insights for small datasets too
+        pattern_insights = self._detect_patterns_and_insights(rows, user_query)
+        
         text_parts = ["\n\nDados completos:"]
         for i, row in enumerate(rows, 1):
             values = []
@@ -371,10 +405,502 @@ class AnalyticsNormalizer:
             if values:
                 text_parts.append(f"{i}. {', '.join(values)}")
         
-        if truncated:
-            text_parts.append(f"\n(Exibindo {max_display} de {len(rows)} registros)")
+        return pattern_insights + "\n".join(text_parts)
+    
+    def _analyze_temporal_patterns(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Analyze temporal/seasonal patterns for large datasets."""
+        if not rows:
+            return ""
+        
+        # Group by time periods and analyze patterns
+        from collections import defaultdict
+        period_data = defaultdict(list)
+        
+        for row in rows:
+            period = row.get('period', row.get('month', row.get('year', 'Unknown')))
+            # Extract numeric values for analysis
+            numeric_values = []
+            for k, v in row.items():
+                if k not in ['period', 'month', 'year'] and isinstance(v, (int, float)):
+                    numeric_values.append((k, v))
+            
+            if numeric_values:
+                period_data[period] = numeric_values
+        
+        # Find top periods and trends
+        total_periods = len(period_data)
+        top_periods = sorted(period_data.items(), key=lambda x: sum(v[1] for v in x[1]), reverse=True)[:5]
+        
+        text_parts = [f"\n\nAnálise de padrões temporais ({total_periods} períodos analisados):"]
+        
+        # Show top performing periods
+        text_parts.append("\nPeríodos com maior atividade:")
+        for period, values in top_periods:
+            total_value = sum(v[1] for v in values)
+            text_parts.append(f"  {period}: {total_value:,.0f}")
+        
+        # Identify trends
+        if len(period_data) > 1:
+            periods = list(period_data.keys())
+            if len(periods) >= 2:
+                first_period = periods[0]
+                last_period = periods[-1]
+                text_parts.append(f"\nPeríodo analisado: {first_period} a {last_period}")
         
         return "\n".join(text_parts)
+    
+    def _analyze_penetration_patterns(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Analyze penetration patterns for large datasets."""
+        if not rows:
+            return ""
+        
+        from collections import defaultdict
+        state_data = defaultdict(dict)
+        category_totals = defaultdict(float)
+        
+        for row in rows:
+            state = row.get('state', 'Unknown')
+            category = row.get('category', 'Unknown')
+            penetration = row.get('penetration', 0)
+            
+            if state is None or category is None:
+                continue
+                
+            state_data[state][category] = penetration
+            category_totals[category] += penetration
+        
+        # Find top states and categories
+        top_states = sorted(state_data.items(), key=lambda x: sum(x[1].values()), reverse=True)[:5]
+        top_categories = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        text_parts = [f"\n\nAnálise de penetração ({len(state_data)} estados, {len(category_totals)} categorias):"]
+        
+        # Top performing states
+        text_parts.append("\nEstados com maior penetração:")
+        for state, categories in top_states:
+            total_penetration = sum(categories.values())
+            text_parts.append(f"  {state}: {total_penetration:,.0f}")
+        
+        # Top categories
+        text_parts.append("\nCategorias com maior penetração:")
+        for category, total in top_categories:
+            text_parts.append(f"  {category}: {total:,.0f}")
+        
+        return "\n".join(text_parts)
+    
+    def _analyze_state_distribution(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Analyze state distribution for large datasets."""
+        if not rows:
+            return ""
+        
+        from collections import defaultdict
+        state_totals = defaultdict(float)
+        
+        for row in rows:
+            state = row.get('state', 'Unknown')
+            if state is None:
+                continue
+            
+            # Sum all numeric values for this state
+            for k, v in row.items():
+                if k != 'state' and isinstance(v, (int, float)):
+                    state_totals[state] += v
+        
+        # Top states
+        top_states = sorted(state_totals.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        text_parts = [f"\n\nAnálise por estado ({len(state_totals)} estados):"]
+        text_parts.append("\nTop 10 estados:")
+        for state, total in top_states:
+            text_parts.append(f"  {state}: {total:,.0f}")
+        
+        return "\n".join(text_parts)
+    
+    def _analyze_category_distribution(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Analyze category distribution for large datasets."""
+        if not rows:
+            return ""
+        
+        from collections import defaultdict
+        category_totals = defaultdict(float)
+        
+        for row in rows:
+            category = row.get('category', 'Unknown')
+            if category is None:
+                continue
+            
+            # Sum all numeric values for this category
+            for k, v in row.items():
+                if k != 'category' and isinstance(v, (int, float)):
+                    category_totals[category] += v
+        
+        # Top categories
+        top_categories = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        text_parts = [f"\n\nAnálise por categoria ({len(category_totals)} categorias):"]
+        text_parts.append("\nTop 10 categorias:")
+        for category, total in top_categories:
+            text_parts.append(f"  {category}: {total:,.0f}")
+        
+        return "\n".join(text_parts)
+    
+    def _analyze_generic_patterns(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Generic analysis for large datasets."""
+        if not rows:
+            return ""
+        
+        # Find numeric columns and analyze patterns
+        numeric_columns = []
+        if rows:
+            first_row = rows[0]
+            for k, v in first_row.items():
+                if isinstance(v, (int, float)):
+                    numeric_columns.append(k)
+        
+        if not numeric_columns:
+            return f"\n\nAnálise de {len(rows)} registros (dados não numéricos)"
+        
+        # Calculate totals and averages for each numeric column
+        totals = {col: 0 for col in numeric_columns}
+        for row in rows:
+            for col in numeric_columns:
+                if isinstance(row.get(col), (int, float)):
+                    totals[col] += row[col]
+        
+        text_parts = [f"\n\nAnálise de {len(rows)} registros:"]
+        text_parts.append("\nTotais por métrica:")
+        for col, total in totals.items():
+            if total > 1000:
+                text_parts.append(f"  {col}: {total:,.0f}")
+            else:
+                text_parts.append(f"  {col}: {total:,.2f}")
+        
+        return "\n".join(text_parts)
+    
+    def _get_key_insights(self, rows: list[Mapping[str, Any]]) -> str:
+        """Extract key insights from medium datasets."""
+        if not rows:
+            return ""
+        
+        # Find the main metric column
+        main_metric = None
+        main_values = []
+        
+        if rows:
+            first_row = rows[0]
+            for k, v in first_row.items():
+                if isinstance(v, (int, float)) and v > 0:
+                    main_metric = k
+                    break
+        
+        if main_metric:
+            main_values = [row.get(main_metric, 0) for row in rows if isinstance(row.get(main_metric), (int, float))]
+        
+        if not main_values:
+            return f"\n\nAnálise de {len(rows)} registros"
+        
+        # Calculate key statistics
+        total = sum(main_values)
+        avg = total / len(main_values)
+        max_val = max(main_values)
+        min_val = min(main_values)
+        
+        text_parts = [f"\n\nPrincipais insights ({len(rows)} registros):"]
+        text_parts.append(f"  Total: {total:,.0f}")
+        text_parts.append(f"  Média: {avg:,.2f}")
+        text_parts.append(f"  Máximo: {max_val:,.0f}")
+        text_parts.append(f"  Mínimo: {min_val:,.0f}")
+        
+        return "\n".join(text_parts)
+    
+    def _detect_patterns_and_insights(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
+        """Detect patterns and provide intelligent insights.
+        
+        Args:
+            rows: List of data rows to analyze for patterns.
+            user_query: Original user query for context.
+            
+        Returns:
+            String containing detected insights with emojis and formatting,
+            or empty string if no patterns detected.
+        """
+        if not rows:
+            return ""
+        
+        insights = []
+        
+        # Pattern 1: 1:1 ratio detection (clientes = compras)
+        if self._detect_one_to_one_ratio(rows):
+            insights.append("🔍 **Insight**: Cada cliente fez exatamente uma compra (relação 1:1 entre clientes e compras)")
+        
+        # Pattern 2: Dominance detection (one state/category dominates)
+        dominance_insight = self._detect_dominance_pattern(rows)
+        if dominance_insight:
+            insights.append(f"📊 **Insight**: {dominance_insight}")
+        
+        # Pattern 3: Geographic concentration
+        geo_insight = self._detect_geographic_concentration(rows)
+        if geo_insight:
+            insights.append(f"🗺️ **Insight**: {geo_insight}")
+        
+        # Pattern 4: Temporal patterns
+        temporal_insight = self._detect_temporal_patterns(rows)
+        if temporal_insight:
+            insights.append(f"📅 **Insight**: {temporal_insight}")
+        
+        # Pattern 5: Category concentration
+        category_insight = self._detect_category_concentration(rows)
+        if category_insight:
+            insights.append(f"🏷️ **Insight**: {category_insight}")
+        
+        if insights:
+            return "\n\n" + "\n".join(insights)
+        
+        return ""
+    
+    def _detect_one_to_one_ratio(self, rows: list[Mapping[str, Any]]) -> bool:
+        """Detect if there's a 1:1 ratio between two metrics.
+        
+        Analyzes numeric columns in the dataset to identify if any two columns
+        maintain a perfect 1:1 ratio across all rows (e.g., clientes = compras).
+        
+        Args:
+            rows: List of data rows to analyze for 1:1 ratio patterns.
+            
+        Returns:
+            True if a 1:1 ratio is detected between any two numeric columns,
+            False otherwise.
+        """
+        if len(rows) < 2:
+            return False
+        
+        # Look for two numeric columns that might be in 1:1 ratio
+        numeric_columns = []
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k not in ['period', 'month', 'year']:
+                numeric_columns.append(k)
+        
+        if len(numeric_columns) < 2:
+            return False
+        
+        # Check if any two columns have 1:1 ratio
+        for i, col1 in enumerate(numeric_columns):
+            for col2 in numeric_columns[i+1:]:
+                ratios = []
+                for row in rows:
+                    val1 = row.get(col1, 0)
+                    val2 = row.get(col2, 0)
+                    if val1 > 0 and val2 > 0:
+                        ratios.append(val1 / val2)
+                
+                if ratios and all(abs(r - 1.0) < 0.01 for r in ratios):  # Within 1% tolerance
+                    return True
+        
+        return False
+    
+    def _detect_dominance_pattern(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect if one item dominates the dataset.
+        
+        Analyzes the dataset to identify if any single item (state, category, etc.)
+        represents a significant portion (>40%) of the total metric value.
+        
+        Args:
+            rows: List of data rows to analyze for dominance patterns.
+            
+        Returns:
+            String describing the dominant item and its percentage,
+            or empty string if no dominance detected.
+        """
+        if len(rows) < 3:
+            return ""
+        
+        # Find the main metric column
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k not in ['period', 'month', 'year']:
+                main_metric = k
+                break
+        
+        if not main_metric:
+            return ""
+        
+        # Calculate total and find dominance
+        total = sum(row.get(main_metric, 0) for row in rows)
+        if total == 0:
+            return ""
+        
+        # Find the top item
+        top_item = max(rows, key=lambda x: x.get(main_metric, 0))
+        top_value = top_item.get(main_metric, 0)
+        top_percentage = (top_value / total) * 100
+        
+        # Get the key identifier (state, category, etc.)
+        identifier_col = None
+        for k, v in top_item.items():
+            if k != main_metric and not isinstance(v, (int, float)):
+                identifier_col = k
+                break
+        
+        if identifier_col and top_percentage > 40:  # Dominance threshold
+            identifier = top_item.get(identifier_col, 'Unknown')
+            return f"{identifier} domina com {top_percentage:.1f}% do total"
+        
+        return ""
+    
+    def _detect_geographic_concentration(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect geographic concentration patterns.
+        
+        Analyzes the dataset to identify if there's high geographic concentration
+        where the top 3 states represent more than 70% of the total metric value.
+        
+        Args:
+            rows: List of data rows to analyze for geographic concentration.
+            
+        Returns:
+            String describing the geographic concentration pattern,
+            or empty string if no high concentration detected.
+        """
+        if len(rows) < 3:
+            return ""
+        
+        # Look for state column
+        state_col = None
+        for k, v in rows[0].items():
+            if 'state' in k.lower() and not isinstance(v, (int, float)):
+                state_col = k
+                break
+        
+        if not state_col:
+            return ""
+        
+        # Find the main metric
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k not in ['period', 'month', 'year']:
+                main_metric = k
+                break
+        
+        if not main_metric:
+            return ""
+        
+        # Calculate concentration in top 3 states
+        total = sum(row.get(main_metric, 0) for row in rows)
+        if total == 0:
+            return ""
+        
+        # Sort by metric value
+        sorted_rows = sorted(rows, key=lambda x: x.get(main_metric, 0), reverse=True)
+        top3_total = sum(row.get(main_metric, 0) for row in sorted_rows[:3])
+        top3_percentage = (top3_total / total) * 100
+        
+        if top3_percentage > 70:  # High concentration threshold
+            top3_states = [row.get(state_col, 'Unknown') for row in sorted_rows[:3]]
+            return f"Alta concentração geográfica: {', '.join(top3_states)} representam {top3_percentage:.1f}% do total"
+        
+        return ""
+    
+    def _detect_temporal_patterns(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect temporal patterns in the data.
+        
+        Analyzes the dataset to identify temporal trends such as growth or decline
+        patterns over time periods.
+        
+        Args:
+            rows: List of data rows to analyze for temporal patterns.
+            
+        Returns:
+            String describing the temporal trend detected,
+            or empty string if no clear pattern found.
+        """
+        if len(rows) < 3:
+            return ""
+        
+        # Look for temporal columns
+        temporal_col = None
+        for k, v in rows[0].items():
+            if any(temporal in k.lower() for temporal in ['period', 'month', 'year', 'date']):
+                temporal_col = k
+                break
+        
+        if not temporal_col:
+            return ""
+        
+        # Find the main metric
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k != temporal_col:
+                main_metric = k
+                break
+        
+        if not main_metric:
+            return ""
+        
+        # Check for growth/decline pattern
+        sorted_rows = sorted(rows, key=lambda x: str(x.get(temporal_col, '')))
+        values = [row.get(main_metric, 0) for row in sorted_rows]
+        
+        if len(values) >= 3:
+            # Simple trend detection
+            first_half = sum(values[:len(values)//2])
+            second_half = sum(values[len(values)//2:])
+            
+            if second_half > first_half * 1.2:  # 20% growth
+                return "Tendência de crescimento ao longo do período analisado"
+            elif first_half > second_half * 1.2:  # 20% decline
+                return "Tendência de declínio ao longo do período analisado"
+        
+        return ""
+    
+    def _detect_category_concentration(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect category concentration patterns.
+        
+        Analyzes the dataset to identify if there's high concentration in a single
+        category that represents more than 50% of the total metric value.
+        
+        Args:
+            rows: List of data rows to analyze for category concentration.
+            
+        Returns:
+            String describing the category concentration pattern,
+            or empty string if no high concentration detected.
+        """
+        if len(rows) < 3:
+            return ""
+        
+        # Look for category column
+        category_col = None
+        for k, v in rows[0].items():
+            if 'category' in k.lower() and not isinstance(v, (int, float)):
+                category_col = k
+                break
+        
+        if not category_col:
+            return ""
+        
+        # Find the main metric
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k != category_col:
+                main_metric = k
+                break
+        
+        if not main_metric:
+            return ""
+        
+        # Calculate concentration in top category
+        total = sum(row.get(main_metric, 0) for row in rows)
+        if total == 0:
+            return ""
+        
+        top_category = max(rows, key=lambda x: x.get(main_metric, 0))
+        top_value = top_category.get(main_metric, 0)
+        top_percentage = (top_value / total) * 100
+        
+        if top_percentage > 50:  # High category concentration
+            category_name = top_category.get(category_col, 'Unknown')
+            return f"Alta concentração em {category_name} ({top_percentage:.1f}% do total)"
+        
+        return ""
     
     def _format_penetration_data(self, rows: list[Mapping[str, Any]]) -> str:
         """Format penetration data by state and category."""
