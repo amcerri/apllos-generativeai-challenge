@@ -9,7 +9,8 @@ Overview
 Design
     - No hard dependency on OpenTelemetry; best‑effort lazy setup.
     - Small API: `configure()`, `get_tracer()`, `start_span()`, `current_trace_ids()`.
-    - No imports from other internal modules to avoid cycles.
+    - Log correlation: `start_span()` injects `trace_id` / `span_id` into the
+      logging context so logs are automatically correlated.
 
 Integration
     - Used by agent modules and graph nodes for distributed tracing.
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+import uuid
 from typing import Any, Mapping
 
 # Attempt OpenTelemetry imports (optional dependency)
@@ -137,13 +139,39 @@ def get_tracer(component: str = "app") -> Any:
 def start_span(
     name: str, attributes: Mapping[str, Any] | None = None
 ) -> AbstractContextManager[Span | None]:
-    """Context manager that starts a span when tracing is enabled.
+    """Context manager that starts a span and injects log correlation.
 
-    Yields the span object (or `None` when tracing is disabled).
+    Parameters
+    ----------
+    name : str
+        Span name.
+    attributes : Mapping[str, Any] | None
+        Optional span attributes to set at start.
+
+    Yields
+    ------
+    Span | None
+        The active span when tracing is enabled; otherwise `None`.
     """
 
+    # Late import to avoid cycles at import-time
+    try:
+        from app.infra.logging import bind_context, clear_context  # type: ignore
+    except Exception:  # pragma: no cover - defensive fallback
+        def bind_context(**_kw: Any) -> None:  # type: ignore
+            return
+        def clear_context(_keys: list[str] | None = None) -> None:  # type: ignore
+            return
+
     if not _OTEL_AVAILABLE:
-        yield None
+        # Generate ephemeral IDs to correlate logs even without OTEL
+        trace_id = uuid.uuid4().hex
+        span_id = uuid.uuid4().hex[:16]
+        bind_context(trace_id=trace_id, span_id=span_id)
+        try:
+            yield None
+        finally:
+            clear_context(["trace_id", "span_id"])  # remove correlation keys
         return
 
     tracer = get_tracer("app")
@@ -154,14 +182,27 @@ def start_span(
                     span.set_attribute(k, v)
                 except Exception:  # pragma: no cover - defensive
                     pass
-        yield span
+        # Bind IDs into logging context for correlation
+        tid, sid = current_trace_ids()
+        if tid or sid:
+            bind_context(trace_id=tid, span_id=sid)
+        try:
+            yield span
+        finally:
+            clear_context(["trace_id", "span_id"])  # remove correlation keys
 
 
 def current_trace_ids() -> tuple[str | None, str | None]:
     """Return (trace_id_hex, span_id_hex) for the current context, or (None, None)."""
 
     if not _OTEL_AVAILABLE:
-        return (None, None)
+        # Best-effort read from logging context when OTEL is absent
+        try:
+            from app.infra.logging import _CTX  # type: ignore
+            ctx = _CTX.get()
+            return (ctx.get("trace_id"), ctx.get("span_id"))
+        except Exception:  # pragma: no cover - optional
+            return (None, None)
     try:
         span = trace.get_current_span()
         ctx = span.get_span_context()
