@@ -21,7 +21,7 @@ Design
 Integration
 -----------
 - Called by the analytics agent node before execution.
-- Logging uses structlog (component/event/thread_id). Tracing spans are optional.
+- Logging uses stdlib logger adapter with `.bind(...)`. Tracing spans are optional.
 - The resulting plan is handed to the executor; SQL strings are not shown to
   end users (only business narratives are surfaced by the normalizer).
 
@@ -342,11 +342,10 @@ class AnalyticsPlanner:
                     f"FROM {table}\n"
                     f"{where}\n"
                     f"ORDER BY 1 DESC\n"
-                    # Remove LIMIT for full analysis - let normalizer handle large datasets intelligently
-                    # f"LIMIT {cap}"
+                    f"LIMIT {cap}"
                 ).replace("\n\n", "\n")
-                limit_applied = False  # No limit applied - full data for analysis
-                reason = "full preview"
+                limit_applied = True
+                reason = "preview with cap"
 
             # Final safety checks (syntactic only; executor enforces read‑only)
             if "*" in sql:
