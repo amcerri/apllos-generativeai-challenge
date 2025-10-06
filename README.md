@@ -790,15 +790,13 @@ logger.info("Query processed", query="test query", duration_ms=1500, success=Tru
 
 ### Distributed Tracing
 
-OpenTelemetry integration for request tracing:
+Optional OpenTelemetry integration for request tracing; when OTEL is not available, the system still injects ephemeral `trace_id`/`span_id` into logs for correlation:
 
 ```python
-from app.infra.tracing import get_tracer, start_span
-tracer = get_tracer(__name__)
-with start_span("query_processing", {"agent": "analytics"}) as span:
-    span.set_attribute("query.complexity", "high")
-    span.set_attribute("query.type", "revenue_analysis")
-    # Process query
+from app.infra.tracing import start_span
+with start_span("query_processing", {"agent": "analytics"}):
+    # Logs inside this block will include trace_id/span_id in JSON mode
+    pass
 ```
 
 ### Available Metrics
