@@ -780,18 +780,12 @@ jobs:
 
 ### Structured Logging
 
-The system uses `structlog` for comprehensive logging:
+The system uses Python's standard `logging` with a lightweight adapter for structured context:
 
 ```python
 from app.infra.logging import get_logger
-logger = get_logger(__name__)
-logger.info("Query processed", 
-    query="test query",
-    agent="analytics",
-    duration_ms=1500,
-    success=True,
-    thread_id="thread_123"
-)
+logger = get_logger(__name__).bind(agent="analytics", thread_id="thread_123")
+logger.info("Query processed", query="test query", duration_ms=1500, success=True)
 ```
 
 ### Distributed Tracing

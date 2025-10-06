@@ -387,10 +387,11 @@ studio-up: ## Start LangGraph Studio (recommended for development)
 	  -p $(APP_PORT):$(APP_PORT) \
 	  -v "$(CURDIR)":/workspace \
 	  $(ENV_ARGS) \
+	  -e BG_JOB_ISOLATED_LOOPS=true \
 	  -e DATABASE_URL="$(DSN_HOST)" \
 	  -e REQUIRE_SQL_APPROVAL=false \
 	  -w /workspace \
-	  $(APP_IMAGE) langgraph dev --host 0.0.0.0 --port $(APP_PORT) --allow-blocking
+	  $(APP_IMAGE) langgraph dev --host 0.0.0.0 --port $(APP_PORT)
 	@echo "LangGraph Studio started."
 
 .PHONY: studio-down

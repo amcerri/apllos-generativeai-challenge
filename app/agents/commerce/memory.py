@@ -33,9 +33,8 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-import structlog
-
-logger = structlog.get_logger()
+from app.infra.logging import get_logger, bind_context, clear_context
+logger = get_logger("commerce.memory")
 
 
 @dataclass
@@ -73,8 +72,8 @@ class CommerceMemoryManager:
         order_data : Dict[str, Any]
             Processed order data from the extractor
         """
-        with self.log.contextvars(order_id=order_id):
-            try:
+        bind_context(order_id=order_id)
+        try:
                 # Extract items for indexing
                 items = order_data.get("items", [])
                 items_text = []
@@ -114,10 +113,11 @@ class CommerceMemoryManager:
                 self.log.info("Order stored in memory", 
                              items_count=len(items),
                              total_value=order_memory.total_value)
-                
-            except Exception as e:
-                self.log.error("Failed to store order in memory", error=str(e))
-                raise
+        except Exception as e:
+            self.log.error("Failed to store order in memory", error=str(e))
+            raise
+        finally:
+            clear_context(["order_id"])
     
     def search_orders(self, query: str, limit: int = 5) -> List[OrderMemory]:
         """Search for orders using semantic text matching.
@@ -134,29 +134,24 @@ class CommerceMemoryManager:
         List[OrderMemory]
             Matching orders sorted by relevance
         """
-        with self.log.contextvars(query=query, limit=limit):
+        bind_context(query=query, limit=limit)
+        try:
             if not query or not self._orders:
                 return []
-            
             query_lower = query.lower()
             results = []
-            
             for order_id, order in self._orders.items():
                 score = self._calculate_relevance_score(query_lower, order.raw_text)
                 if score > 0:
                     results.append((score, order))
-            
-            # Sort by relevance (highest first)
             results.sort(key=lambda x: x[0], reverse=True)
-            
-            # Return top results
             top_results = [order for _, order in results[:limit]]
-            
             self.log.info("Search completed", 
-                         results_count=len(top_results),
-                         total_orders=len(self._orders))
-            
+                          results_count=len(top_results),
+                          total_orders=len(self._orders))
             return top_results
+        finally:
+            clear_context(["query", "limit"])
     
     def get_order(self, order_id: str) -> Optional[OrderMemory]:
         """Get a specific order by ID.

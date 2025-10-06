@@ -29,7 +29,6 @@ dependencies = [
   "cloudpickle>=3.0.0",
 
   # App infra & logging
-  "structlog>=24.1.0",
   "PyYAML>=6.0",
   "python-dotenv>=1.0.0",
 
