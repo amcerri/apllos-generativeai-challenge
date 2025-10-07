@@ -520,7 +520,21 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         )
                     ]
 
-                rows = analytics_executor.execute(plan_dict)
+                # If there was an approval interrupt and it was rejected upstream,
+                # execute in dry-run mode (EXPLAIN-only) to surface diagnostics.
+                dry_run = False
+                try:
+                    interrupts = state.get("interrupts") or []
+                    for intr in interrupts:
+                        if intr.get("type") == "human_interrupt" and intr.get("name") == "sql_execution":
+                            human = state.get("human_response")  # type: ignore[assignment]
+                            if isinstance(human, dict) and human.get("approved") is False:
+                                dry_run = True
+                                break
+                except Exception:
+                    dry_run = False
+
+                rows = analytics_executor.execute(plan_dict, dry_run=dry_run, include_explain=True)
                 out["analytics_rows"] = rows
                 return out
 

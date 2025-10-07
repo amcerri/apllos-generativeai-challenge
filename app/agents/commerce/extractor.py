@@ -380,6 +380,9 @@ class CommerceExtractor:
             currency=currency,
         )
 
+        # Reconcile totals and append any risks
+        recon_risks = _reconcile_totals(items, totals)
+
         return CommerceDoc(
             doc=header,
             buyer={},
@@ -391,7 +394,7 @@ class CommerceExtractor:
             totals=totals,
             terms=CommerceTerms(payment_terms=None, installments=None, notes=None),
             signatures=CommerceSignatures(customer_signed_at=None, approver_signed_at=None),
-            risks=risks,
+            risks=list({*risks, *recon_risks}),
             meta={"parse_engine": "heuristic@1"},
         )
 
@@ -727,6 +730,36 @@ def _extract_dates(lines: Sequence[str]) -> dict[str, Any]:
     issue = _normalize_date(found[0]) if len(found) >= 1 else None
     due = _normalize_date(found[1]) if len(found) >= 2 else None
     return {"issue_date": issue, "due_date": due}
+
+
+def _reconcile_totals(items: list[CommerceItem], totals: CommerceTotals) -> list[str]:
+    """Return risk codes for inconsistencies between items and totals.
+
+    Parameters
+    ----------
+    items : list[CommerceItem]
+        Parsed line items with numeric amounts where available.
+    totals : CommerceTotals
+        Totals parsed from the document.
+
+    Returns
+    -------
+    list[str]
+        A list of risk codes, empty when no issues detected.
+    """
+
+    risks: list[str] = []
+    sum_lines = sum(i.line_total or 0.0 for i in items)
+    if totals.subtotal is not None and not _approx_equal(sum_lines, totals.subtotal):
+        risks.append("sum_lines_neq_subtotal")
+    if totals.grand_total is not None:
+        approx_sum = (totals.subtotal or sum_lines) + (totals.freight or 0.0)
+        approx_sum -= sum(d.get("value", 0.0) for d in totals.discounts)
+        approx_sum += sum(t.get("value", 0.0) for t in totals.taxes)
+        approx_sum += sum(o.get("value", 0.0) for o in totals.other_charges)
+        if not _approx_equal(approx_sum, totals.grand_total):
+            risks.append("components_neq_grand_total")
+    return risks
 
 
 def _normalize_date(s: str | None) -> str | None:

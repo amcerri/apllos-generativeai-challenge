@@ -329,6 +329,14 @@ def _build_where(filters: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
         clauses.append("metadata @> :meta")
         params["meta"] = json.dumps(meta)
 
+    # New: min_length and mime/type filters
+    if min_len := filters.get("min_length"):
+        clauses.append("char_length(content) >= :min_length")
+        params["min_length"] = int(min_len)
+    if dtype := filters.get("doc_type"):
+        clauses.append("(metadata ->> 'doc_type') = :doc_type")
+        params["doc_type"] = str(dtype)
+
     where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     return where_sql, params
 
