@@ -1,5 +1,5 @@
 """
-Logging utilities (stdlib-only, structlog-compatible API surface).
+Logging utilities (stdlib-only implementation).
 
 Overview
 --------

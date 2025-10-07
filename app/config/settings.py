@@ -657,14 +657,14 @@ class LoggingConfig(BaseModel):
     ----------
     level : str
         Logging level
-    structlog_json : bool
+    json_format : bool
         Whether to use JSON logging
     component_prefix : bool
         Whether to add component prefix
     """
     
     level: str = Field(default="INFO", description="Logging level")
-    structlog_json: bool = Field(default=False, description="Use JSON logging")
+    json_format: bool = Field(default=False, description="Use JSON logging")
     component_prefix: bool = Field(default=True, description="Add component prefix")
 
 

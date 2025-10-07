@@ -11,7 +11,7 @@
 # ----------------------------------------------------------------------------
 logging:
   level: INFO
-  structlog_json: false
+  json_format: false
   component_prefix: true     # Include component name in logs
 
 # ----------------------------------------------------------------------------

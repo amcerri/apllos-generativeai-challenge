@@ -44,7 +44,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-try:  # Optional: structlog logger
+try:  # Optional: logging
     from app.infra.logging import get_logger
 except Exception:  # pragma: no cover - optional
     import logging as _logging

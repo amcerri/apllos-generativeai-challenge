@@ -59,9 +59,9 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config.settings import get_settings as get_config
+    from app.config.settings import get_settings
 except Exception:  # pragma: no cover - optional
-    def get_config():
+    def get_settings():
         return None
 
 
@@ -121,9 +121,12 @@ class AnalyticsNormalizer:
         """Load the system prompt from file."""
         try:
             prompt_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "normalizer_system.txt"
-            return prompt_path.read_text(encoding="utf-8")
-        except Exception:
-            return ""
+            content = prompt_path.read_text(encoding="utf-8")
+            return content
+        except Exception as e:
+            self.log.warning(f"Failed to load system prompt: {e}")
+            self.log.warning("Using fallback system prompt")
+            return self._fallback_system_prompt()
     
     def _load_examples(self) -> list[dict[str, Any]]:
         """Load few-shot examples from JSONL file."""
@@ -218,19 +221,19 @@ class AnalyticsNormalizer:
             return None
         
         # Get configuration
-        config = get_config()
+        config = get_settings()
         if config is None:
             # Fallback to hardcoded values if config not available
             model = "gpt-4o-mini"
             max_tokens = 800
             temperature = 0.1
-            timeout = 10.0
+            timeout = 60.0
             max_examples = 1
         else:
-            model = config.openai.analytics_normalizer_model
-            max_tokens = config.openai.analytics_normalizer_max_tokens
-            temperature = config.openai.analytics_normalizer_temperature
-            timeout = config.openai.analytics_normalizer_timeout
+            model = config.models.analytics_normalizer.name
+            max_tokens = config.models.analytics_normalizer.max_tokens
+            temperature = config.models.analytics_normalizer.temperature
+            timeout = config.models.analytics_normalizer.timeout_seconds
             max_examples = config.analytics.normalizer.max_examples_in_prompt
         
         client = OpenAI(api_key=api_key)
@@ -270,6 +273,7 @@ class AnalyticsNormalizer:
             {"role": "system", "content": self._system_prompt}
         ]
         
+        
         # Add examples based on configuration
         if self._examples and max_examples > 0:
             for example in self._examples[:max_examples]:
@@ -294,15 +298,16 @@ class AnalyticsNormalizer:
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=timeout
+                temperature=temperature
             )
         except Exception as e:
-            # Silently fail for LLM API issues
+            self.log.warning(f"LLM API call failed: {e}")
             return None
         
         # Parse response
         response_text = response.choices[0].message.content.strip()
+        
+        
         try:
             response_data = json.loads(response_text)
             
@@ -312,18 +317,26 @@ class AnalyticsNormalizer:
                     response_data["text"] += self._format_all_data(result.rows, user_query)
             
             return response_data
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            self.log.warning(f"LLM response is not valid JSON: {e}")
+            self.log.warning(f"Raw response: {response_text}")
+            
             # Try to extract JSON from response if enabled in config
             if config and config.analytics.normalizer.json_extraction_regex:
                 import re
                 json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if json_match:
-                    response_data = json.loads(json_match.group())
-                    # For large datasets, append all data after LLM analysis
-                    if input_data.get("has_more_data", False) and result.rows:
-                        if "text" in response_data:
-                            response_data["text"] += self._format_all_data(result.rows, user_query)
-                    return response_data
+                    try:
+                        response_data = json.loads(json_match.group())
+                        # For large datasets, append all data after LLM analysis
+                        if input_data.get("has_more_data", False) and result.rows:
+                            if "text" in response_data:
+                                response_data["text"] += self._format_all_data(result.rows, user_query)
+                        return response_data
+                    except json.JSONDecodeError as e2:
+                        self.log.warning(f"Extracted JSON is still invalid: {e2}")
+                        self.log.warning(f"Extracted text: {json_match.group()}")
+            
             return None
     
     def _format_all_data(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
