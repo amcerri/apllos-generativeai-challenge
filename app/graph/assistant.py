@@ -182,7 +182,6 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
     if not _DB_CONFIGURED:
         try:
             import os
-            from app.infra.db import configure_engine
             
             dsn = os.environ.get("DATABASE_URL")
             if dsn:
@@ -194,9 +193,8 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
                 if "@db:" in dsn:
                     dsn = dsn.replace("@db:", "@host.docker.internal:")
                 
-                engine = configure_engine(url=dsn, echo=False, pool_size=5, readonly_default=False)
-                from app.infra import db
-                db._ENGINE = engine  # Set the global engine
+                from app.infra.db import ensure_db
+                ensure_db()  # Initialize database connection
                 log.info("Database configured successfully", dsn=dsn[:50] + "..." if len(dsn) > 50 else dsn)
                 _DB_CONFIGURED = True
             else:
