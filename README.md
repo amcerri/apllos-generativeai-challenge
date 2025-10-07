@@ -324,6 +324,24 @@ with start_span("node.analytics.exec"):
 ```
 
 Health
+Metrics (optional)
+```bash
+# If prometheus_client is installed, the API exposes /metrics
+curl http://localhost:2024/metrics
+# Prometheus scrape endpoint with counters and histograms
+```
+
+Directed tracing and node metrics
+- The server configures a local metrics registry (when available) and exposes counters:
+  - apllos_api_requests_total{agent,node}
+  - apllos_api_routing_fallbacks_total{from_agent,to_agent}
+  - apllos_api_llm_failures_total{component}
+- Histograms:
+  - apllos_api_node_latency_ms{node}
+
+Normalizer prompts
+- Analytics normalizer now loads system prompt and examples from `app/prompts/analytics/normalizer_system.txt` and `normalizer_examples.jsonl` when present, with an embedded fallback.
+
 ```bash
 curl http://localhost:2024/ok
 # {"status":"ok","db":"ok|down","checkpointer":"ok|noop"}

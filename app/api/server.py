@@ -39,6 +39,7 @@ _DEPS_AVAILABLE = True
 try:
     from app.infra.logging import get_logger
     from app.infra.tracing import start_span
+    from app.infra.metrics import configure_metrics, asgi_metrics_app, metrics_available
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     from langgraph.server import create_server
@@ -62,6 +63,12 @@ except Exception:  # pragma: no cover - optional
     CORSMiddleware = None
     create_server = None
     uvicorn = None
+    def configure_metrics(*_a: object, **_k: object) -> None:  # type: ignore
+        return
+    def asgi_metrics_app():  # type: ignore
+        return None
+    def metrics_available() -> bool:  # type: ignore
+        return False
 
 __all__ = ["get_app", "run"]
 
@@ -151,6 +158,16 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
             except Exception:
                 cp_ok = False
             return {"status": "ok", "db": "ok" if db_ok else "down", "checkpointer": "ok" if cp_ok else "noop"}
+
+        # Metrics endpoint (optional)
+        try:
+            configure_metrics(namespace="apllos", subsystem="api")
+            mapp = asgi_metrics_app()
+            if mapp is not None:
+                app.mount("/metrics", mapp)
+                log.info("Prometheus metrics mounted", extra={"path": "/metrics"})
+        except Exception:
+            pass
 
         # Mount LangGraph Server handlers
         try:
