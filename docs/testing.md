@@ -23,7 +23,7 @@ Describes the unit, e2e, and batch tests and the safety guarantees they enforce.
 
 ## Human-in-the-Loop
 
-- `app/graph/interrupts.py` provides `make_sql_gate` used by analytics executor when `require_sql_approval=True`.
+- [app/graph/interrupts.py](../app/graph/interrupts.py) provides `make_sql_gate` used by analytics executor when `require_sql_approval=true`.
 - E2E test checks shape/serializability of gates and the graph builder toggle.
 
 ## CI Considerations

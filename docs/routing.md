@@ -2,7 +2,7 @@
 
 This document explains how messages are routed to agents using an LLM-based classifier with deterministic supervision and allowlist context.
 
-## Classifier (`app/routing/llm_classifier.py`)
+## Classifier ([app/routing/llm_classifier.py](../app/routing/llm_classifier.py))
 
 - Primary path: OpenAI JSON Schema via centralized `llm_client`.
   - System prompt injects allowlist JSON (tables → columns) to improve table/column extraction.
@@ -15,7 +15,7 @@ This document explains how messages are routed to agents using an LLM-based clas
     - Document-style phrasing without tabular cues → knowledge
 - Output: normalized to `RouterDecision` (dataclass if available), including `agent`, `confidence`, `reason`, `tables`, `columns`, `signals`, `thread_id`.
 
-## Supervisor (`app/routing/supervisor.py`)
+## Supervisor ([app/routing/supervisor.py](../app/routing/supervisor.py))
 
 - Purpose: apply guardrails on top of classifier output; single-pass fallback, no loops.
 - Inputs: `RouterDecision` and optional `RoutingContext` (RAG hits, allowlist hints).
@@ -29,8 +29,8 @@ This document explains how messages are routed to agents using an LLM-based clas
 
 ## Allowlist
 
-- Generated from schema via `scripts/gen_allowlist.py` into `app/routing/allowlist.json`.
-- Embedded defaults are used if file is absent to avoid IO during request path (`assistant.py`).
+- Generated from schema via [scripts/gen_allowlist.py](../scripts/gen_allowlist.py) into `app/routing/allowlist.json`.
+- Embedded defaults are used if file is absent to avoid IO during request path ([app/graph/assistant.py](../app/graph/assistant.py)).
 - Planner validates identifiers strictly against allowlist; executor enforces read-only and further safety.
 
 ## Design Considerations

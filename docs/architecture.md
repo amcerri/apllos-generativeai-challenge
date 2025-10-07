@@ -10,9 +10,9 @@ This document explains the overall system architecture and how LangGraph orchest
 - Data: PostgreSQL (analytics), pgvector `doc_chunks` (RAG), local docs store.
 - External: OpenAI (chat + embeddings), optional Prometheus/OpenTelemetry.
 
-See project `README.md` for a mermaid diagram.
+See project [README.md](../README.md) for a mermaid diagram.
 
-## Graph Overview (`app/graph/build.py`)
+## Graph Overview ([app/graph/build.py](../app/graph/build.py))
 
 - Typed `GraphState` with per-key channels for safe fan-out in Studio.
 - Nodes:
@@ -27,11 +27,11 @@ See project `README.md` for a mermaid diagram.
 
 ### Routing
 
-- Classifier (`app/routing/llm_classifier.py`):
+- Classifier ([app/routing/llm_classifier.py](../app/routing/llm_classifier.py)):
   - Primary: OpenAI JSON Schema structured output via centralized LLM client.
   - Fallback: heuristic context-first rules (allowlist hits, SQL-ish structure, commerce cues).
   - Output normalized to `RouterDecision` contract.
-- Supervisor (`app/routing/supervisor.py`):
+- Supervisor ([app/routing/supervisor.py](../app/routing/supervisor.py)):
   - Context-first deterministic rules; single fallback to avoid loops.
   - Confidence recalibration; commerce domination when `commerce_doc` signal exists.
 
@@ -53,13 +53,13 @@ See project `README.md` for a mermaid diagram.
 - LLM Extractor: JSON Schema structured output; heuristic fallback on error/unavailable.
 - Summarizer: PT-BR summary with totals, top items, risks, and follow-ups.
 
-## API Layer (`app/api/server.py`)
+## API Layer ([app/api/server.py](../app/api/server.py))
 
 - FastAPI app with `/`, `/health`, `/ready`, `/ok` endpoints; mounts LangGraph server at `/graph`.
 - Metrics mount at `/metrics` when Prometheus client is available.
 - Graceful fallbacks when optional dependencies are absent.
 
-## Configuration (`app/config/settings.py` + YAMLs)
+## Configuration ([app/config/settings.py](../app/config/settings.py) + YAMLs)
 
 - Pydantic Settings + YAML merge with env substitution.
 - Centralized model configs and feature flags (reranker, normalizer).

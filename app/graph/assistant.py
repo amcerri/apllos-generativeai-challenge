@@ -1,30 +1,37 @@
 """
-Assistant factory (entrypoint for LangGraph Server / Studio).
+Analytics SQL executor (read-only, bounded, timed).
 
 Overview
 --------
-Expose a single function `get_assistant()` that returns a compiled LangGraph
-for our multi‑agent assistant (analytics, knowledge, commerce, triage). The
-builder is delegated to `app.graph.build.build_graph`, and this module only
-collects runtime switches (e.g., human‑in‑the‑loop gates) from optional
-settings or environment variables.
+Executes planner-generated SQL with strict safety guarantees: read-only
+transaction, server-side timeout, and client-side row cap. Converts DB rows to
+plain dictionaries for downstream normalization.
 
 Design
 ------
-- Keep import‑time side effects minimal and optional.
-- Provide resilient fallbacks for logging/tracing and for the graph builder.
-- Make configuration discoverable via function argument or environment.
+- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
+  transaction. No DDL/DML allowed.
+- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
+- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
+- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
+  if explicitly enabled via env flag.
+- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
+  If infra is absent at import time, it degrades gracefully.
 
 Integration
 -----------
-LangGraph Server should import: `app.graph.assistant:get_assistant`.
+- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
+  `limit_applied`, `reason`).
+- Returns an `ExecutorResult` with timing and diagnostics.
+- Logging and tracing are optional but supported if infra is available.
 
 Usage
 -----
->>> from app.graph.assistant import get_assistant
->>> graph = get_assistant({"require_sql_approval": False})
->>> bool(graph)
-True
+>>> from app.agents.analytics.executor import AnalyticsExecutor
+>>> exe = AnalyticsExecutor()
+>>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
+>>> res.row_count, isinstance(res.rows, list)
+(1, True)
 """
 
 from __future__ import annotations
@@ -81,30 +88,112 @@ def clear_cache():
     _GRAPH_CACHE.clear()
 
 def _load_allowlist() -> dict[str, Any]:
-    """Load allowlist from embedded mapping (no blocking IO)."""
+    """Load allowlist from JSON file when available, fallback to embedded.
+
+    Returns
+    -------
+    dict[str, Any]
+        Mapping of table -> list of columns.
+    """
+    import json
+    import os
     global _ALLOWLIST_CACHE
     if _ALLOWLIST_CACHE:
         return _ALLOWLIST_CACHE
 
-    # Embedded allowlist (previously the same as file contents)
-    allowlist = {
-        "orders": ["order_id", "customer_id", "order_status", "order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"],
-        "order_items": ["order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"],
-        "customers": ["customer_id", "customer_unique_id", "customer_zip_code_prefix", "customer_city", "customer_state"],
-        "products": ["product_id", "product_category_name", "product_name_lenght", "product_description_lenght", "product_photos_qty", "product_weight_g", "product_length_cm", "product_height_cm", "product_width_cm"],
-        "sellers": ["seller_id", "seller_zip_code_prefix", "seller_city", "seller_state"],
-        "order_payments": ["order_id", "payment_sequential", "payment_type", "payment_installments", "payment_value"],
-        "order_reviews": ["review_id", "order_id", "review_score", "review_comment_title", "review_comment_message", "review_creation_date", "review_answer_timestamp"],
-        "geolocation": ["geolocation_zip_code_prefix", "geolocation_lat", "geolocation_lng", "geolocation_city", "geolocation_state"],
-        "product_category_translation": ["product_category_name", "product_category_name_english"],
-    }
+    # Try to load from file first
+    json_path = os.path.join(os.path.dirname(__file__), "..", "routing", "allowlist.json")
+    json_path = os.path.abspath(json_path)
+    allowlist: dict[str, Any] | None = None
+    try:
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+                # Sanity check: table -> list[str]
+                allowlist = {str(t): [str(c) for c in (cols or [])] for t, cols in data.items()}
+    except Exception:
+        allowlist = None
+
+    # Embedded fallback (typos fixed to match common Olist schema)
+    if allowlist is None or not allowlist:
+        allowlist = {
+            "orders": [
+                "order_id",
+                "customer_id",
+                "order_status",
+                "order_purchase_timestamp",
+                "order_approved_at",
+                "order_delivered_carrier_date",
+                "order_delivered_customer_date",
+                "order_estimated_delivery_date",
+            ],
+            "order_items": [
+                "order_id",
+                "order_item_id",
+                "product_id",
+                "seller_id",
+                "shipping_limit_date",
+                "price",
+                "freight_value",
+            ],
+            "customers": [
+                "customer_id",
+                "customer_unique_id",
+                "customer_zip_code_prefix",
+                "customer_city",
+                "customer_state",
+            ],
+            "products": [
+                "product_id",
+                "product_category_name",
+                "product_name_length",
+                "product_description_length",
+                "product_photos_qty",
+                "product_weight_g",
+                "product_length_cm",
+                "product_height_cm",
+                "product_width_cm",
+            ],
+            "sellers": [
+                "seller_id",
+                "seller_zip_code_prefix",
+                "seller_city",
+                "seller_state",
+            ],
+            "order_payments": [
+                "order_id",
+                "payment_sequential",
+                "payment_type",
+                "payment_installments",
+                "payment_value",
+            ],
+            "order_reviews": [
+                "review_id",
+                "order_id",
+                "review_score",
+                "review_comment_title",
+                "review_comment_message",
+                "review_creation_date",
+                "review_answer_timestamp",
+            ],
+            "geolocation": [
+                "geolocation_zip_code_prefix",
+                "geolocation_lat",
+                "geolocation_lng",
+                "geolocation_city",
+                "geolocation_state",
+            ],
+            "product_category_translation": [
+                "product_category_name",
+                "product_category_name_english",
+            ],
+        }
 
     log = get_logger("graph.assistant")
     try:
-        log.info("Using embedded allowlist", extra={"tables": list(allowlist.keys())})
+        log.info("Allowlist loaded", extra={"tables": list(allowlist.keys())})
     except Exception:
         pass
-
     _ALLOWLIST_CACHE = allowlist
     return allowlist
 
