@@ -308,6 +308,15 @@ make test-e2e
 ---
 
 ## Observability
+Executor/Planner safeguards
+- Executor circuit breaker (per‑SQL hash), statement timeouts, client row cap, and EXPLAIN‑only dry‑run on rejected approvals.
+- Planner validation for allowlisted identifiers and JOINs (blocks cross‑schema and non‑allowlisted), with extended temporal column detection (created/purchase/approved/delivered/estimated).
+
+Knowledge/RAG controls
+- Retriever supports filters like `min_length` and `doc_type`; ranker accepts optional LLM reranker (`use_llm_reranker=True`) and falls back to heuristics.
+
+Commerce processing
+- LLM extractor accepts inferred document type hints; heuristic extractor reconciles totals and flags inconsistencies.
 
 Logging
 ```python
@@ -332,15 +341,22 @@ curl http://localhost:2024/metrics
 ```
 
 Directed tracing and node metrics
-- The server configures a local metrics registry (when available) and exposes counters:
-  - apllos_api_requests_total{agent,node}
-  - apllos_api_routing_fallbacks_total{from_agent,to_agent}
-  - apllos_api_llm_failures_total{component}
-- Histograms:
-  - apllos_api_node_latency_ms{node}
+- The server can configure a local metrics registry (when `prometheus_client` is installed) and exposes counters and histograms:
+  - Counters: requests by agent/node, routing fallbacks, LLM failures by component
+  - Histograms: node execution latency (ms)
 
 Normalizer prompts
-- Analytics normalizer now loads system prompt and examples from `app/prompts/analytics/normalizer_system.txt` and `normalizer_examples.jsonl` when present, with an embedded fallback.
+- The analytics normalizer loads the system prompt and examples from `app/prompts/analytics/normalizer_system.txt` and `normalizer_examples.jsonl` when present, falling back to an embedded prompt if not available.
+
+Planner and Executor safety
+- The planner enforces allowlist identifiers, blocks cross‑schema joins, validates join tables and extends temporal column detection (e.g., created/purchase/approved/delivered/estimated).
+- The executor runs queries in read‑only mode, applies statement timeouts and a client row cap, supports EXPLAIN‑only dry‑run (used when SQL approval is rejected), and uses a lightweight circuit breaker per SQL hash to short‑circuit repeated failures/timeouts.
+
+Knowledge/RAG controls
+- Retriever supports additional filters such as `min_length` and `doc_type`; the ranker supports an optional LLM reranker flag (`use_llm_reranker=True`) with graceful fallback to deterministic heuristics.
+
+Commerce processing
+- The LLM extractor accepts lightweight document type hints (inferred from text when missing), and the heuristic extractor reconciles item totals vs. declared totals, flagging inconsistencies.
 
 ```bash
 curl http://localhost:2024/ok

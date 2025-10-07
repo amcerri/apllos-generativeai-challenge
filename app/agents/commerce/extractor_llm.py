@@ -330,6 +330,20 @@ class LLMCommerceExtractor:
                 parts.append(f"Suggested document type: {doc_type_hint}")
             if currency_hint:
                 parts.append(f"Suggested currency: {currency_hint}")
+
+        # Lightweight detector: derive hints from text when none provided
+        if not doc_type_hint:
+            tl = text.lower()
+            if "invoice" in tl or "fatura" in tl or "nota fiscal" in tl:
+                parts.append("Detected document type: invoice")
+            elif "purchase order" in tl or " po " in tl:
+                parts.append("Detected document type: purchase_order")
+            elif "banquet event order" in tl or " beo " in tl:
+                parts.append("Detected document type: beo")
+            elif "receipt" in tl or "recibo" in tl:
+                parts.append("Detected document type: receipt")
+            elif "quote" in tl or "quotation" in tl or "orcamento" in tl or "orçamento" in tl:
+                parts.append("Detected document type: quote")
         
         # Add the main document text
         parts.append("\n=== DOCUMENT TEXT ===")
@@ -344,6 +358,7 @@ class LLMCommerceExtractor:
         parts.append("- Proper totals calculation and validation")
         parts.append("- Risk identification (calculation mismatches, missing data)")
         parts.append("- Business insights (delivery dates, payment terms, special conditions)")
+        parts.append("- Reconcile totals when possible; flag inconsistencies clearly")
         
         return "\n".join(parts)
 

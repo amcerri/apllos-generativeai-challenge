@@ -653,7 +653,11 @@ def _extract_year(lw: str) -> int | None:
 
 def _find_time_column(columns: list[str]) -> str | None:
     lwcols = [c.lower() for c in columns]
-    for hint in _TIME_HINTS:
+    # Extended hints include common business date fields
+    extended_hints = list(_TIME_HINTS) + [
+        "created", "updated", "purchase", "approved", "delivered", "estimated",
+    ]
+    for hint in extended_hints:
         for c in lwcols:
             if hint in c:
                 # return original‑case column
@@ -711,3 +715,30 @@ def _validate_identifiers(sql: str, allowlist: Mapping[str, Iterable[str]]) -> N
         table_found = t in tables or table_without_schema in tables
         if not table_found:
             raise ValueError(f"table not allowed: {t}")
+
+    _validate_joins(sql, allowlist)
+
+
+def _validate_joins(sql: str, allowlist: Mapping[str, Iterable[str]]) -> None:
+    """Best-effort validation for JOINs against the allowlist.
+
+    Ensures only allowlisted tables (optionally schema-qualified under
+    analytics.) appear in JOIN clauses. Cross-schema joins are rejected.
+
+    Parameters
+    ----------
+    sql: str
+        Final SQL text to validate.
+    allowlist: Mapping[str, Iterable[str]]
+        Allowed tables and columns.
+    """
+
+    join_re = re.compile(r"\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)\b", flags=re.IGNORECASE)
+    allowed_tables = set(allowlist)
+    for jm in join_re.finditer(sql):
+        jt = jm.group(1)
+        if "." in jt and not jt.lower().startswith("analytics."):
+            raise ValueError(f"cross-schema join not allowed: {jt}")
+        base = jt.replace("analytics.", "")
+        if (jt not in allowed_tables) and (base not in allowed_tables):
+            raise ValueError(f"join table not allowed: {jt}")

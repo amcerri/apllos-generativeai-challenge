@@ -149,6 +149,7 @@ class KnowledgeRanker:
         *,
         top_k: int = 5,
         min_score: float | None = None,
+        use_llm_reranker: bool = False,
     ) -> RankResult:
         """Return hits sorted by rerank score (desc), then original score.
 
@@ -165,6 +166,45 @@ class KnowledgeRanker:
             return RankResult(hits=[], used_weights=self._weights_map())
 
         with start_span("agent.knowledge.rank", {"top_k": top_k}):
+            # Optional LLM reranker path (best-effort, falls back silently)
+            if use_llm_reranker and hits:
+                try:
+                    from app.infra.llm_client import get_llm_client
+                    client = get_llm_client()
+                    if client.is_available():
+                        # Build a compact prompt that lists candidates and asks for sorted ids
+                        def _mk_row(h: RetrievalHitLike) -> dict[str, str | float | None]:
+                            return {
+                                "doc_id": getattr(h, "doc_id", None),
+                                "chunk_id": getattr(h, "chunk_id", None),
+                                "title": getattr(h, "title", None) or "",
+                                "text": (getattr(h, "text", "") or "")[:400],
+                                "score": float(getattr(h, "score", 0.0) or 0.0),
+                            }
+
+                        candidates = [_mk_row(h) for h in hits[: max(5, top_k)]]
+                        messages = [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a reranker. Sort candidates by relevance to the query. "
+                                    "Return JSON: {\"order\": [indices...]}, where indices reference input order (0-based)."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": (f"query: {query}\n" +
+                                             f"candidates: {candidates}"),
+                            },
+                        ]
+                        resp = client.chat_completion(messages=messages, model=getattr(client, "model", "gpt-4o-mini"), max_tokens=200, temperature=0.0)
+                        data = client.extract_json(resp.text if resp else "") if resp else None
+                        order = data.get("order") if isinstance(data, dict) else None
+                        if isinstance(order, list) and all(isinstance(i, int) for i in order):
+                            reord = [hits[i] for i in order if 0 <= i < len(hits)]
+                            hits = list(reord) + [h for i, h in enumerate(hits) if i not in order]
+                except Exception:
+                    pass
             q_tokens = _tokenize(q)
             q_phrase = q.lower()
 

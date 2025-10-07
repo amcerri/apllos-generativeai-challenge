@@ -114,6 +114,18 @@ class ExecutorResult:
 # ---------------------------------------------------------------------------
 # Executor
 # ---------------------------------------------------------------------------
+# Simple in-process circuit breaker (per-sql-hash)
+_BREAKER_FAILURES: dict[str, int] = {}
+_BREAKER_OPEN_UNTIL: dict[str, float] = {}
+_BREAKER_MAX_FAILURES: Final[int] = 3
+_BREAKER_RESET_AFTER_S: Final[float] = 60.0
+
+
+def _sql_key(sql: str) -> str:
+    import hashlib
+    return hashlib.sha256(sql.strip().encode("utf-8")).hexdigest()[:16]
+
+
 class AnalyticsExecutor:
     """Read-only SQL executor with server-side timeout and row cap."""
 
@@ -140,6 +152,7 @@ class AnalyticsExecutor:
         timeout_s: int | None = None,
         readonly: bool = True,
         include_explain: bool = False,
+        dry_run: bool = False,
     ) -> ExecutorResult:
         """Execute the given plan and return an :class:`ExecutorResult`.
 
@@ -152,6 +165,7 @@ class AnalyticsExecutor:
             (defaults to :data:`DEFAULT_TIMEOUT_S`).
         readonly: If True, enforce `default_transaction_read_only = on`.
         include_explain: If True, attach `EXPLAIN (FORMAT JSON)` in `meta`.
+        dry_run: When True, perform EXPLAIN-only without returning data rows.
         """
 
         # Extract plan fields with a tolerant adapter
@@ -163,6 +177,13 @@ class AnalyticsExecutor:
 
         # Safety gate: must be a pure SELECT, without DDL/DML verbs
         _assert_safe_select(sql)
+
+        # Circuit breaker: short-circuit when open
+        key = _sql_key(sql)
+        now = monotonic()
+        open_until = _BREAKER_OPEN_UNTIL.get(key)
+        if open_until and now < open_until:
+            raise RuntimeError("circuit_open: skipping execution due to repeated failures")
 
         # Reinstate a configurable row cap to avoid unbounded memory usage.
         # Defaults come from settings; callers can override via `max_rows`.
@@ -193,20 +214,33 @@ class AnalyticsExecutor:
                     # timeout in milliseconds
                     conn.exec_driver_sql(f"SET LOCAL statement_timeout = {timeout * 1000}")
 
-                    # Stream results
-                    result = conn.execution_options(stream_results=True).execute(
-                        sa.text(sql), params
-                    )
-                    for mapping in result.mappings():
-                        rows.append(dict(mapping))
-                        if len(rows) >= cap:
-                            break
-
-                    if include_explain:
+                    if dry_run:
+                        # EXPLAIN only; no data retrieval
                         explain_json = _explain_json(conn, sql, params)
+                    else:
+                        # Stream results
+                        result = conn.execution_options(stream_results=True).execute(
+                            sa.text(sql), params
+                        )
+                        for mapping in result.mappings():
+                            rows.append(dict(mapping))
+                            if len(rows) >= cap:
+                                break
+
+                        if include_explain:
+                            explain_json = _explain_json(conn, sql, params)
+
+                # reset breaker counter on success
+                _BREAKER_FAILURES.pop(key, None)
+                _BREAKER_OPEN_UNTIL.pop(key, None)
 
             except Exception as exc:  # capture and continue with diagnostics
                 warnings.append(f"execution_error: {type(exc).__name__}")
+                # increment breaker failures and open if threshold crossed
+                fail = _BREAKER_FAILURES.get(key, 0) + 1
+                _BREAKER_FAILURES[key] = fail
+                if fail >= _BREAKER_MAX_FAILURES:
+                    _BREAKER_OPEN_UNTIL[key] = now + _BREAKER_RESET_AFTER_S
                 raise
             finally:
                 exec_ms = (monotonic() - t0) * 1000.0
@@ -216,6 +250,8 @@ class AnalyticsExecutor:
             "row_cap": cap,
             "timeout_s": timeout,
             "explain": explain_json,
+            "circuit_failures": _BREAKER_FAILURES.get(key, 0),
+            "circuit_open_until": _BREAKER_OPEN_UNTIL.get(key),
         }
 
         return ExecutorResult(
