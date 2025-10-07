@@ -43,7 +43,19 @@ import re
 import time
 from typing import Any, Mapping
 
-_log = logging.getLogger(__name__)
+# Load .env early to ensure OPENAI_API_KEY is visible even if singleton initializes first
+try:  # pragma: no cover - optional dependency
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except Exception:
+    pass
+
+# Prefer centralized logger adapter (accepts structured extras)
+try:  # pragma: no cover - optional
+    from app.infra.logging import get_logger as _get_logger
+    _log = _get_logger(__name__)
+except Exception:  # fallback to stdlib logger
+    _log = logging.getLogger(__name__)
 
 # Optional OpenAI client
 _OpenAI: Any | None = None
@@ -150,6 +162,8 @@ class LLMClient:
         temperature: float = 0.1,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
+        *,
+        max_retries: int | None = None,
     ) -> LLMResponse | None:
         """Generate chat completion with retry logic.
 
@@ -177,8 +191,9 @@ class LLMClient:
 
         model = model or self.model
         last_exception = None
+        retries = self.max_retries if max_retries is None else max(0, int(max_retries))
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retries + 1):
             try:
                 self.log.debug(
                     "LLM request attempt",
@@ -228,7 +243,7 @@ class LLMClient:
                     error_type=type(exc).__name__,
                 )
 
-                if attempt < self.max_retries:
+                if attempt < retries:
                     delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
                     self.log.info("Retrying LLM request", delay=delay)
                     time.sleep(delay)
@@ -339,8 +354,15 @@ def get_llm_client() -> LLMClient:
     """
     global _LLM_CLIENT
     
-    if _LLM_CLIENT is None:
-        # Load configuration from environment
+    # Rebuild client when missing or unavailable (e.g., .env loaded after first call)
+    if _LLM_CLIENT is None or not _LLM_CLIENT.is_available():
+        # Reload .env just in case runtime loaded it later
+        try:
+            from dotenv import load_dotenv as _reload_dotenv  # type: ignore
+            _reload_dotenv()
+        except Exception:
+            pass
+
         api_key = os.getenv("OPENAI_API_KEY")
         model = "gpt-4o-mini"
         timeout = 60.0
