@@ -48,7 +48,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -101,16 +101,16 @@ class CommerceSummarizer:
         self.log = get_logger("agent.commerce.summarizer")
         self._config = get_config()
         
-        # Get configuration values with fallbacks
-        if self._config is None:
+        # Get configuration values with fallbacks using Settings model
+        try:
+            summarizer_cfg = getattr(getattr(self._config, "commerce"), "summarizer")  # type: ignore[attr-defined]
+            self.top_items = int(getattr(summarizer_cfg, "top_items", 3))
+            self.top_items_display = int(getattr(summarizer_cfg, "top_items_display", 10))
+            self.max_items_display = int(getattr(summarizer_cfg, "max_items_display", 5))
+        except Exception:
             self.top_items = 3
             self.top_items_display = 10
             self.max_items_display = 5
-        else:
-            summarizer_config = self._config.get_commerce_summarizer_config()
-            self.top_items = summarizer_config.get("top_items", 3)
-            self.top_items_display = summarizer_config.get("top_items_display", 10)
-            self.max_items_display = summarizer_config.get("max_items_display", 5)
 
     def summarize(self, doc: CommerceDocLike | Mapping[str, Any]) -> Any:
         """

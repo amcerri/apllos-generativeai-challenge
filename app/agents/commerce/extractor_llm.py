@@ -58,7 +58,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -176,10 +176,10 @@ class LLMCommerceExtractor:
             max_tokens = 4000
             strict = False
         else:
-            model = self._config.get_llm_model("commerce_extractor")
-            temperature = self._config.get_llm_temperature("commerce_extractor")
-            max_tokens = self._config.get_llm_max_tokens("commerce_extractor")
-            strict = self._config.get("commerce.extraction.json_schema_strict", False)
+            model = self._config.openai.commerce_model
+            temperature = self._config.openai.commerce_temperature
+            max_tokens = self._config.openai.commerce_max_tokens
+            strict = self._config.commerce.extraction.json_schema_strict
         
         # Call OpenAI with structured output
         response = client.chat.completions.create(

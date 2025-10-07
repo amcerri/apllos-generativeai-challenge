@@ -57,7 +57,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -208,18 +208,18 @@ class AnalyticsPlanner:
         self.log = get_logger("agent.analytics.planner")
         self._config = get_config()
         
-        # Get configuration values with fallbacks
-        if self._config is None:
+        # Get configuration values with fallbacks using Settings model
+        try:
+            planner_cfg = getattr(self._config, "analytics").planner  # type: ignore[attr-defined]
+            self.default_preview_limit = int(getattr(planner_cfg, "default_limit", 200))
+            self.max_safe_limit = int(getattr(planner_cfg, "max_limit", 5000))
+            self.examples_count = int(getattr(planner_cfg, "examples_count", 3))
+            self.max_examples = int(getattr(planner_cfg, "max_examples", 5))
+        except Exception:
             self.default_preview_limit = 200
             self.max_safe_limit = 5000
             self.examples_count = 3
             self.max_examples = 5
-        else:
-            planner_config = self._config.get_analytics_planner_config()
-            self.default_preview_limit = planner_config.get("default_limit", 200)
-            self.max_safe_limit = planner_config.get("max_limit", 5000)
-            self.examples_count = planner_config.get("examples_count", 3)
-            self.max_examples = planner_config.get("max_examples", 5)
         
         # Try to initialize LLM backend
         self._llm_backend = None

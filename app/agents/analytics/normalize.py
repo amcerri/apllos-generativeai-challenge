@@ -59,7 +59,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -227,11 +227,11 @@ class AnalyticsNormalizer:
             timeout = 10.0
             max_examples = 1
         else:
-            model = config.get_llm_model("analytics_normalizer")
-            max_tokens = config.get_llm_max_tokens("analytics_normalizer")
-            temperature = config.get_llm_temperature("analytics_normalizer")
-            timeout = config.get_llm_timeout("analytics_normalizer")
-            max_examples = config.get("analytics.normalizer.max_examples_in_prompt", 1)
+            model = config.openai.analytics_normalizer_model
+            max_tokens = config.openai.analytics_normalizer_max_tokens
+            temperature = config.openai.analytics_normalizer_temperature
+            timeout = config.openai.analytics_normalizer_timeout
+            max_examples = config.analytics.normalizer.max_examples_in_prompt
         
         client = OpenAI(api_key=api_key)
         
@@ -314,7 +314,7 @@ class AnalyticsNormalizer:
             return response_data
         except json.JSONDecodeError:
             # Try to extract JSON from response if enabled in config
-            if config and config.get("analytics.normalizer.json_extraction_regex", True):
+            if config and config.analytics.normalizer.json_extraction_regex:
                 import re
                 json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if json_match:

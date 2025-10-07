@@ -60,7 +60,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -145,14 +145,16 @@ class KnowledgeRetriever:
         self.log = get_logger("agent.knowledge.retriever")
         self._config = get_config()
         
-        # Get configuration values with fallbacks
-        if self._config is None:
+        # Get configuration values with fallbacks using Settings model
+        try:
+            retrieval_cfg = getattr(getattr(self._config, "knowledge"), "retrieval")  # type: ignore[attr-defined]
+            default_table = getattr(retrieval_cfg, "index", self.DEFAULT_TABLE)
+        except Exception:
             default_table = self.DEFAULT_TABLE
+        try:
+            default_model = getattr(getattr(self._config, "openai"), "embeddings_model", self.DEFAULT_MODEL)  # type: ignore[attr-defined]
+        except Exception:
             default_model = self.DEFAULT_MODEL
-        else:
-            retrieval_config = self._config.get_knowledge_retrieval_config()
-            default_table = retrieval_config.get("index", self.DEFAULT_TABLE)
-            default_model = self._config.get_llm_model("embeddings")
         
         self.table = _validate_table_name(table or default_table)
         self.model = model or default_model
@@ -174,13 +176,13 @@ class KnowledgeRetriever:
         """
         
         # Get configuration values with fallbacks
-        if self._config is None:
+        try:
+            retrieval_cfg = getattr(getattr(self._config, "knowledge"), "retrieval")  # type: ignore[attr-defined]
+            default_top_k = int(getattr(retrieval_cfg, "top_k", 5))
+            default_min_score = float(getattr(retrieval_cfg, "min_score", 0.6))
+        except Exception:
             default_top_k = 5
             default_min_score = 0.6
-        else:
-            retrieval_config = self._config.get_knowledge_retrieval_config()
-            default_top_k = retrieval_config.get("top_k", 5)
-            default_min_score = retrieval_config.get("min_score", 0.6)
 
         top_k_i = max(1, int(top_k or default_top_k))
         min_score_f = min(1.0, max(0.0, float(min_score or default_min_score)))

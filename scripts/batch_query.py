@@ -40,7 +40,7 @@ import yaml
 from dotenv import load_dotenv
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -114,8 +114,7 @@ async def process_query(
         if config is None:
             timeout_seconds = 120.0
         else:
-            batch_config = config.get_batch_processing_config()
-            timeout_seconds = batch_config.get("query_timeout_seconds", 120.0)
+            timeout_seconds = config.batch_processing.query_timeout_seconds
         
         # Create empty thread (like query_assistant.py)
         response = await client.post(
@@ -385,8 +384,7 @@ async def main():
         sequential_processing = True
         concurrent_limit = 1
     else:
-        batch_config = config.get_batch_processing_config()
-        sequential_processing = batch_config.get("sequential_processing", True)
+        sequential_processing = config.batch_processing.sequential_processing
         concurrent_limit = 1 if sequential_processing else args.concurrent
     
     # Process queries with limited concurrency
