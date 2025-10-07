@@ -1,34 +1,37 @@
 """
-Graph builder (LangGraph wiring for multi-agent assistant).
+Analytics SQL executor (read-only, bounded, timed).
 
 Overview
 --------
-Assemble a LangGraph graph that routes user requests across four specialized
-agents (analytics, knowledge, commerce, triage) using a context-first
-supervisor. The build is dependency-light and degrades gracefully if LangGraph
-is not available, returning a descriptive stub for tests.
+Executes planner-generated SQL with strict safety guarantees: read-only
+transaction, server-side timeout, and client-side row cap. Converts DB rows to
+plain dictionaries for downstream normalization.
 
 Design
 ------
-- Optional imports for LangGraph; provide safe fallbacks.
-- Nodes wrap our agent components with minimal, business-centric I/O.
-- Routing: LLM classifier → deterministic supervisor with single-pass fallbacks.
-- Human-in-the-loop: optional SQL approval gate emitted before execution.
-- Checkpointing: integrated when available via the infra helper.
-- Typed state with per-key channels (Annotated reducers) to support concurrent
-  updates during Studio graph rendering.
+- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
+  transaction. No DDL/DML allowed.
+- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
+- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
+- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
+  if explicitly enabled via env flag.
+- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
+  If infra is absent at import time, it degrades gracefully.
 
 Integration
 -----------
-- Use this builder from the API layer or from `assistant.py` to obtain a
-  compiled graph. Example usage below works with or without LangGraph installed.
+- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
+  `limit_applied`, `reason`).
+- Returns an `ExecutorResult` with timing and diagnostics.
+- Logging and tracing are optional but supported if infra is available.
 
 Usage
 -----
->>> from app.graph.build import build_graph
->>> g = build_graph(require_sql_approval=False)
->>> bool(g)  # a compiled graph or a descriptive stub
-True
+>>> from app.agents.analytics.executor import AnalyticsExecutor
+>>> exe = AnalyticsExecutor()
+>>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
+>>> res.row_count, isinstance(res.rows, list)
+(1, True)
 """
 
 from __future__ import annotations
@@ -86,6 +89,15 @@ except Exception:  # pragma: no cover - optional
         return _nullcontext()
 
     start_span = _fallback_start_span
+
+# Optional metrics (prometheus_client may be absent)
+try:
+    from app.infra.metrics import inc_counter as _inc_counter, observe_histogram as _observe_hist
+except Exception:  # pragma: no cover - optional
+    def _inc_counter(_name: str, labels: Mapping[str, str] | None = None, amount: float = 1.0) -> None:
+        return
+    def _observe_hist(_name: str, value_ms: float, labels: Mapping[str, str] | None = None) -> None:
+        return
 
 get_checkpointer: Any
 try:
@@ -393,6 +405,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
         # -- Node definitions (return deltas only) ---------------------------
         def node_route(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             q = str(state.get("query", "")).strip()
             attachment = state.get("attachment")
             
@@ -426,15 +440,20 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         "thread_id": getattr(dec, "thread_id", ""),
                     }
                 
-                return {
+                out = {
                     "allowlist": allowlist or {},  # Include allowlist in state
                     "router_decision": dec_dict,
                     "tables": list(dec_dict.get("tables", [])),
                     "columns": list(dec_dict.get("columns", [])),
                     "signals": list(dec_dict.get("signals", [])),
                 }
+            _inc_counter("requests_total", {"agent": "router", "node": "route"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "route"})
+            return out
 
         def node_supervisor(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.supervisor"):
                 log.info("Supervisor node called", 
                         router_decision=state.get("router_decision"),
@@ -465,10 +484,15 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     dec2_dict = {"agent": "triage", "confidence": 0.0, "reason": "", "tables": [], "columns": [], "signals": []}
                 
                 agent = (dec2_dict.get("agent") or "triage").strip()
-                return {"agent": agent, "router_decision": dec2_dict}
+                out = {"agent": agent, "router_decision": dec2_dict}
+            _inc_counter("requests_total", {"agent": "routing", "node": "supervisor"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "supervisor"})
+            return out
 
         # Analytics pipeline
         def node_an_plan(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.analytics.plan"):
                 allowlist = state.get("allowlist") or {}
                 # Fallback to hardcoded allowlist if empty
@@ -488,9 +512,14 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     query=str(state.get("query", "")),
                     allowlist=allowlist,
                 )
-                return {"analytics_plan": plan}
+                out = {"analytics_plan": plan}
+            _inc_counter("requests_total", {"agent": "analytics", "node": "plan"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "analytics.plan"})
+            return out
 
         def node_an_exec(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.analytics.exec"):
                 plan = state.get("analytics_plan")
                 if plan is None:
@@ -536,9 +565,13 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
                 rows = analytics_executor.execute(plan_dict, dry_run=dry_run, include_explain=True)
                 out["analytics_rows"] = rows
+                _inc_counter("requests_total", {"agent": "analytics", "node": "exec"})
+                _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "analytics.exec"})
                 return out
 
         def node_an_norm(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.analytics.normalize"):
                 result = state.get("analytics_rows")
                 plan = state.get("analytics_plan") or {}
@@ -564,20 +597,35 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     result=result_dict,
                     question=str(state.get("query", ""))
                 )
-                return {"answer": normalized}
+                out = {"answer": normalized}
+            _inc_counter("requests_total", {"agent": "analytics", "node": "normalize"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "analytics.normalize"})
+            return out
 
         # Knowledge pipeline
         def node_kn_retrieve(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.knowledge.retrieve"):
                 result = retriever.retrieve(query=str(state.get("query", "")), top_k=state.get("k", 6), min_score=0.01)
-                return {"hits": result.hits}
+                out = {"hits": result.hits}
+            _inc_counter("requests_total", {"agent": "knowledge", "node": "retrieve"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "knowledge.retrieve"})
+            return out
 
         def node_kn_rank(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.knowledge.rank"):
                 result = ranker.rank(query=str(state.get("query", "")), hits=state.get("hits") or [])
-                return {"ranked": result.hits}
+                out = {"ranked": result.hits}
+            _inc_counter("requests_total", {"agent": "knowledge", "node": "rank"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "knowledge.rank"})
+            return out
 
         def node_kn_answer(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.knowledge.answer"):
                 ans = answerer.answer(
                     query=str(state.get("query", "")), ranked=state.get("ranked") or []
@@ -586,11 +634,15 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 out: dict[str, Any] = {"answer": ans}
                 if cites:
                     out["citations"] = cites
+                _inc_counter("requests_total", {"agent": "knowledge", "node": "answer"})
+                _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "knowledge.answer"})
                 return out
 
         # Commerce pipeline
         def node_co_process_doc(state: GraphState) -> dict[str, Any]:
             """Process attachment and extract text."""
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.commerce.process_doc"):
                 attachment = state.get("attachment")
                 
@@ -608,11 +660,38 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     return {"processed_document": {"text": "", "success": False, "warnings": ["no_attachment"]}}
                 
                 # Process attachment
+                # Enforce simple attachment guardrails (size/mime) before processing
+                try:
+                    max_size_mb = 50
+                    size = int((attachment.get("metadata", {}) or {}).get("size", 0))
+                    if size and size > max_size_mb * 1024 * 1024:
+                        return {"processed_document": {"text": "", "success": False, "warnings": ["attachment_too_large"]}}
+                    # MIME/type constraints when provided
+                    allowed_mimes = {
+                        "application/pdf",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/msword",
+                        "text/plain",
+                        "image/png",
+                        "image/jpeg",
+                        "image/tiff",
+                        "image/bmp",
+                    }
+                    mt = str(attachment.get("mime_type") or "").strip()
+                    if mt and mt not in allowed_mimes:
+                        return {"processed_document": {"text": "", "success": False, "warnings": ["unsupported_mime"]}}
+                except Exception:
+                    pass
                 result = document_processor.process_attachment(attachment)
-                return {"processed_document": result}
+                out = {"processed_document": result}
+            _inc_counter("requests_total", {"agent": "commerce", "node": "process_doc"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "commerce.process_doc"})
+            return out
 
         def node_co_extract_llm(state: GraphState) -> dict[str, Any]:
             """Extract structured data using LLM."""
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.commerce.extract_llm"):
                 processed = state.get("processed_document", {})
                 text = processed.get("text", "")
@@ -626,13 +705,17 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 
                 # Update processed document with extraction result
                 processed["document"] = document
-                
-                return {"processed_document": processed}
+                out = {"processed_document": processed}
+            _inc_counter("requests_total", {"agent": "commerce", "node": "extract_llm"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "commerce.extract_llm"})
+            return out
 
 
 
         def node_co_summarize(state: GraphState) -> dict[str, Any]:
             """Summarize processed document."""
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.commerce.summarize"):
                 processed = state.get("processed_document", {})
                 document = processed.get("document")
@@ -648,13 +731,21 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     ans["meta"]["processing_method"] = processed.get("method", "unknown")
                     ans["meta"]["processing_warnings"] = processed.get("warnings", [])
 
-                return {"answer": ans}
+                out = {"answer": ans}
+            _inc_counter("requests_total", {"agent": "commerce", "node": "summarize"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "commerce.summarize"})
+            return out
 
         # Triage
         def node_tr_handle(state: GraphState) -> dict[str, Any]:
+            import time as _t
+            _t0 = _t.perf_counter()
             with start_span("node.triage.handle"):
                 ans = triage.handle(query=str(state.get("query", "")), signals=state.get("signals"))
-                return {"answer": ans}
+                out = {"answer": ans}
+            _inc_counter("requests_total", {"agent": "triage", "node": "handle"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "triage.handle"})
+            return out
 
         # -- Graph wiring ----------------------------------------------------
         sg.add_node("route", node_route)

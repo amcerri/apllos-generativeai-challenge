@@ -21,7 +21,7 @@ This document provides runbooks for local development, bootstrap, monitoring, an
 ## Logs and Tracing
 
 - Logs: `make logs` (Studio container) or view terminal output.
-- Tracing: enable OTEL as needed; see `infra.md` for exporters.
+- Tracing: enable OTEL as needed; see [infra.md](infra.md) for exporters.
 
 ## Database
 
@@ -47,3 +47,5 @@ This document provides runbooks for local development, bootstrap, monitoring, an
 
 - `REQUIRE_SQL_APPROVAL=true` to enforce human gate for SQL execution.
 - `APP_EXPLAIN_ANALYZE=true` to run EXPLAIN ANALYZE (staging only recommended).
+- `API_ALLOWED_ORIGINS="http://localhost:3000,https://example.com"` to restrict CORS.
+- `EXECUTOR_SANITIZE_SQL=true` to include a safe SQL preview instead of full SQL in meta.

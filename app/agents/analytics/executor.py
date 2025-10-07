@@ -245,8 +245,12 @@ class AnalyticsExecutor:
             finally:
                 exec_ms = (monotonic() - t0) * 1000.0
 
+        # Sanitize SQL in meta based on environment flag (default: show full SQL).
+        sanitize = os.getenv("EXECUTOR_SANITIZE_SQL", "false").strip().lower() in {"1", "true", "yes"}
+        sql_preview = _preview_sql(sql) if sanitize else sql
+
         meta: dict[str, Any] = {
-            "sql": sql,
+            "sql": sql_preview,
             "row_cap": cap,
             "timeout_s": timeout,
             "explain": explain_json,
@@ -291,7 +295,7 @@ def _assert_safe_select(sql: str) -> None:
 
     # Optional function allowlist (best-effort): reject unknown function calls
     _ALLOWED_FUNCS = {
-        "count", "sum", "avg", "min", "max", "coalesce", "date_trunc", "extract",
+        "count", "sum", "avg", "min", "max", "coalesce", "nullif", "date_trunc", "extract",
         "upper", "lower", "substring", "round", "floor", "ceil", "greatest", "least",
     }
     import re as _re
@@ -333,3 +337,25 @@ def _explain_json(conn: Any, sql: str, params: Mapping[str, Any]) -> Any | None:
     except Exception as exc:  # best-effort; attach warning only
         # Do not raise—record diagnostics in meta via caller
         return {"error": type(exc).__name__, "message": str(exc)}
+
+
+def _preview_sql(sql: str, *, max_len: int = 220) -> str:
+    """Return a safe preview of the SQL for meta/logs.
+
+    Parameters
+    ----------
+    sql : str
+        Full SQL text.
+    max_len : int
+        Maximum length of the preview string.
+
+    Returns
+    -------
+    str
+        Preview string with whitespace collapsed and truncated.
+    """
+    s = (sql or "").strip()
+    s = " ".join(s.split())
+    if len(s) > max_len:
+        return s[: max_len - 1] + "…"
+    return s

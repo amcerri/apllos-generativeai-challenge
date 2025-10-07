@@ -1,15 +1,15 @@
 # Configuration and Models Settings
 
-Explains the configuration model (`app/config/settings.py`) and YAML files under `app/config/*.yaml`.
+Explains the configuration model ([app/config/settings.py](../app/config/settings.py)) and YAML files under `app/config/*.yaml`.
 
 ## Settings Loader
 
 - `Settings` (Pydantic Settings) merges:
-  - `config.yaml`: app/server basics
-  - `models.yaml`: LLM and embeddings models
-  - `agents.yaml`: per-agent settings
-  - `database.yaml`: DB and checkpointer
-  - `observability.yaml`: logging, tracing, debug
+  - [config.yaml](../app/config/config.yaml): app/server basics
+  - [models.yaml](../app/config/models.yaml): LLM and embeddings models
+  - [agents.yaml](../app/config/agents.yaml): per-agent settings
+  - [database.yaml](../app/config/database.yaml): DB and checkpointer
+  - [observability.yaml](../app/config/observability.yaml): logging, tracing, debug
 - Environment variables support with `${VAR:-default}` substitution.
 - Global accessor: `from app.config.settings import get_settings`.
 

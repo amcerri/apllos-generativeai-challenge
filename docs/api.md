@@ -4,7 +4,7 @@ Describes the ASGI API provided for local runs and integration, and how it integ
 
 ## Overview
 
-- Implementation: `app/api/server.py`
+- Implementation: [app/api/server.py](../app/api/server.py)
 - Framework: FastAPI (optional at import time; graceful fallback to stubs)
 - Mounted: LangGraph Server handlers under `/graph`
 - Health endpoints: `/health`, `/ready`, `/ok`

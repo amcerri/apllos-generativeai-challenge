@@ -13,8 +13,8 @@
   - [Overview](#overview)
   - [Architecture](#architecture)
   - [Quick Start](#quick-start)
-    - [Docker (recomendado)](#docker-recomendado)
-    - [Ambiente local](#ambiente-local)
+    - [Docker (recommended)](#docker-recommended)
+    - [Local environment](#local-environment)
   - [Configuration](#configuration)
   - [Usage](#usage)
     - [LangGraph Studio](#langgraph-studio)
@@ -152,7 +152,7 @@ make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Or
 ## Configuration
 
 - `.env` (loaded at runtime) + YAMLs in `app/config/*.yaml`
-- Pydantic Settings (`app/config/settings.py`) with nested keys and env overrides
+- Pydantic Settings ([app/config/settings.py](app/config/settings.py)) with nested keys and env overrides
 
 Key variables
 ```bash
@@ -160,6 +160,10 @@ OPENAI_API_KEY=...
 DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app
 LOG_LEVEL=INFO
 REQUIRE_SQL_APPROVAL=false
+# CORS allowed origins (comma-separated, only for API server)
+API_ALLOWED_ORIGINS=http://localhost:3000
+# Executor meta: show safe SQL preview instead of full SQL
+EXECUTOR_SANITIZE_SQL=false
 ```
 
 Centralized model configs
@@ -189,7 +193,7 @@ Row caps and timeouts (analytics executor)
 - UI: `https://smith.langchain.com/studio/?baseUrl=http://localhost:2024`
 - Threads preserve context; visualize state, nodes and human interrupts
 
-### CLI (`scripts/query_assistant.py` via Make)
+### CLI ([scripts/query_assistant.py](scripts/query_assistant.py) via Make)
 
 ```bash
 # Simple query (user message in pt-BR)
@@ -214,7 +218,7 @@ make query QUERY="Detalhe por estado" THREAD_ID=thr-...
 - Ranker: heuristic (overlap, phrase, length penalties) with optional LLM reranker
 - Answerer: pt‑BR answer with citations; extractive fallback if LLM unavailable
 
-RAG schema (DDL included in `data/samples/schema.sql`)
+RAG schema (DDL included in [data/samples/schema.sql](data/samples/schema.sql))
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS doc_chunks (
@@ -241,12 +245,15 @@ CREATE INDEX IF NOT EXISTS idx_doc_chunks_embedding_ivfflat
 
 ## API
 
-Endpoints (ASGI — `app/api/server.py`)
+Endpoints (ASGI — [app/api/server.py](app/api/server.py))
 - `GET /`     → landing
 - `GET /health` → liveness
 - `GET /ready`  → readiness
 - `GET /ok`     → extended health (DB and checkpointer)
 - `GET /graph`  → LangGraph Server handlers (Studio)
+
+Notes
+- CORS can be restricted using `API_ALLOWED_ORIGINS` (comma-separated).
 
 ---
 
@@ -290,10 +297,10 @@ make logs logs-db shell shell-db clean install-deps
 ```
 
 Scripts
-- `scripts/ingest_analytics.py`: load Olist CSVs
-- `scripts/ingest_vectors.py`: index documents into `doc_chunks`
-- `scripts/gen_allowlist.py`: generate allowlist (tables/columns) into `app/routing/allowlist.json`
-- `scripts/query_assistant.py`: CLI to query the assistant (Studio server)
+- [scripts/ingest_analytics.py](scripts/ingest_analytics.py): load Olist CSVs
+- [scripts/ingest_vectors.py](scripts/ingest_vectors.py): index documents into `doc_chunks`
+- [scripts/gen_allowlist.py](scripts/gen_allowlist.py): generate allowlist (tables/columns) into `app/routing/allowlist.json`
+- [scripts/query_assistant.py](scripts/query_assistant.py): CLI to query the assistant (Studio server)
 
 ---
 
@@ -351,11 +358,12 @@ Directed tracing and node metrics
   - Histograms: node execution latency (ms)
 
 Normalizer prompts
-- The analytics normalizer loads the system prompt and examples from `app/prompts/analytics/normalizer_system.txt` and `normalizer_examples.jsonl` when present, falling back to an embedded prompt if not available.
+- The analytics normalizer loads the system prompt and examples from [app/prompts/analytics/normalizer_system.txt](app/prompts/analytics/normalizer_system.txt) and [normalizer_examples.jsonl](app/prompts/analytics/normalizer_examples.jsonl) when present, falling back to an embedded prompt if not available.
 
 Planner and Executor safety
 - The planner enforces allowlist identifiers, blocks cross‑schema joins, validates join tables and extends temporal column detection (e.g., created/purchase/approved/delivered/estimated).
 - The executor runs queries in read‑only mode, applies statement timeouts and a client row cap, supports EXPLAIN‑only dry‑run (used when SQL approval is rejected), and uses a lightweight circuit breaker per SQL hash to short‑circuit repeated failures/timeouts.
+  - When `EXECUTOR_SANITIZE_SQL=true`, the executor exposes a safe SQL preview in `meta.sql` instead of the full SQL.
 
 Knowledge/RAG controls
 - Retriever supports additional filters such as `min_length` and `doc_type`; the ranker supports an optional LLM reranker flag (`use_llm_reranker=True`) with graceful fallback to deterministic heuristics.

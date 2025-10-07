@@ -1,38 +1,37 @@
 """
-Routing LLM classifier
+Analytics SQL executor (read-only, bounded, timed).
 
 Overview
 --------
-Classifies a user message into one of the assistant agents (analytics,
-knowledge, commerce, triage) and extracts table/column hints using a
-language model with Structured Outputs. Falls back to a lightweight
-heuristic classifier when the LLM client is unavailable.
+Executes planner-generated SQL with strict safety guarantees: read-only
+transaction, server-side timeout, and client-side row cap. Converts DB rows to
+plain dictionaries for downstream normalization.
 
 Design
 ------
-- Prompts live in `app/prompts/routing/{system.txt,examples.jsonl}`.
-- Allowlist (tables → columns) is injected into the system prompt by
-  replacing the `<<<ALLOWLIST_JSON>>>` placeholder.
-- Pluggable LLM backend with an optional OpenAI implementation using
-  JSON Schema (strict) response formatting.
-- Output normalized to the `RouterDecision` contract (dict or dataclass).
+- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
+  transaction. No DDL/DML allowed.
+- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
+- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
+- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
+  if explicitly enabled via env flag.
+- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
+  If infra is absent at import time, it degrades gracefully.
 
 Integration
 -----------
-- Import and call `classify(message, allowlist, thread_id=None)`.
-- Provide an LLM backend (see `OpenAIJSONBackend`) or rely on the fallback
-  rules for basic routing in constrained environments.
+- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
+  `limit_applied`, `reason`).
+- Returns an `ExecutorResult` with timing and diagnostics.
+- Logging and tracing are optional but supported if infra is available.
 
 Usage
 -----
->>> from app.routing.llm_classifier import LLMClassifier, OpenAIJSONBackend
->>> clf = LLMClassifier()  # will try OpenAI if available, else fallback
->>> decision = clf.classify("Qual foi a receita por mês em 2017?", {
-...     "orders": ["order_id", "order_purchase_timestamp", "order_status"],
-...     "order_items": ["order_id", "price", "freight_value"],
-... })
->>> isinstance(decision, dict) or getattr(decision, "agent", None) in {"analytics","knowledge","commerce","triage"}
-True
+>>> from app.agents.analytics.executor import AnalyticsExecutor
+>>> exe = AnalyticsExecutor()
+>>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
+>>> res.row_count, isinstance(res.rows, list)
+(1, True)
 """
 
 from __future__ import annotations
@@ -234,17 +233,49 @@ class LLMClassifier:
 
     # Internals --------------------------------------------------------------
     def _load_system_prompt(self, allowlist: Mapping[str, Iterable[str]]) -> str:
-        # Embedded minimal system prompt to avoid blocking IO in ASGI path
-        base = (
-            "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
-            "Also extract any tables/columns present in the message according to the provided allowlist."
-        )
-        injected = base + "\nALLOWLIST_JSON=" + _allowlist_to_json(allowlist)
+        # Try to load from prompts file; fallback to embedded minimal prompt
+        try:
+            base_dir = self.base_dir.parent / "prompts" / "routing"
+            system_path = base_dir / "system.txt"
+            if system_path.exists():
+                content = system_path.read_text(encoding="utf-8")
+            else:
+                content = (
+                    "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
+                    "Also extract any tables/columns present in the message according to the provided allowlist."
+                )
+        except Exception:
+            content = (
+                "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
+                "Also extract any tables/columns present in the message according to the provided allowlist."
+            )
+        injected = content + "\nALLOWLIST_JSON=" + _allowlist_to_json(allowlist)
         return injected
 
     def _load_examples(self) -> list[dict[str, str]]:
-        # Skip disk reads; keep examples empty for fast routing
-        return []
+        # Load few-shot examples if available
+        try:
+            base_dir = self.base_dir.parent / "prompts" / "routing"
+            examples_path = base_dir / "examples.jsonl"
+            if not examples_path.exists():
+                return []
+            rows: list[dict[str, str]] = []
+            for line in examples_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                import json as _json
+                obj = _json.loads(line)
+                # Expect keys: role/content or input/output; adapt minimally
+                if "role" in obj and "content" in obj:
+                    rows.append({"role": str(obj["role"]), "content": str(obj["content"])})
+                elif "input" in obj:
+                    rows.append({"role": "user", "content": str(obj["input"])})
+                    if "output" in obj:
+                        rows.append({"role": "assistant", "content": str(obj["output"])})
+            return rows
+        except Exception:
+            return []
 
     def _heuristic_decide(
         self,

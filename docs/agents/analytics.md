@@ -2,7 +2,7 @@
 
 Covers the planner, executor, and normalizer modules.
 
-## Planner (`app/agents/analytics/planner.py`)
+## Planner ([app/agents/analytics/planner.py](../../app/agents/analytics/planner.py))
 
 - Purpose: Translate NL requests into safe SQL bounded by an allowlist.
 - Features:
@@ -12,7 +12,7 @@ Covers the planner, executor, and normalizer modules.
   - Config-driven limits: `default_limit`, `max_limit`, examples count.
 - Output: `PlannerPlan` with `sql`, `params`, `reason`, `limit_applied`, `warnings`.
 
-## Executor (`app/agents/analytics/executor.py`)
+## Executor ([app/agents/analytics/executor.py](../../app/agents/analytics/executor.py))
 
 - Purpose: Execute planner SQL safely.
 - Safety:
@@ -22,7 +22,7 @@ Covers the planner, executor, and normalizer modules.
   - Circuit breaker keyed by SQL hash with backoff after repeated failures.
 - Output: `ExecutorResult` with `rows`, counts, latency, warnings, and `meta` (sql, row_cap, timeout, explain, breaker stats).
 
-## Normalizer (`app/agents/analytics/normalize.py`)
+## Normalizer ([app/agents/analytics/normalize.py](../../app/agents/analytics/normalize.py))
 
 - Purpose: Convert raw rows into PT-BR business narrative.
 - Paths:

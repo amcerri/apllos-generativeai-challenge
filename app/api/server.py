@@ -1,29 +1,37 @@
 """
-HTTP Server (ASGI) for the multi‑agent assistant.
+Analytics SQL executor (read-only, bounded, timed).
 
 Overview
 --------
-Expose an ASGI app compatible with LangGraph Server / Studio. The server mounts
-LangGraph's HTTP handlers under `/graph` when available and provides minimal
-health endpoints. Uses single guard for optional dependencies with graceful fallbacks.
+Executes planner-generated SQL with strict safety guarantees: read-only
+transaction, server-side timeout, and client-side row cap. Converts DB rows to
+plain dictionaries for downstream normalization.
 
 Design
 ------
-- Single guard for FastAPI/LangGraph unavailability with graceful fallbacks.
-- Logs via stdlib logging with start_span no-op fallback.
-- Simplified error handling and conditional logic.
+- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
+  transaction. No DDL/DML allowed.
+- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
+- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
+- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
+  if explicitly enabled via env flag.
+- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
+  If infra is absent at import time, it degrades gracefully.
 
 Integration
 -----------
-LangGraph Server may import the graph directly (`app.graph.assistant:get_assistant`).
-This module targets local runs and container deployment.
+- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
+  `limit_applied`, `reason`).
+- Returns an `ExecutorResult` with timing and diagnostics.
+- Logging and tracing are optional but supported if infra is available.
 
 Usage
 -----
->>> from app.api.server import get_app
->>> app = get_app({"require_sql_approval": False})
->>> bool(app)
-True
+>>> from app.agents.analytics.executor import AnalyticsExecutor
+>>> exe = AnalyticsExecutor()
+>>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
+>>> res.row_count, isinstance(res.rows, list)
+(1, True)
 """
 
 from __future__ import annotations
@@ -105,6 +113,8 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
         return get_assistant(settings)
 
     allow_cors = _as_bool(os.environ.get("API_ENABLE_CORS"), True)
+    allowed_origins = os.environ.get("API_ALLOWED_ORIGINS", "*").strip()
+    origin_list = [o.strip() for o in allowed_origins.split(",") if o.strip()] or ["*"]
 
     with start_span("api.server.build"):
         app = FastAPI(title="POC Multi-Agent Assistant", version="0.1.0")
@@ -125,7 +135,7 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
         if allow_cors:
             app.add_middleware(
                 CORSMiddleware,
-                allow_origins=["*"],
+                allow_origins=origin_list,
                 allow_credentials=True,
                 allow_methods=["*"],
                 allow_headers=["*"],
