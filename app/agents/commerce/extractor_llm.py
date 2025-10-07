@@ -166,8 +166,12 @@ class LLMCommerceExtractor:
             currency_hint=currency_hint
         )
         
-        # Create OpenAI client
-        client = openai.OpenAI(api_key=api_key)
+        # Get centralized LLM client
+        from app.infra.llm_client import get_llm_client
+        client = get_llm_client()
+        
+        if not client.is_available():
+            raise ValueError("LLM client not available")
         
         # Get configuration values with fallbacks
         if self._config is None:
@@ -181,13 +185,15 @@ class LLMCommerceExtractor:
             max_tokens = self._config.openai.commerce_max_tokens
             strict = self._config.commerce.extraction.json_schema_strict
         
-        # Call OpenAI with structured output
-        response = client.chat.completions.create(
-            model=model,
+        # Call LLM with structured output
+        response = client.chat_completion(
             messages=[
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": user_message}
             ],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -195,20 +201,16 @@ class LLMCommerceExtractor:
                     "schema": self._json_schema,
                     "strict": strict
                 }
-            },
-            temperature=temperature,
-            max_tokens=max_tokens,
+            }
         )
         
-        # Parse response
-        content = response.choices[0].message.content
-        if not content:
-            raise ValueError("Empty response from OpenAI")
+        if response is None:
+            raise ValueError("Empty response from LLM")
         
-        try:
-            result = json.loads(content)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON response: {e}")
+        # Parse response using centralized JSON extraction
+        result = client.extract_json(response.text, schema=self._json_schema)
+        if result is None:
+            raise ValueError("Could not parse JSON from LLM response")
         
         # Add metadata
         if "meta" not in result or result["meta"] is None:

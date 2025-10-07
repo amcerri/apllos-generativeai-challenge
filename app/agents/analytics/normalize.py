@@ -214,10 +214,7 @@ class AnalyticsNormalizer:
         try:
             from openai import OpenAI
         except ImportError:
-            return None
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
+            self.log.warning("OpenAI package not available")
             return None
         
         # Get configuration
@@ -227,16 +224,15 @@ class AnalyticsNormalizer:
             model = "gpt-4o-mini"
             max_tokens = 800
             temperature = 0.1
-            timeout = 60.0
             max_examples = 1
         else:
             model = config.models.analytics_normalizer.name
             max_tokens = config.models.analytics_normalizer.max_tokens
             temperature = config.models.analytics_normalizer.temperature
-            timeout = config.models.analytics_normalizer.timeout_seconds
             max_examples = config.analytics.normalizer.max_examples_in_prompt
         
-        client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client
+        client = OpenAI()
         
         # Prepare compact input for LLM (convert non-serializable types)
         def convert_for_json(obj):
@@ -300,44 +296,36 @@ class AnalyticsNormalizer:
                 max_tokens=max_tokens,
                 temperature=temperature
             )
+            
+            response_text = response.choices[0].message.content or ""
+            response_text = response_text.strip()
+            
         except Exception as e:
             self.log.warning(f"LLM API call failed: {e}")
             return None
         
         # Parse response
-        response_text = response.choices[0].message.content.strip()
-        
-        
         try:
             response_data = json.loads(response_text)
-            
-            # For large datasets, append all data after LLM analysis
-            if input_data.get("has_more_data", False) and result.rows:
-                if "text" in response_data:
-                    response_data["text"] += self._format_all_data(result.rows, user_query)
-            
-            return response_data
-        except json.JSONDecodeError as e:
-            self.log.warning(f"LLM response is not valid JSON: {e}")
-            self.log.warning(f"Raw response: {response_text}")
-            
-            # Try to extract JSON from response if enabled in config
-            if config and config.analytics.normalizer.json_extraction_regex:
-                import re
-                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if json_match:
-                    try:
-                        response_data = json.loads(json_match.group())
-                        # For large datasets, append all data after LLM analysis
-                        if input_data.get("has_more_data", False) and result.rows:
-                            if "text" in response_data:
-                                response_data["text"] += self._format_all_data(result.rows, user_query)
-                        return response_data
-                    except json.JSONDecodeError as e2:
-                        self.log.warning(f"Extracted JSON is still invalid: {e2}")
-                        self.log.warning(f"Extracted text: {json_match.group()}")
-            
-            return None
+        except json.JSONDecodeError:
+            # Try to extract JSON from code blocks
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    response_data = json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    self.log.warning("LLM response could not be parsed as JSON")
+                    return None
+            else:
+                self.log.warning("LLM response could not be parsed as JSON")
+                return None
+        
+        # For large datasets, append all data after LLM analysis
+        if input_data.get("has_more_data", False) and result.rows:
+            if "text" in response_data:
+                response_data["text"] += self._format_all_data(result.rows, user_query)
+        
+        return response_data
     
     def _format_all_data(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
         """Format all data for large datasets with intelligent summarization."""

@@ -595,7 +595,7 @@ apllos-generativeai-challenge/
 │   ├── config/                   # Configuration files ()
 │   ├── contracts/                # Data classes and schemas
 │   ├── graph/                    # LangGraph definitions
-│   ├── infra/                    # Infrastructure (db with cached factory, logging, tracing)
+│   ├── infra/                    # Infrastructure (db with cached factory, logging, tracing, LLM client)
 │   ├── prompts/                  # LLM prompts and templates
 │   ├── routing/                  # Routing system (classifier, supervisor)
 │   └── utils/                    # Utility functions
