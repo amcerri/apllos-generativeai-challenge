@@ -132,6 +132,26 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
         def ready() -> dict[str, str]:
             return {"status": "ready"}
 
+        @app.get("/ok", tags=["infra"], include_in_schema=False)
+        def ok() -> dict[str, str]:
+            """Extended health: checks DB and checkpointer availability."""
+            db_ok = False
+            cp_ok = False
+            try:
+                from app.infra.db import open_connection
+                with open_connection() as conn:
+                    conn.exec_driver_sql("SELECT 1")
+                    db_ok = True
+            except Exception:
+                db_ok = False
+            try:
+                from app.infra.checkpointer import get_checkpointer, is_noop
+                cp = get_checkpointer()
+                cp_ok = not is_noop(cp)
+            except Exception:
+                cp_ok = False
+            return {"status": "ok", "db": "ok" if db_ok else "down", "checkpointer": "ok" if cp_ok else "noop"}
+
         # Mount LangGraph Server handlers
         try:
             assistant = get_assistant(settings)

@@ -262,6 +262,22 @@ class LLMClient:
 
         return None
 
+    def get_embeddings(self, *, text: str, model: str | None = None) -> list[float] | None:
+        """Return embedding vector for a single text when provider is available.
+
+        Falls back to None; callers may implement deterministic hashing.
+        """
+        if self._client is None:
+            return None
+        try:
+            m = model or "text-embedding-3-small"
+            resp = self._client.embeddings.create(model=m, input=text)
+            vec = resp.data[0].embedding
+            return [float(x) for x in vec]
+        except Exception as exc:
+            self.log.warning("Embedding request failed", extra={"error": str(exc)})
+            return None
+
     def extract_json(
         self,
         text: str,

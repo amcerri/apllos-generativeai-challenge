@@ -106,7 +106,7 @@ class JSONLLMBackend(Protocol):
 class OpenAIJSONBackend:
     """Backend using centralized LLM client with JSON Schema response formatting."""
 
-    def __init__(self, *, model: str = "gpt-4.1-mini") -> None:
+    def __init__(self, *, model: str) -> None:
         from app.infra.llm_client import get_llm_client
 
         self._client = get_llm_client()
@@ -161,20 +161,28 @@ class LLMClassifier:
         self,
         *,
         backend: JSONLLMBackend | None = None,
-        model: str = "gpt-4.1-mini",
+        model: str | None = None,
         temperature: float = 0.0,
         max_output_tokens: int | None = 512,
         base_dir: Path | None = None,
     ) -> None:
         self.log = get_logger(__name__)
         self.temperature = float(temperature)
+        # Resolve model from settings if not provided
+        if model is None:
+            try:
+                from app.config.settings import get_settings as _get_settings
+                _cfg = _get_settings()
+                model = _cfg.models.router.name
+            except Exception:
+                model = "gpt-4o-mini"
         self.model = model
         self.max_output_tokens = max_output_tokens
         self.base_dir = base_dir or Path(__file__).resolve().parent.parent
         self._backend = backend
         if self._backend is None:
             try:
-                self._backend = OpenAIJSONBackend(model=model)
+                self._backend = OpenAIJSONBackend(model=self.model)
             except Exception as exc:  # pragma: no cover - optional
                 self.log.warning(
                     "LLM backend unavailable; falling back to heuristics", exc_info=exc
@@ -226,30 +234,17 @@ class LLMClassifier:
 
     # Internals --------------------------------------------------------------
     def _load_system_prompt(self, allowlist: Mapping[str, Iterable[str]]) -> str:
-        sys_path = self.base_dir / "prompts" / "routing" / "system.txt"
-        text = sys_path.read_text(encoding="utf-8")
-        injected = text.replace("<<<ALLOWLIST_JSON>>>", _allowlist_to_json(allowlist))
+        # Embedded minimal system prompt to avoid blocking IO in ASGI path
+        base = (
+            "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
+            "Also extract any tables/columns present in the message according to the provided allowlist."
+        )
+        injected = base + "\nALLOWLIST_JSON=" + _allowlist_to_json(allowlist)
         return injected
 
     def _load_examples(self) -> list[dict[str, str]]:
-        ex_path = self.base_dir / "prompts" / "routing" / "examples.jsonl"
-        if not ex_path.exists():  # pragma: no cover - optional
-            return []
-        out: list[dict[str, str]] = []
-        for line in ex_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            inp = str(obj.get("input", ""))
-            outp = obj.get("output", {})
-            if inp and isinstance(outp, Mapping):
-                out.append({"role": "user", "content": inp})
-                out.append({"role": "assistant", "content": json.dumps(outp, ensure_ascii=False)})
-        return out
+        # Skip disk reads; keep examples empty for fast routing
+        return []
 
     def _heuristic_decide(
         self,

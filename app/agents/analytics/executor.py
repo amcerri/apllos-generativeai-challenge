@@ -164,10 +164,17 @@ class AnalyticsExecutor:
         # Safety gate: must be a pure SELECT, without DDL/DML verbs
         _assert_safe_select(sql)
 
-        # Remove row cap completely - let normalizer handle large datasets intelligently
-        # cap = int(max_rows or self.default_row_cap)
-        # cap = max(1, min(cap, self.max_row_cap))  # hard upper bound safeguard
-        cap = None  # No row cap - process all available data
+        # Reinstate a configurable row cap to avoid unbounded memory usage.
+        # Defaults come from settings; callers can override via `max_rows`.
+        cap = int(max_rows or self.default_row_cap)
+        cap = max(1, min(cap, self.max_row_cap))  # hard upper bound safeguard
+
+        # Heuristic: for aggregation queries (GROUP BY), raise cap to max to
+        # avoid truncating small categorical sets (e.g., 27 estados), while
+        # still maintaining a hard safety upper bound.
+        sql_lower = sql.lower()
+        if " group by " in sql_lower and cap < self.max_row_cap:
+            cap = self.max_row_cap
         timeout = int(timeout_s or self.default_timeout_s)
 
         # Get engine lazily (avoid hard import on module import)
@@ -192,9 +199,8 @@ class AnalyticsExecutor:
                     )
                     for mapping in result.mappings():
                         rows.append(dict(mapping))
-                        # Remove the cap limit - let normalizer handle large datasets intelligently
-                        # if len(rows) >= cap:
-                        #     break
+                        if len(rows) >= cap:
+                            break
 
                     if include_explain:
                         explain_json = _explain_json(conn, sql, params)
@@ -207,7 +213,7 @@ class AnalyticsExecutor:
 
         meta: dict[str, Any] = {
             "sql": sql,
-            "row_cap": "unlimited",
+            "row_cap": cap,
             "timeout_s": timeout,
             "explain": explain_json,
         }
