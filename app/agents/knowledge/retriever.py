@@ -281,16 +281,14 @@ def _embed_query(text: str, *, model: str) -> Sequence[float]:
     try:
         from app.infra.llm_client import get_llm_client
         client = get_llm_client()
-        if client.is_available() and hasattr(client, "_client") and client._client is not None:  # type: ignore[attr-defined]
-            try:
-                resp = client._client.embeddings.create(model=model, input=text)  # type: ignore[attr-defined]
-                vec = resp.data[0].embedding
-                return [float(x) for x in vec]
-            except Exception:
-                pass
+        vec = client.get_embeddings(text=text, model=model) if client else None
+        # client.get_embeddings returns list[list[float]]; we need the first vector
+        if vec and isinstance(vec, list):
+            first = vec[0] if (len(vec) > 0 and isinstance(vec[0], list)) else vec
+            return first  # type: ignore[return-value]
     except Exception:
         pass
-    # Deterministic local fallback (bag-of-words hash into 256 dims)
+    # Deterministic local fallback (bag-of-words hash)
     return _hash_embed(text)
 
 

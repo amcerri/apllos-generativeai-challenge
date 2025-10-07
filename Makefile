@@ -357,6 +357,8 @@ ingest-vectors: ## Ingest document vectors for RAG
 		--docs-dir "$(DOCS_DIR)" \
 		--model $(shell $(PY) -c "import yaml; print(yaml.safe_load(open('app/config/models.yaml'))['models']['embeddings']['name'])")
 	@echo "Document vectors ingested."
+	@echo "Analyzing vector index (doc_chunks)..."
+	@$(COMPOSE) exec -T $(DB_SERVICE) psql -U $(DB_USER) -d $(DB_NAME) -c "ANALYZE doc_chunks;" >/dev/null 2>&1 || true
 
 .PHONY: gen-allowlist
 gen-allowlist: ## Generate allowlist from database schema

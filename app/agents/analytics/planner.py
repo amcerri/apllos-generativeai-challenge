@@ -134,7 +134,7 @@ class JSONLLMBackend(Protocol):
 class OpenAIJSONBackend:
     """Backend using centralized LLM client with JSON Schema outputs."""
 
-    def __init__(self, *, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, *, model: str) -> None:
         from app.infra.llm_client import get_llm_client
 
         self._client = get_llm_client()
@@ -215,10 +215,16 @@ class AnalyticsPlanner:
             self.examples_count = 3
             self.max_examples = 5
         
-        # Try to initialize LLM backend
+        # Try to initialize LLM backend using settings.models.analytics_planner
         self._llm_backend = None
         try:
-            self._llm_backend = OpenAIJSONBackend()
+            model_name = None
+            try:
+                if self._config is not None:
+                    model_name = self._config.models.analytics_planner.name
+            except Exception:
+                model_name = None
+            self._llm_backend = OpenAIJSONBackend(model=model_name or "gpt-4o-mini")
             self.log.info("LLM backend initialized for analytics planner")
         except Exception as exc:
             self.log.warning("LLM backend unavailable; using heuristics only", exc_info=exc)

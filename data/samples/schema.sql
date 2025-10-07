@@ -128,3 +128,40 @@ CREATE INDEX IF NOT EXISTS idx_sellers_zip_prefix        ON sellers (seller_zip_
 CREATE INDEX IF NOT EXISTS idx_geolocation_zip_prefix    ON geolocation (geolocation_zip_code_prefix);
 
 COMMIT;
+
+-- ---------------------------------------------------------------------------
+-- RAG: Document chunks (pgvector)
+-- ---------------------------------------------------------------------------
+-- Minimal table for retrieval-augmented generation. If you already created
+-- the table externally, these statements are idempotent (IF NOT EXISTS).
+
+BEGIN;
+
+-- Ensure pgvector extension exists (safe if already present)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Chunks table (embedding dims must match embeddings model; default 1536)
+CREATE TABLE IF NOT EXISTS doc_chunks (
+    doc_id      TEXT NOT NULL,
+    chunk_id    TEXT NOT NULL,
+    title       TEXT,
+    content     TEXT NOT NULL,
+    source      TEXT,
+    metadata    JSONB,
+    embedding   vector(1536) NOT NULL,
+    PRIMARY KEY (doc_id, chunk_id)
+);
+
+-- Cosine distance index (IVFFLAT). Requires ANALYZE after bulk load.
+DO $$ BEGIN
+    PERFORM 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_doc_chunks_embedding_ivfflat';
+    IF NOT FOUND THEN
+        EXECUTE 'CREATE INDEX idx_doc_chunks_embedding_ivfflat ON doc_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
+    END IF;
+END $$;
+
+-- Helper lookup indexes
+CREATE INDEX IF NOT EXISTS idx_doc_chunks_doc_id   ON doc_chunks (doc_id);
+CREATE INDEX IF NOT EXISTS idx_doc_chunks_source   ON doc_chunks (source);
+
+COMMIT;

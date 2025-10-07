@@ -118,27 +118,12 @@ class AnalyticsNormalizer:
     
 
     def _load_system_prompt(self) -> str:
-        """Load the system prompt from file."""
-        try:
-            prompt_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "normalizer_system.txt"
-            content = prompt_path.read_text(encoding="utf-8")
-            return content
-        except Exception as e:
-            self.log.warning(f"Failed to load system prompt: {e}")
-            self.log.warning("Using fallback system prompt")
-            return self._fallback_system_prompt()
+        """Use embedded prompt to avoid blocking file IO in ASGI path."""
+        return self._fallback_system_prompt()
     
     def _load_examples(self) -> list[dict[str, Any]]:
-        """Load few-shot examples from JSONL file."""
-        try:
-            examples_path = Path(__file__).parent.parent.parent / "prompts" / "analytics" / "normalizer_examples.jsonl"
-            examples = []
-            for line in examples_path.read_text(encoding="utf-8").strip().split('\n'):
-                if line.strip():
-                    examples.append(json.loads(line))
-            return examples
-        except Exception:
-            return []
+        """Disable disk reads in request path; rely on embedded defaults."""
+        return []
 
 
     def normalize(

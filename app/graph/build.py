@@ -343,7 +343,22 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
         KnowledgeRetriever() if KnowledgeRetriever is not None else _StubKnowledgeRetriever()
     )
     ranker = KnowledgeRanker() if KnowledgeRanker is not None else _StubKnowledgeRanker()
-    answerer = KnowledgeAnswerer() if KnowledgeAnswerer is not None else _StubKnowledgeAnswerer()
+    # Defensive: retry import of KnowledgeAnswerer at build-time to avoid
+    # early import ordering/cycles causing stub fallback, without rebinding
+    # the module-level symbol (avoid UnboundLocalError).
+    _answerer_cls = KnowledgeAnswerer
+    if _answerer_cls is None:
+        try:
+            from app.agents.knowledge.answerer import KnowledgeAnswerer as _RetryKnowledgeAnswerer  # type: ignore
+            _answerer_cls = _RetryKnowledgeAnswerer  # type: ignore
+            log.info("KnowledgeAnswerer reloaded successfully")
+        except Exception as _exc:  # pragma: no cover - optional
+            log.warning("Using stub KnowledgeAnswerer", extra={"error": type(_exc).__name__})
+            _answerer_cls = None
+    if _answerer_cls is None:
+        # Fail fast instead of silently returning misleading stub content
+        raise RuntimeError("KnowledgeAnswerer unavailable; cannot build knowledge pipeline")
+    answerer = _answerer_cls()
 
     document_processor = DocumentProcessor() if DocumentProcessor is not None else _StubDocumentProcessor()
     llm_extractor = LLMCommerceExtractor() if LLMCommerceExtractor is not None else _StubLLMCommerceExtractor()

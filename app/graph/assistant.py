@@ -81,12 +81,12 @@ def clear_cache():
     _GRAPH_CACHE.clear()
 
 def _load_allowlist() -> dict[str, Any]:
-    """Load allowlist from file."""
+    """Load allowlist from embedded mapping (no blocking IO)."""
     global _ALLOWLIST_CACHE
     if _ALLOWLIST_CACHE:
         return _ALLOWLIST_CACHE
-    
-    # Hardcoded allowlist as fallback
+
+    # Embedded allowlist (previously the same as file contents)
     allowlist = {
         "orders": ["order_id", "customer_id", "order_status", "order_purchase_timestamp", "order_approved_at", "order_delivered_carrier_date", "order_delivered_customer_date", "order_estimated_delivery_date"],
         "order_items": ["order_id", "order_item_id", "product_id", "seller_id", "shipping_limit_date", "price", "freight_value"],
@@ -96,25 +96,15 @@ def _load_allowlist() -> dict[str, Any]:
         "order_payments": ["order_id", "payment_sequential", "payment_type", "payment_installments", "payment_value"],
         "order_reviews": ["review_id", "order_id", "review_score", "review_comment_title", "review_comment_message", "review_creation_date", "review_answer_timestamp"],
         "geolocation": ["geolocation_zip_code_prefix", "geolocation_lat", "geolocation_lng", "geolocation_city", "geolocation_state"],
-        "product_category_translation": ["product_category_name", "product_category_name_english"]
+        "product_category_translation": ["product_category_name", "product_category_name_english"],
     }
-    
+
+    log = get_logger("graph.assistant")
     try:
-        import json
-        import os
-        allowlist_path = os.path.join(os.path.dirname(__file__), "..", "routing", "allowlist.json")
-        if os.path.exists(allowlist_path):
-            with open(allowlist_path, 'r') as f:
-                allowlist = json.load(f)
-                log = get_logger("graph.assistant")
-                log.info("Allowlist loaded from file", extra={"tables": list(allowlist.keys())})
-        else:
-            log = get_logger("graph.assistant")
-            log.info("Using hardcoded allowlist", extra={"tables": list(allowlist.keys())})
-    except Exception as e:
-        log = get_logger("graph.assistant")
-        log.warning("Failed to load allowlist from file, using hardcoded", extra={"error": str(e)})
-    
+        log.info("Using embedded allowlist", extra={"tables": list(allowlist.keys())})
+    except Exception:
+        pass
+
     _ALLOWLIST_CACHE = allowlist
     return allowlist
 

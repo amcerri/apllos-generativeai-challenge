@@ -76,6 +76,13 @@ except Exception:  # pragma: no cover - optional
 
 __all__ = ["KnowledgeAnswerer"]
 
+# Module-level logger for helpers outside the class
+try:
+    log = get_logger("agent.knowledge.answerer")
+except Exception:  # pragma: no cover - optional
+    import logging as _logging
+    log = _logging.getLogger("agent.knowledge.answerer")
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -147,20 +154,20 @@ class KnowledgeAnswerer:
                 return _coerce_answer(payload)
 
             citations = _make_citations(hits[:max_cit])
-            chunks = _make_chunks(hits[:max_cit])  # Add chunks to payload
+            # Intentionally avoid attaching raw chunks by default to keep output clean
+            # Chunks remain available via helper if needed for debugging
             text = _compose_summary_ptbr(query, hits, cap_chars)
 
             meta = {
                 "citations_count": len(citations),
                 "hits_considered": min(len(hits), max_cit),
-                "chunks_count": len(chunks),
+                "chunks_count": min(len(hits), max_cit),
             }
             followups = _suggest_followups(query)
 
             payload = {
                 "text": text,
                 "citations": citations,
-                "chunks": chunks,  # Include chunks in payload
                 "meta": meta,
                 "followups": followups,
             }
@@ -218,93 +225,159 @@ def _answer_no_context_ptbr(query: str) -> dict[str, Any]:
 def _compose_summary_ptbr(query: str, hits: Sequence[_HitView], cap_chars: int) -> str:
     """Generate a conversational answer using LLM based on retrieved documents."""
     
-    # Prepare context from hits
-    context_parts = []
-    for i, hit in enumerate(hits[:5], 1):  # Use top 5 hits
+    # Prepare compact, relevant context from hits (salience-based, capped)
+    # 1) Take up to 3 hits
+    selected = list(hits[:3])
+    # 2) Split into sentences and score by overlap with query tokens
+    q_tokens = _tokenize(query)
+    scored: list[tuple[float, str]] = []
+    for i, hit in enumerate(selected, 1):
         title = hit.title or f"Documento {i}"
-        content = hit.text.strip()
-        context_parts.append(f"[{title}]\n{content}\n")
-    
-    context = "\n".join(context_parts)
+        for s in _split_sentences(hit.text):
+            ss = s.strip()
+            if not ss:
+                continue
+            score = _sentence_salience(q_tokens, ss)
+            if score > 0:
+                # Prefer sentences with higher signal; attach lightweight source tag
+                scored.append((score, f"[{title}] {ss}"))
+    # 3) Pick top 4 sentences and cap each to 200 chars (tighter context)
+    scored.sort(key=lambda t: t[0], reverse=True)
+    top_sentences = []
+    for _, s in scored[:4]:
+        ss = s[:200]
+        top_sentences.append(ss)
+    # 4) If nothing scored, fallback to trimmed heads of each hit
+    if not top_sentences:
+        for i, hit in enumerate(selected, 1):
+            title = hit.title or f"Documento {i}"
+            head = (hit.text or "").strip().splitlines()[:2]
+            snippet = " ".join(x.strip() for x in head if x.strip())[:300]
+            if snippet:
+                top_sentences.append(f"[{title}] {snippet}")
+    # 5) Build compact context (max ~1200 chars)
+    context = "\n".join(top_sentences)[:1200]
     
     # Generate conversational response using LLM
     try:
         from app.infra.llm_client import get_llm_client
-        
+
         client = get_llm_client()
-        
+
         if not client.is_available():
+            log.warning("KnowledgeAnswerer: LLM client not available; using fallback")
             raise Exception("LLM client not available")
-        
-        prompt = f"""Você é um assistente especializado em e-commerce. Com base nos documentos fornecidos, responda à pergunta de forma conversacional e natural, como se estivesse conversando com alguém.
+
+        # Use client defaults; avoid importing settings to prevent optional deps
+        model_name = getattr(client, "model", "gpt-4o-mini")
+        max_tokens = 1200
+        temperature = 0.5
+
+        prompt = f"""Você é um especialista sênior em e-commerce e marketing. Responda como um humano conversando: profissional, claro, natural e coeso (pt-BR), com bom senso prático.
 
 Pergunta: {query}
 
-Documentos relevantes:
+Contexto de apoio (trechos relevantes):
 {context}
 
-Instruções:
-- Responda de forma direta e conversacional
-- Use as informações dos documentos para fundamentar sua resposta
-- Não mencione "de acordo com os documentos" ou similar
-- Seja útil e prático
-- Use linguagem natural e acessível
-- Foque em responder especificamente à pergunta feita
+Instruções de formatação (texto puro, sem markdown/LaTeX):
+- Sem títulos com #, sem cabeçalhos markdown
+- Sem blocos de código, sem LaTeX (evite usar \[ \] ou fórmulas)
+- Escreva em parágrafos, com transições suaves entre ideias (sem listas a menos que sejam essenciais)
+- Se pertinente, inclua 1–2 exemplos práticos para tornar as ideias mais claras
+- Encerre com recomendações acionáveis conectadas ao contexto, sem encerramentos clichê
+- Evite frases soltas em linhas separadas; prefira texto contínuo com parágrafos
+- Escolha o comprimento adequado ao contexto: responda o suficiente, sem padronizar tamanho
 
-Resposta:"""
+Entregue apenas o texto final, pronto para leitura em console (sem marcação)."""
 
+        log.info(
+            "KnowledgeAnswerer: calling LLM",
+            extra={"model": model_name, "max_tokens": max_tokens, "temp": temperature, "context_len": len(context)},
+        )
         response = client.chat_completion(
             messages=[
                 {"role": "system", "content": "Você é um especialista em e-commerce que responde perguntas de forma conversacional e útil."},
                 {"role": "user", "content": prompt}
             ],
-            model="gpt-3.5-turbo",
-            max_tokens=800,
-            temperature=0.7
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            max_retries=0
         )
-        
+
         if response is None:
+            log.warning("KnowledgeAnswerer: LLM response is None; using fallback")
             raise Exception("LLM response is None")
-        
+
         answer = response.text.strip()
-        
-        # Cap length if needed
+        answer = _postprocess_answer(answer, cap_chars)
+
+        # If answer is too long, try an LLM-based compression before trimming
         if len(answer) > cap_chars:
-            answer = answer[:cap_chars - 1].rstrip() + "..."
-            
+            try:
+                compress_prompt = (
+                    "Resuma o texto a seguir preservando clareza, coesão e os pontos essenciais, "
+                    f"em até aproximadamente {cap_chars} caracteres. Entregue apenas o texto final, sem marcação.\n\n"
+                    f"Texto:\n{answer}"
+                )
+                comp_resp = client.chat_completion(
+                    messages=[
+                        {"role": "system", "content": "Você é um editor que resume mantendo fluidez e qualidade."},
+                        {"role": "user", "content": compress_prompt},
+                    ],
+                    model=model_name,
+                    max_tokens=min(max_tokens, 600),
+                    temperature=0.2,
+                    max_retries=0,
+                )
+                if comp_resp and comp_resp.text:
+                    compressed = _postprocess_answer(comp_resp.text.strip(), cap_chars)
+                    if compressed:
+                        answer = compressed
+            except Exception:
+                # Ignore compression errors and fall back to smart trimming
+                pass
+
+        # Final guard: sentence-aware trimming
+        if len(answer) > cap_chars:
+            answer = _smart_shorten(answer, cap_chars)
+
+        log.info("KnowledgeAnswerer: LLM answer produced", extra={"chars": len(answer)})
         return answer
-        
+
     except Exception as e:
-        # Fallback to extractive summary if LLM fails
+        try:
+            log.warning("KnowledgeAnswerer: falling back to extractive", extra={"error": str(e)})
+        except Exception:
+            pass
+        # Fallback to extractive summary if LLM fails — format as bullets for readability
         q_tokens = _tokenize(query)
-        sentences: list[str] = []
-        for h in hits[:3]:
+        bullets: list[str] = []
+        for idx, h in enumerate(hits[:3], 1):
+            picked: list[str] = []
             for s in _split_sentences(h.text):
                 score = _sentence_salience(q_tokens, s)
-                if score >= 0.15:
-                    sentences.append(s.strip())
-            if len(sentences) >= 8:
-                break
+                if score >= 0.18:
+                    picked.append(s.strip())
+                if len(picked) >= 3:
+                    break
+            if not picked:
+                head = (h.text or "").strip().splitlines()[:1]
+                picked = [x.strip() for x in head if x.strip()]
+            if picked:
+                title = h.title or f"Documento {idx}"
+                bullets.append(f"- {title}: " + " ".join(picked))
 
-        if not sentences:
-            fallback = hits[0].text.strip().splitlines()[0:2]
-            text = " ".join(x.strip() for x in fallback if x.strip())
-        else:
-            seen: set[str] = set()
-            uniq: list[str] = []
-            for s in sentences:
-                if s not in seen:
-                    clean_s = s.strip()
-                    if clean_s and not clean_s.endswith('.'):
-                        clean_s += '.'
-                    uniq.append(clean_s)
-                    seen.add(s)
-            text = " ".join(uniq)
+        if not bullets and hits:
+            # Last resort: truncate first chunk
+            snippet = (hits[0].text or "").strip()[: max(120, cap_chars // 4)]
+            bullets = ["- " + snippet]
 
+        text = "\n".join(bullets)
         if len(text) > cap_chars:
-            text = text[:cap_chars - 1].rstrip() + "…"
-            
-        return f"Com base nos documentos disponíveis: {text}"
+            text = text[: cap_chars - 1].rstrip() + "…"
+        return _postprocess_answer(text, cap_chars)
 
 
 def _make_citations(hits: Sequence[_HitView]) -> list[dict[str, Any]]:
@@ -384,12 +457,67 @@ def _coerce_answer(dec: Mapping[str, Any]) -> Any:
         return dict(dec)
     try:
         if hasattr(ANSWER_CLS, "from_dict"):
-            return ANSWER_CLS.from_dict(dec)
+            return ANSWER_CLS.from_dict(dec)  # type: ignore[attr-defined]
         if hasattr(ANSWER_CLS, "from_mapping"):
-            return ANSWER_CLS.from_mapping(dec)
-        return ANSWER_CLS(**dec)
+            return ANSWER_CLS.from_mapping(dec)  # type: ignore[attr-defined]
+        return ANSWER_CLS(**dec)  # type: ignore[call-arg]
     except Exception:
         return dict(dec)
+
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
+
+
+def _postprocess_answer(text: str, cap_chars: int) -> str:
+    """Clean markdown/latex artifacts and normalize paragraphs for console output."""
+    t = (text or "").strip()
+    if not t:
+        return t
+    # Remove placeholder phrases
+    forb = [
+        "com base nos documentos",
+        "de acordo com os documentos",
+        "com base no documento",
+        "de acordo com o documento",
+    ]
+    low = t.lower()
+    for f in forb:
+        if f in low:
+            idx = low.find(f)
+            # Drop the sentence that contains the placeholder
+            # Find nearest sentence boundary after idx
+            end = t.find(".", idx)
+            if end != -1:
+                t = (t[:idx] + t[end + 1 :]).strip()
+                low = t.lower()
+    # Keep postprocessing minimal to preserve LLM's conversational formatting
+    import re as _re
+    # Remove markdown/code/latex markers only
+    t = _re.sub(r"^\s*#{1,6}\s*", "", t, flags=_re.MULTILINE)
+    t = _re.sub(r"```[a-zA-Z]*\n?|```", "", t)
+    t = t.replace("\\[", "").replace("\\]", "")
+    # Normalize whitespace lightly
+    t = _re.sub(r"[\t\x0b\f\r]+", " ", t)
+    t = _re.sub(r"\n{3,}", "\n\n", t)
+    # Collapse overly long bullet lists into a brief paragraph
+    lines = [ln.rstrip() for ln in t.split("\n")]
+    bullet_lines = [ln for ln in lines if ln.lstrip().startswith("- ")]
+    if len(bullet_lines) >= 6:  # too many bullets — summarize
+        # Take first 3 bullets and turn into a sentence
+        top = [ln.lstrip()[2:].strip() for ln in bullet_lines[:3] if len(ln.lstrip()) > 2]
+        if top:
+            summary = "; ".join(top)
+            t = _re.sub(r"(^|\n)- .*", "", t)
+            t = (t.strip() + "\n\nPrincipais pontos: " + summary + ".").strip()
+        # Normalize whitespace again after transformation
+        t = _re.sub(r"[ \t\x0b\f\r]+", " ", t)
+        t = _re.sub(r"\n{3,}", "\n\n", t)
+    # Cap length
+    if len(t) > cap_chars:
+        t = t[: cap_chars - 1].rstrip() + "..."
+    return t
 
 
 def _suggest_followups(query: str) -> list[str]:
@@ -400,3 +528,23 @@ def _suggest_followups(query: str) -> list[str]:
         "Gostaria de perguntar algo mais específico?",
     ]
     return base
+
+
+def _smart_shorten(text: str, cap_chars: int) -> str:
+    """Trim at the nearest sentence boundary under cap; fallback to hard cut with ellipsis."""
+    t = (text or "").strip()
+    if len(t) <= cap_chars:
+        return t
+    # Try to cut at last full stop within cap
+    candidate = t[:cap_chars]
+    last_dot = candidate.rfind(".")
+    last_exc = candidate.rfind("!")
+    last_q = candidate.rfind("?")
+    cut = max(last_dot, last_exc, last_q)
+    if cut >= max(60, int(cap_chars * 0.6)):
+        return candidate[:cut + 1].strip()
+    # Fallback: cut at last space and add ellipsis
+    last_space = candidate.rfind(" ")
+    if last_space > 0:
+        return (candidate[:last_space].rstrip() + "...")
+    return candidate.rstrip() + "..."

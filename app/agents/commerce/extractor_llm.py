@@ -220,9 +220,10 @@ class LLMCommerceExtractor:
             max_tokens = 4000
             strict = False
         else:
-            model = self._config.openai.commerce_model
-            temperature = self._config.openai.commerce_temperature
-            max_tokens = self._config.openai.commerce_max_tokens
+            # Use centralized models config
+            model = self._config.models.commerce_extractor.name
+            temperature = self._config.models.commerce_extractor.temperature
+            max_tokens = self._config.models.commerce_extractor.max_tokens
             strict = self._config.commerce.extraction.json_schema_strict
         
         # Call LLM with structured output
@@ -347,16 +348,8 @@ class LLMCommerceExtractor:
         return "\n".join(parts)
 
     def _load_system_prompt(self) -> str:
-        """Load system prompt from file."""
-        try:
-            prompt_path = Path(__file__).parent.parent.parent / "prompts" / "commerce" / "extractor_system.txt"
-            return prompt_path.read_text(encoding="utf-8")
-        except Exception as e:
-            self.log.warning(
-                "Failed to load system prompt",
-                extra={"error": str(e)}
-            )
-            return self._fallback_system_prompt()
+        """Use embedded system prompt to avoid blocking file I/O in request path."""
+        return self._fallback_system_prompt()
 
     def _fallback_system_prompt(self) -> str:
         """Fallback system prompt if file loading fails."""
