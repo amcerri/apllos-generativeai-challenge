@@ -55,6 +55,7 @@ _PostgresSaver = _imported_PostgresSaver
 __all__ = [
     "get_checkpointer",
     "is_noop",
+    "_cleanup_old_checkpoints",
 ]
 
 
@@ -75,6 +76,49 @@ class _NoopSaver:
             return None
 
         return _noop
+
+
+def _cleanup_old_checkpoints(saver: Any, *, max_age_hours: int = 168) -> tuple[bool, str]:
+    """Best-effort cleanup routine for old checkpoints.
+
+    Parameters
+    ----------
+    saver: Any
+        The checkpointer instance returned by get_checkpointer.
+    max_age_hours: int
+        Age threshold for deletion.
+
+    Returns
+    -------
+    tuple[bool, str]
+        (success flag, message) describing the outcome.
+    """
+
+    try:
+        # Only available for PostgresSaver; guard access
+        if _PostgresSaver is None or not isinstance(saver, _PostgresSaver):  # type: ignore[arg-type]
+            return (False, "noop: unsupported saver type")
+
+        # The langgraph PostgresSaver exposes ._engine in some versions; use best-effort
+        engine = getattr(saver, "_engine", None)
+        if engine is None:
+            return (False, "noop: engine not accessible")
+
+        import sqlalchemy as _sa
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        with engine.begin() as conn:  # type: ignore[call-arg]
+            # Table name is stored in saver; fallback to default
+            table_name = getattr(saver, "table_name", "checkpoints")
+            stmt = _sa.text(
+                f"DELETE FROM {table_name} WHERE created_at < :cutoff"
+            )
+            conn.execute(stmt, {"cutoff": cutoff.isoformat()})
+        return (True, "cleanup completed")
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.info("checkpointer cleanup failed", extra={"error": str(exc)})
+        return (False, f"cleanup failed: {type(exc).__name__}")
 
 
 # ---------------------------------------------------------------------------

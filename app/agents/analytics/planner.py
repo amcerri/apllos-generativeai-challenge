@@ -718,6 +718,12 @@ def _validate_identifiers(sql: str, allowlist: Mapping[str, Iterable[str]]) -> N
 
     _validate_joins(sql, allowlist)
 
+    # Disallow semicolons and system schemas
+    if ";" in sql:
+        raise ValueError("multiple statements are not allowed in planner SQL")
+    if "pg_catalog" in sql.lower() or "information_schema" in sql.lower():
+        raise ValueError("system catalogs are not allowed in planner SQL")
+
 
 def _validate_joins(sql: str, allowlist: Mapping[str, Iterable[str]]) -> None:
     """Best-effort validation for JOINs against the allowlist.

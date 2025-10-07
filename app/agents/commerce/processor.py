@@ -102,6 +102,14 @@ try:
 except Exception:  # pragma: no cover - optional
     pass
 
+# Optional OpenCV for advanced preprocessing
+cv2: Any = None
+try:  # pragma: no cover - optional
+    import cv2 as _cv2  # type: ignore
+    cv2 = _cv2
+except Exception:
+    cv2 = None
+
 
 __all__ = ["DocumentProcessor"]
 
@@ -387,14 +395,44 @@ class DocumentProcessor:
                 # Convert to RGB if necessary
                 if image.mode != 'RGB':
                     image = image.convert('RGB')
-                
-                # OCR with both English and Portuguese
-                text = pytesseract.image_to_string(image, lang='eng+por')
+                # Advanced preprocessing (optional OpenCV pipeline)
+                pre_meta: dict[str, Any] = {}
+                if cv2 is not None:
+                    try:
+                        import numpy as _np  # type: ignore
+                        # PIL -> OpenCV BGR
+                        cv_img = cv2.cvtColor(_np.array(image), cv2.COLOR_RGB2BGR)
+                        gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+                        # Binarize (Otsu)
+                        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                        # Deskew (estimate angle via moments)
+                        coords = _np.column_stack(_np.where(thresh > 0))
+                        angle = 0.0
+                        if coords.size > 0:
+                            rect = cv2.minAreaRect(coords)
+                            angle = rect[-1]
+                            if angle < -45:
+                                angle = -(90 + angle)
+                            else:
+                                angle = -angle
+                            (h, w) = thresh.shape[:2]
+                            M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+                            thresh = cv2.warpAffine(thresh, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+                        pre_meta.update({"deskew_angle": float(angle)})
+                        # Back to PIL for pytesseract
+                        image = Image.fromarray(cv2.cvtColor(thresh, cv2.COLOR_GRAY2RGB))
+                    except Exception:
+                        # Fallback to original image on failure
+                        pass
+
+                # OCR with both English and Portuguese (configurable via env)
+                lang = os.getenv("OCR_LANG", "eng+por")
+                text = pytesseract.image_to_string(image, lang=lang)
                 
                 # Get confidence data if available
                 confidence = None
                 try:
-                    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+                    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT, lang=lang)
                     confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
                     if confidences:
                         confidence = sum(confidences) / len(confidences)
@@ -412,6 +450,7 @@ class DocumentProcessor:
                         "image_size": image.size,
                         "image_mode": image.mode,
                         "ocr_confidence": confidence,
+                        "preprocess": pre_meta,
                         "size": len(content)
                     },
                     "method": "image_ocr",

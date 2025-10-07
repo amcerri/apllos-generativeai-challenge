@@ -140,11 +140,11 @@ Quick test (CLI)
 
 ```bash
 # Analytics
-make query QUERY="How many orders are there in total?"
+make query QUERY="Quantos pedidos existem no total?"
 # Knowledge
-make query QUERY="What are the best pricing practices in e‑commerce?"
+make query QUERY="Quais são as melhores práticas de precificação no e‑commerce?"
 # Commerce with attachment
-make query QUERY="Analyze this order" ATTACHMENT="data/samples/orders/Simple Order.docx"
+make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Order.docx"
 ```
 
 ---
@@ -170,6 +170,11 @@ Centralized model configs
 - `settings.models.commerce_extractor`, `commerce_summarizer`
 - `settings.models.embeddings`
 
+Model tier and flags
+- `settings.models.tier`: `economy|standard|premium`
+- `settings.models.enable_reranker`: enable LLM reranker for RAG
+- `settings.models.enable_normalizer_llm`: enable LLM normalizer for analytics
+
 Row caps and timeouts (analytics executor)
 - `analytics.executor.default_timeout_seconds`
 - `analytics.executor.default_row_cap`
@@ -187,11 +192,11 @@ Row caps and timeouts (analytics executor)
 ### CLI (`scripts/query_assistant.py` via Make)
 
 ```bash
-# Query simples
+# Simple query (user message in pt-BR)
 make query QUERY="Qual a receita total?"
-# Com anexo (auto base64 p/ binários)
+# With attachment (auto base64 for binaries)
 make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Order.docx"
-# Reusar thread
+# Reuse thread
 make query QUERY="Detalhe por estado" THREAD_ID=thr-...
 ```
 
@@ -200,16 +205,16 @@ make query QUERY="Detalhe por estado" THREAD_ID=thr-...
 ## Agents
 
 ### Analytics
-- Planner: NL → SQL seguro (allowlist, sem DDL/DML, prefix fix)
-- Executor: read‑only, timeout, row cap (com heurística para GROUP BY)
-- Normalizer: PT‑BR, formatação de negócios, fallback inteligente
+- Planner: NL → safe SQL (allowlist, no DDL/DML, prefix fix)
+- Executor: read‑only, timeout, row cap (with GROUP BY heuristic)
+- Normalizer: pt‑BR business formatting with intelligent fallback
 
 ### Knowledge (RAG)
 - Retriever: pgvector over `doc_chunks` (1536 dims), light filters, per‑doc dedupe
-- Ranker: heuristic (overlap, phrase, length penalties)
+- Ranker: heuristic (overlap, phrase, length penalties) with optional LLM reranker
 - Answerer: pt‑BR answer with citations; extractive fallback if LLM unavailable
 
-RAG schema (DDL incluída em `data/samples/schema.sql`)
+RAG schema (DDL included in `data/samples/schema.sql`)
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS doc_chunks (
@@ -254,11 +259,11 @@ scripts/    # ingestions, batch, CLI
 data/       # datasets and samples
 ```
 
-Makefile (principais)
+Makefile (highlights)
 ```bash
 # Bootstrap
 make bootstrap            # reset + setup + ingest + studio + validate
-make bootstrap-complete   # sequência com logs explicativos
+make bootstrap-complete   # sequence with explanatory logs
 
 # Docker / App
 make docker-build
@@ -266,19 +271,19 @@ make studio-up | studio-down
 make api-up    | api-down
 make app-status
 
-# Banco
+# Database
 make db-start db-wait db-init db-seed db-reset db-status db-psql
 
-# Ingestões
+# Ingestions
 make ingest-analytics
-make ingest-vectors    # inclui ANALYZE doc_chunks
+make ingest-vectors    # includes ANALYZE doc_chunks
 make gen-allowlist
 make ingest-all
 
-# Testes / Validação
+# Tests / Validation
 make test test-unit test-e2e validate
 
-# Utilitários
+# Utilities
 make query           # QUERY="..." [ATTACHMENT=path] [THREAD_ID=thr]
 make batch-query     # INPUT=queries.yaml [OUTPUT=results.md]
 make logs logs-db shell shell-db clean install-deps

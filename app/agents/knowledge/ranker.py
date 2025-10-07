@@ -167,6 +167,15 @@ class KnowledgeRanker:
 
         with start_span("agent.knowledge.rank", {"top_k": top_k}):
             # Optional LLM reranker path (best-effort, falls back silently)
+            # Respect settings flag when available
+            if use_llm_reranker is False:
+                try:
+                    from app.config.settings import get_settings as _get_settings
+                    _cfg = _get_settings()
+                    use_llm_reranker = bool(getattr(getattr(_cfg, "models"), "enable_reranker", False))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
             if use_llm_reranker and hits:
                 try:
                     from app.infra.llm_client import get_llm_client

@@ -277,6 +277,9 @@ def _get_attr(obj: Mapping[str, Any] | Any, name: str, *, default: Any) -> Any:
 
 def _assert_safe_select(sql: str) -> None:
     sql_l = sql.lstrip().lower()
+    # Disallow multiple statements via semicolons (stacked statements)
+    if ";" in sql_l:
+        raise ValueError("multiple statements are not allowed")
     # Allow SELECT and WITH (CTEs) statements
     if not (sql_l.startswith("select") or sql_l.startswith("with")):
         raise ValueError("only SELECT and WITH statements are allowed")
@@ -285,6 +288,21 @@ def _assert_safe_select(sql: str) -> None:
     tokens = {t for t in sql_l.replace("\n", " ").split(" ") if t}
     if any(b in tokens for b in blocked):
         raise ValueError("DDL/DML tokens are not allowed in executor SQL")
+
+    # Optional function allowlist (best-effort): reject unknown function calls
+    _ALLOWED_FUNCS = {
+        "count", "sum", "avg", "min", "max", "coalesce", "date_trunc", "extract",
+        "upper", "lower", "substring", "round", "floor", "ceil", "greatest", "least",
+    }
+    import re as _re
+    for m in _re.finditer(r"\b([a-z_][a-z0-9_]*)\s*\(", sql_l):
+        fname = m.group(1)
+        if fname not in _ALLOWED_FUNCS and fname not in {"select", "with"}:
+            raise ValueError(f"function not allowed: {fname}")
+
+    # Block access to pg_catalog or information_schema explicitly
+    if "pg_catalog" in sql_l or "information_schema" in sql_l:
+        raise ValueError("system catalogs are not allowed")
 
 
 def _get_engine():

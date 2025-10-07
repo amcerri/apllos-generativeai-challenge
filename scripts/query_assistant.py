@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Query Assistant - Interface de linha de comando para o assistente LangGraph.
+Query Assistant - Command-line interface for the LangGraph assistant.
 
-Este script permite fazer perguntas e enviar attachments para o assistente,
-deixando o router decidir qual agente usar (analytics, knowledge, commerce, triage).
+This script allows asking questions and sending attachments to the assistant,
+letting the router decide which agent to use (analytics, knowledge, commerce, triage).
 
 Usage:
-    python scripts/query_assistant.py --query "Como iniciar um e-commerce?"
-    python scripts/query_assistant.py --query "Quantos pedidos temos?" --attachment "data/samples/invoice.pdf"
+    python scripts/query_assistant.py --query "How to start an e-commerce?"
+    python scripts/query_assistant.py --query "How many orders do we have?" --attachment "data/samples/invoice.pdf"
     python scripts/query_assistant.py --attachment "data/samples/order.txt"
 """
 
@@ -23,19 +23,32 @@ import httpx
 
 
 class QueryAssistant:
-    """Interface para consultar o assistente LangGraph."""
+    """Thin HTTP client to query the LangGraph assistant."""
     
     def __init__(self, base_url: str = "http://localhost:2024"):
         self.base_url = base_url
         self.http_client = httpx.AsyncClient(timeout=60.0)
     
     async def query(
-        self, 
-        query: Optional[str] = None, 
+        self,
+        query: Optional[str] = None,
         attachment_path: Optional[str] = None,
-        thread_id: Optional[str] = None
+        thread_id: Optional[str] = None,
+        export: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Fazer uma consulta ao assistente."""
+        """Send a query to the assistant and optionally export tabular data.
+
+        Parameters
+        ----------
+        query: str | None
+            Natural language question.
+        attachment_path: str | None
+            Local path to an attachment file.
+        thread_id: str | None
+            Existing thread id to reuse context.
+        export: str | None
+            Optional path to export results (CSV or Markdown by extension).
+        """
         
         # Preparar input
         input_data = {}
@@ -45,16 +58,16 @@ class QueryAssistant:
         
         # Processar attachment apenas se fornecido
         if attachment_path:
-            # Verificar se o arquivo existe
+            # Check file existence
             if not os.path.exists(attachment_path):
-                raise FileNotFoundError(f"Arquivo não encontrado: {attachment_path}")
+                raise FileNotFoundError(f"File not found: {attachment_path}")
             
             # Determinar se é arquivo binário baseado na extensão
             file_ext = Path(attachment_path).suffix.lower()
             is_binary = file_ext in {'.pdf', '.docx', '.doc', '.png', '.jpg', '.jpeg', '.tiff', '.bmp'}
             
             if is_binary:
-                # Ler como binário e codificar em base64 para JSON
+                # Read as binary and base64 encode for JSON
                 import base64
                 with open(attachment_path, 'rb') as f:
                     content_bytes = f.read()
@@ -73,7 +86,7 @@ class QueryAssistant:
                 }
                 mime_type = mime_types.get(file_ext, 'application/octet-stream')
             else:
-                # Ler como texto
+                # Read as text
                 with open(attachment_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                 mime_type = 'text/plain'
@@ -84,8 +97,7 @@ class QueryAssistant:
                 "mime_type": mime_type
             }
         elif thread_id and not attachment_path:
-            # Se estamos reusing o thread mas não temos attachment novo, não envie attachment
-            # (deixa o campo ausente do input_data para não sobrescrever o contexto)
+            # Reuse thread without overriding attachment
             pass
         
         if not input_data:
@@ -93,13 +105,13 @@ class QueryAssistant:
         
         # Usar thread existente ou criar novo
         if thread_id:
-            # Verificar se o thread existe
+            # Check if thread exists
             try:
                 response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}")
                 response.raise_for_status()
-                print(f"🔄 Reutilizando thread: {thread_id}")
+                print(f"🔄 Reusing thread: {thread_id}")
             except Exception:
-                print(f"⚠️ Thread {thread_id} não encontrado, criando novo...")
+                print(f"⚠️ Thread {thread_id} not found, creating a new one...")
                 thread_id = None
         
         if not thread_id:
@@ -111,7 +123,7 @@ class QueryAssistant:
         
         print(f"🔗 Thread ID: {thread_id}")
         print(f"📝 Input: {json.dumps(input_data, indent=2, ensure_ascii=False)}")
-        print("⏳ Processando...")
+        print("⏳ Processing...")
         
         # Executar run
         run_data = {
@@ -127,7 +139,7 @@ class QueryAssistant:
         run_data = response.json()
         run_id = run_data["run_id"]
         
-        # Aguardar conclusão
+        # Poll for completion
         max_attempts = 30  # 30 tentativas de 1 segundo
         for attempt in range(max_attempts):
             response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}/state")
@@ -138,27 +150,26 @@ class QueryAssistant:
             if values.get("answer"):
                 break
             
-            # Debug: mostrar estado a cada 5 segundos
+            # Debug progress every 5 seconds
             if attempt % 5 == 0:
-                print(f"⏳ Aguardando... ({attempt + 1}s)")
-                # Mostrar informações de debug
+                print(f"⏳ Waiting... ({attempt + 1}s)")
                 tasks = state.get("tasks", [])
                 agent = values.get("agent", "N/A")
-                print(f"🔍 Debug - Agente: {agent}, Tarefas: {len(tasks)}")
+                print(f"🔍 Debug - Agent: {agent}, Tasks: {len(tasks)}")
             
             await asyncio.sleep(1)
         else:
-            print("❌ Timeout: A consulta demorou muito para ser processada")
+            print("❌ Timeout: processing took too long")
             return {"error": "timeout"}
         
         # Extrair resposta
         answer = values.get("answer", {})
         if isinstance(answer, dict):
-            text = answer.get("text", "Nenhuma resposta encontrada")
+            text = answer.get("text", "No answer found")
             citations = answer.get("citations", [])
             meta = answer.get("meta", {})
         else:
-            text = str(answer) if answer else "Nenhuma resposta encontrada"
+            text = str(answer) if answer else "No answer found"
             citations = []
             meta = {}
         
@@ -198,6 +209,28 @@ class QueryAssistant:
                 print(f"     {content}")
                 print()
         
+        # Optional export
+        if export:
+            try:
+                export_path = Path(export)
+                if export_path.suffix.lower() == ".csv" and isinstance(meta.get("data"), list):
+                    import csv
+                    rows = meta.get("data") or []
+                    cols = meta.get("columns") or []
+                    with export_path.open("w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        if cols:
+                            writer.writerow(cols)
+                        for r in rows:
+                            writer.writerow(r)
+                    print(f"💾 Exported CSV to {export_path}")
+                elif export_path.suffix.lower() in {".md", ".markdown"}:
+                    with export_path.open("w", encoding="utf-8") as f:
+                        f.write(f"# Assistant Response\n\n{text}\n")
+                    print(f"💾 Exported Markdown to {export_path}")
+            except Exception as exc:
+                print(f"⚠️ Export failed: {exc}")
+
         # Show metadata
         if meta:
             print(f"\nMetadata:")
@@ -221,12 +254,12 @@ class QueryAssistant:
 async def main():
     """Função principal."""
     parser = argparse.ArgumentParser(
-        description="Consultar o assistente LangGraph",
+        description="Query the LangGraph assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Exemplos:
-  python scripts/query_assistant.py --query "Como iniciar um e-commerce?"
-  python scripts/query_assistant.py --query "Quantos pedidos temos?" --attachment "data/samples/invoice.pdf"
+Examples:
+  python scripts/query_assistant.py --query "How to start an e-commerce?"
+  python scripts/query_assistant.py --query "How many orders do we have?" --attachment "data/samples/invoice.pdf"
   python scripts/query_assistant.py --attachment "data/samples/order.txt"
         """
     )
@@ -234,26 +267,32 @@ Exemplos:
     parser.add_argument(
         "--query", 
         type=str, 
-        help="Pergunta para o assistente"
+        help="Question for the assistant"
     )
     
     parser.add_argument(
         "--attachment", 
         type=str, 
-        help="Caminho para arquivo anexo"
+        help="Path to attachment file"
     )
     
     parser.add_argument(
         "--base-url", 
         type=str, 
         default="http://localhost:2024",
-        help="URL base do LangGraph (padrão: http://localhost:2024)"
+        help="Base URL for LangGraph (default: http://localhost:2024)"
     )
     
     parser.add_argument(
         "--thread-id", 
         type=str, 
-        help="ID do thread para reutilizar contexto existente"
+        help="Thread ID to reuse existing context"
+    )
+
+    parser.add_argument(
+        "--export",
+        type=str,
+        help="Optional export path (.csv or .md) for results"
     )
     
     args = parser.parse_args()
@@ -279,13 +318,13 @@ Exemplos:
     # Executar consulta
     assistant = QueryAssistant(args.base_url)
     try:
-        result = await assistant.query(args.query, args.attachment, args.thread_id)
+        result = await assistant.query(args.query, args.attachment, args.thread_id, args.export)
         
         if "error" in result:
             sys.exit(1)
             
     except Exception as e:
-        print(f"❌ Erro durante a consulta: {e}")
+        print(f"❌ Error during query: {e}")
         sys.exit(1)
     finally:
         await assistant.close()
