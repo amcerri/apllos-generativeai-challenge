@@ -46,8 +46,6 @@ _orjson = _imported_orjson
 __all__ = [
     "utc_now",
     "short_uuid",
-    "coerce_int",
-    "coerce_float",
     "is_truthy",
     "truncate",
     "safe_json_dumps",
@@ -80,32 +78,6 @@ def short_uuid(length: int = 8) -> str:
 # ---------------------------------------------------------------------------
 # Coercion helpers
 # ---------------------------------------------------------------------------
-
-
-def coerce_int(value: Any, default: int | None = None) -> int | None:
-    """Best‑effort conversion to int; returns `default` on failure."""
-
-    try:
-        if value is None:
-            return default
-        if isinstance(value, bool):  # avoid True -> 1 surprises unless desired
-            return int(value)
-        return int(str(value).strip())
-    except (ValueError, TypeError):
-        return default
-
-
-def coerce_float(value: Any, default: float | None = None) -> float | None:
-    """Best‑effort conversion to float; returns `default` on failure."""
-
-    try:
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return float(value)
-        return float(str(value).strip())
-    except (ValueError, TypeError):
-        return default
 
 
 def is_truthy(value: Any) -> bool | None:

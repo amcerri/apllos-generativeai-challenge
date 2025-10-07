@@ -75,7 +75,7 @@ def get_engine(
     pool_size: int | None = None,
     pool_timeout_sec: int | None = None,
     echo: bool | None = None,
-    readonly_default: bool = True,
+    readonly_default: bool = False,
 ) -> Any:
     """Get a cached SQLAlchemy engine with the specified parameters.
     
