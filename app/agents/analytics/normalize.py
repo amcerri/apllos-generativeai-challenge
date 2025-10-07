@@ -243,10 +243,13 @@ class AnalyticsNormalizer:
             temperature = 0.1
             max_examples = 1
         else:
+            # Honor model tier switches
             model = config.models.analytics_normalizer.name
             max_tokens = config.models.analytics_normalizer.max_tokens
             temperature = config.models.analytics_normalizer.temperature
             max_examples = config.analytics.normalizer.max_examples_in_prompt
+            if getattr(config.models, "enable_normalizer_llm", True) is False:
+                return None
         
         # Prepare compact input for LLM (convert non-serializable types)
         def convert_for_json(obj):

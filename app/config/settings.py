@@ -210,6 +210,11 @@ class ModelsConfig(BaseModel):
     commerce_conversation: ModelConfig = Field(default_factory=ModelConfig)
     commerce_summarizer: ModelConfig = Field(default_factory=ModelConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
+    
+    # Tier/flags
+    tier: str = Field(default="standard", description="Model tier: standard|economy|premium")
+    enable_reranker: bool = Field(default=False, description="Enable LLM reranker for RAG")
+    enable_normalizer_llm: bool = Field(default=True, description="Enable LLM normalizer for analytics")
 
 
 class AnalyticsPlannerConfig(BaseModel):
