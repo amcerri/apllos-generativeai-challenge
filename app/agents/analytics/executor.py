@@ -53,7 +53,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -121,16 +121,16 @@ class AnalyticsExecutor:
         self.log = get_logger("agent.analytics.executor")
         self._config = get_config()
         
-        # Get configuration values with fallbacks
-        if self._config is None:
+        # Get configuration values with fallbacks using Settings model
+        try:
+            executor_cfg = getattr(getattr(self._config, "analytics"), "executor")  # type: ignore[attr-defined]
+            self.default_timeout_s = int(getattr(executor_cfg, "default_timeout_seconds", 60))
+            self.default_row_cap = int(getattr(executor_cfg, "default_row_cap", 2000))
+            self.max_row_cap = int(getattr(executor_cfg, "max_row_cap", 10000))
+        except Exception:
             self.default_timeout_s = 60
             self.default_row_cap = 2000
             self.max_row_cap = 10000
-        else:
-            executor_config = self._config.get_analytics_executor_config()
-            self.default_timeout_s = executor_config.get("default_timeout_seconds", 60)
-            self.default_row_cap = executor_config.get("default_row_cap", 2000)
-            self.max_row_cap = executor_config.get("max_row_cap", 10000)
 
     def execute(
         self,

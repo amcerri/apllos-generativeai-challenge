@@ -45,7 +45,7 @@ except Exception:  # pragma: no cover - optional
         return _logging.getLogger(component)
 
 try:  # Optional config
-    from app.config import get_config
+    from app.config.settings import get_settings as get_config
 except Exception:  # pragma: no cover - optional
     def get_config():
         return None
@@ -108,14 +108,14 @@ class KnowledgeAnswerer:
         self.log = get_logger("agent.knowledge.answerer")
         self._config = get_config()
         
-        # Get configuration values with fallbacks
-        if self._config is None:
+        # Get configuration values with fallbacks using Settings model
+        try:
+            answerer_cfg = getattr(getattr(self._config, "knowledge"), "answerer")  # type: ignore[attr-defined]
+            self.max_citations = int(getattr(answerer_cfg, "max_citations", 5))
+            self.max_chars = int(getattr(answerer_cfg, "max_chars_summary", 2000))
+        except Exception:
             self.max_citations = 5
             self.max_chars = 2000
-        else:
-            answerer_config = self._config.get_knowledge_answerer_config()
-            self.max_citations = answerer_config.get("max_citations", 5)
-            self.max_chars = answerer_config.get("max_chars_summary", 2000)
 
     def answer(
         self,
