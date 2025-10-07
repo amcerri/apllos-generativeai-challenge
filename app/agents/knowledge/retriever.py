@@ -277,19 +277,19 @@ def _execute(engine: Engine, sql: str, params: Mapping[str, Any]) -> list[dict[s
 
 
 def _embed_query(text: str, *, model: str) -> Sequence[float]:
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if api_key:
-        try:
-            from openai import OpenAI  # lazy import
-
-            client = OpenAI()
-            resp = client.embeddings.create(model=model, input=text)
-            vec = resp.data[0].embedding
-            # Ensure a plain list[float]
-            return [float(x) for x in vec]
-        except Exception:
-            # Fall through to local hasher
-            pass
+    # Prefer centralized client if available; fallback to local hashing
+    try:
+        from app.infra.llm_client import get_llm_client
+        client = get_llm_client()
+        if client.is_available() and hasattr(client, "_client") and client._client is not None:  # type: ignore[attr-defined]
+            try:
+                resp = client._client.embeddings.create(model=model, input=text)  # type: ignore[attr-defined]
+                vec = resp.data[0].embedding
+                return [float(x) for x in vec]
+            except Exception:
+                pass
+    except Exception:
+        pass
     # Deterministic local fallback (bag-of-words hash into 256 dims)
     return _hash_embed(text)
 

@@ -133,8 +133,28 @@ class LLMCommerceExtractor:
             # Check for OpenAI API key
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key or openai is None:
-                self.log.error("OpenAI API key not configured or openai package not available")
-                return self._empty_document(metadata, ["no_openai_api"])
+                self.log.error(
+                    "OpenAI API key not configured or openai package not available",
+                    extra={}
+                )
+                # Fallback to heuristic extractor
+                try:
+                    from app.agents.commerce.extractor import CommerceExtractor as _HeuristicExtractor
+                    hx = _HeuristicExtractor()
+                    return hx.extract(
+                        text=text,
+                        source_filename=metadata.get("filename"),
+                        source_mime=metadata.get("mime_type"),
+                        doc_type_hint=doc_type_hint,
+                        currency_hint=currency_hint,
+                        use_llm=False,
+                    )
+                except Exception as eh:
+                    self.log.warning(
+                        "Heuristic fallback failed",
+                        extra={"error": str(eh)}
+                    )
+                    return self._empty_document(metadata, ["no_openai_api"]) 
             
             try:
                 return self._extract_with_openai(
@@ -145,8 +165,28 @@ class LLMCommerceExtractor:
                     api_key=api_key
                 )
             except Exception as e:
-                self.log.error("LLM extraction failed", error=str(e), text_length=len(text))
-                return self._empty_document(metadata, [f"llm_error:{type(e).__name__}"])
+                self.log.error(
+                    "LLM extraction failed",
+                    extra={"error": str(e), "text_length": len(text)}
+                )
+                # Fallback to heuristic extractor on error
+                try:
+                    from app.agents.commerce.extractor import CommerceExtractor as _HeuristicExtractor
+                    hx = _HeuristicExtractor()
+                    return hx.extract(
+                        text=text,
+                        source_filename=metadata.get("filename"),
+                        source_mime=metadata.get("mime_type"),
+                        doc_type_hint=doc_type_hint,
+                        currency_hint=currency_hint,
+                        use_llm=False,
+                    )
+                except Exception as eh:
+                    self.log.warning(
+                        "Heuristic fallback failed",
+                        extra={"error": str(eh)}
+                    )
+                    return self._empty_document(metadata, [f"llm_error:{type(e).__name__}"])
 
     def _extract_with_openai(
         self,
@@ -201,7 +241,8 @@ class LLMCommerceExtractor:
                     "schema": self._json_schema,
                     "strict": strict
                 }
-            }
+            },
+            max_retries=0
         )
         
         if response is None:
@@ -216,13 +257,14 @@ class LLMCommerceExtractor:
         if "meta" not in result or result["meta"] is None:
             result["meta"] = {}
         
+        usage = response.usage or {}
         result["meta"].update({
             "extraction_method": "llm_openai",
             "model": "gpt-4o-mini",
             "extracted_at": datetime.now(timezone.utc).isoformat(),
             "source_metadata": metadata,
-            "prompt_tokens": response.usage.prompt_tokens if response.usage else None,
-            "completion_tokens": response.usage.completion_tokens if response.usage else None,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
         })
         
         # Ensure required fields
@@ -252,7 +294,7 @@ class LLMCommerceExtractor:
             doc_type=result["doc"].get("doc_type"),
             items_count=len(result["items"]),
             risks_count=len(result["risks"]),
-            tokens_used=response.usage.total_tokens if response.usage else None
+            tokens_used=(usage.get("total_tokens") if isinstance(usage, dict) else None)
         )
         
         return result
@@ -310,7 +352,10 @@ class LLMCommerceExtractor:
             prompt_path = Path(__file__).parent.parent.parent / "prompts" / "commerce" / "extractor_system.txt"
             return prompt_path.read_text(encoding="utf-8")
         except Exception as e:
-            self.log.warning("Failed to load system prompt", error=str(e))
+            self.log.warning(
+                "Failed to load system prompt",
+                extra={"error": str(e)}
+            )
             return self._fallback_system_prompt()
 
     def _fallback_system_prompt(self) -> str:

@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(allowlist, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    log.info("allowlist written", path=str(opts.out_path), tables=len(allowlist))
+    log.info("allowlist written", extra={"path": str(opts.out_path), "tables": len(allowlist)})
     return 0
 
 

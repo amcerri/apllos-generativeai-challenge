@@ -288,13 +288,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         engine = _resolve_engine()
     except Exception as exc:
-        log.exception("db engine failure", error=type(exc).__name__)
+        log.exception("db engine failure", extra={"error": type(exc).__name__})
         return 3
 
     try:
         result = run_explain(engine, opts)
     except Exception as exc:
-        log.exception("explain failed", error=type(exc).__name__)
+        log.exception("explain failed", extra={"error": type(exc).__name__})
         return 2
 
     # Output: either write to file or log a concise summary
@@ -303,13 +303,13 @@ def main(argv: list[str] | None = None) -> int:
         opts.out_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        log.info("wrote plan", path=str(opts.out_path), format=opts.fmt)
+        log.info("wrote plan", extra={"path": str(opts.out_path), "format": opts.fmt})
     else:
         # Text summary for console via logger (avoids print)
         if opts.fmt == "json":
             try:
                 # Compact JSON in one line to keep logs concise
-                log.info("plan", payload=json.dumps(result.get("plan"), ensure_ascii=False))
+                log.info("plan", extra={"payload": json.dumps(result.get("plan"), ensure_ascii=False)})
             except Exception:
                 log.info("plan-json-bytes")
         else:

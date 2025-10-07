@@ -132,14 +132,14 @@ class JSONLLMBackend(Protocol):
 
 
 class OpenAIJSONBackend:
-    """OpenAI backend using strict JSON Schema response formatting."""
+    """Backend using centralized LLM client with JSON Schema outputs."""
 
     def __init__(self, *, model: str = "gpt-4o-mini") -> None:
-        try:
-            from openai import OpenAI
-        except Exception as exc:  # pragma: no cover - optional path
-            raise RuntimeError("openai SDK not available") from exc
-        self._client = OpenAI()
+        from app.infra.llm_client import get_llm_client
+
+        self._client = get_llm_client()
+        if not self._client.is_available():
+            raise RuntimeError("LLM client not available")
         self._default_model = model
 
     def generate_json(
@@ -152,30 +152,24 @@ class OpenAIJSONBackend:
         temperature: float = 0.0,
         max_output_tokens: int | None = None,
     ) -> Mapping[str, Any]:
-        """Generate JSON response using OpenAI's structured outputs."""
-        response = self._client.chat.completions.create(
+        """Generate JSON response using centralized LLM client."""
+        resp = self._client.chat_completion(
+            messages=[{"role": "system", "content": system}, *messages],
             model=model or self._default_model,
-            messages=[
-                {"role": "system", "content": system},
-                *messages,
-            ],
+            temperature=temperature,
+            max_tokens=max_output_tokens,
             response_format={
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "analytics_plan",
-                    "strict": True,
-                    "schema": json_schema,
-                },
+                "json_schema": {"name": "analytics_plan", "schema": dict(json_schema), "strict": True},
             },
-            temperature=temperature,
-            max_completion_tokens=max_output_tokens,
+            max_retries=0,
         )
-        
-        content = response.choices[0].message.content
-        if not content:
-            raise ValueError("Empty response from OpenAI")
-        
-        return json.loads(content)
+        if resp is None or not resp.text:
+            raise ValueError("Empty response from LLM")
+        data = self._client.extract_json(resp.text, schema=dict(json_schema))
+        if data is None:
+            raise ValueError("Failed to parse JSON from LLM response")
+        return data
 
 
 # ---------------------------------------------------------------------------

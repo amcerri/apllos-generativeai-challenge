@@ -107,13 +107,13 @@ def _load_allowlist() -> dict[str, Any]:
             with open(allowlist_path, 'r') as f:
                 allowlist = json.load(f)
                 log = get_logger("graph.assistant")
-                log.info("Allowlist loaded from file", tables=list(allowlist.keys()))
+                log.info("Allowlist loaded from file", extra={"tables": list(allowlist.keys())})
         else:
             log = get_logger("graph.assistant")
-            log.info("Using hardcoded allowlist", tables=list(allowlist.keys()))
+            log.info("Using hardcoded allowlist", extra={"tables": list(allowlist.keys())})
     except Exception as e:
         log = get_logger("graph.assistant")
-        log.warning("Failed to load allowlist from file, using hardcoded", error=str(e))
+        log.warning("Failed to load allowlist from file, using hardcoded", extra={"error": str(e)})
     
     _ALLOWLIST_CACHE = allowlist
     return allowlist
@@ -195,19 +195,19 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
                 
                 from app.infra.db import ensure_db
                 ensure_db()  # Initialize database connection
-                log.info("Database configured successfully", dsn=dsn[:50] + "..." if len(dsn) > 50 else dsn)
+                log.info("Database configured successfully", extra={"dsn": dsn[:50] + "..." if len(dsn) > 50 else dsn})
                 _DB_CONFIGURED = True
             else:
                 log.warning("DATABASE_URL not set; database features disabled")
                 _DB_CONFIGURED = True
         except Exception as e:
-            log.warning(f"Failed to configure database: {e}")
+            log.warning("Failed to configure database", extra={"error": str(e)})
             _DB_CONFIGURED = True
     
     # Check cache first
     cache_key = (require_sql_approval,)
     if cache_key in _GRAPH_CACHE:
-        log.info("Using cached graph", require_sql_approval=require_sql_approval)
+        log.info("Using cached graph", extra={"require_sql_approval": require_sql_approval})
         return _GRAPH_CACHE[cache_key]
 
     with start_span("assistant.get", {"require_sql_approval": require_sql_approval}):
@@ -221,8 +221,10 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
         try:
             log.info(
                 "Assistant graph ready",
-                require_sql_approval=require_sql_approval,
-                has_nodes=bool(getattr(graph, "nodes", None)),
+                extra={
+                    "require_sql_approval": require_sql_approval,
+                    "has_nodes": bool(getattr(graph, "nodes", None)),
+                },
             )
         except Exception:
             pass
@@ -234,6 +236,6 @@ if __name__ == "__main__":  # pragma: no cover - convenience
     g = get_assistant({"require_sql_approval": False})
     kind = "compiled" if hasattr(g, "__class__") else "stub"
     try:
-        log.info("assistant ready", kind=kind, require_sql_approval=False)
+        log.info("assistant ready", extra={"kind": kind, "require_sql_approval": False})
     except Exception:
         pass

@@ -405,9 +405,11 @@ class CommerceExtractor:
         currency_hint: str | None,
     ) -> CommerceDoc:  # best-effort; deterministic shape
         # Minimal structured-output prompt; remain conservative
-        from openai import OpenAI  # lazy import
+        from app.infra.llm_client import get_llm_client
 
-        client = OpenAI()
+        client = get_llm_client()
+        if not client.is_available():
+            raise RuntimeError("LLM client not available")
         system = (
             "You are a careful information extractor. Return a strict JSON object "
             "conforming to the provided schema. Do not add fields."
@@ -453,25 +455,22 @@ class CommerceExtractor:
             f"Hints: doc_type={doc_type_hint!r}, currency={currency_hint!r}."
         )
 
-        resp = client.chat.completions.create(
-            model="gpt-4.1",
-            temperature=0,
+        resp = client.chat_completion(
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": "commerce_extract", "schema": schema},
-            },
+            model="gpt-4.1",
+            temperature=0,
+            response_format={"type": "json_schema", "json_schema": {"name": "commerce_extract", "schema": schema}},
+            max_retries=0,
         )
-        payload: Any = resp.choices[0].message
-        raw = payload.content if hasattr(payload, "content") else "{}"
-
+        raw = (resp.text if resp else "")
         try:
-            import json as _json
-
-            data = _json.loads(raw if isinstance(raw, str) else str(raw))
+            from json import loads as _loads
+            data = client.extract_json(raw) or {}
+            if not data:
+                data = _loads(raw) if raw else {}
         except Exception:
             data = {}
 

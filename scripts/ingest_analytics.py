@@ -340,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
         # 2) Discover CSVs and target tables
         pairs = discover_files(opts.data_dir)
         if not pairs:
-            log.warning("no csv files found", data_dir=str(opts.data_dir))
+            log.warning("no csv files found", extra={"data_dir": str(opts.data_dir)})
             return 0
 
         tables = [t for t, _ in pairs]
@@ -352,18 +352,18 @@ def main(argv: list[str] | None = None) -> int:
         for table, path in pairs:
             rows = copy_csv(engine, table, path)
             total_rows += max(rows, 0)
-            log.info("loaded csv", table=table, path=str(path), rows=rows)
+            log.info("loaded csv", extra={"table": table, "path": str(path), "rows": rows})
 
         # Backfill any categories present in products but missing in translation, then re-add FK
         inserted = backfill_missing_product_categories(engine)
-        log.info("category backfill complete", inserted=inserted)
+        log.info("category backfill complete", extra={"inserted": inserted})
         add_fk_products_category(engine)
 
         # 4) Analyze
         if opts.analyze:
             analyze_tables(engine, tables)
 
-        log.info("ingest complete", files=len(pairs), rows=total_rows)
+        log.info("ingest complete", extra={"files": len(pairs), "rows": total_rows})
         return 0
 
 
