@@ -88,47 +88,47 @@ flowchart TB
 
 Key decisions
 - Fallbacks everywhere (no hard deps at import time)
-- Settings via Pydantic + YAML; models centralizados em `settings.models.*`
-- Human approval gates para SQL (interrupts) quando habilitado
+- Settings via Pydantic + YAML; models centralized under `settings.models.*`
+- Human approval gates for SQL (interrupts) when enabled
 
 ---
 
 ## Quick Start
 
-### Docker (recomendado)
+### Docker (recommended)
 
 ```bash
 # 1) Clone
 git clone https://github.com/amcerri/apllos-generativeai-challenge.git
 cd apllos-generativeai-challenge
 
-# 2) Variáveis de ambiente
+# 2) Environment variables
 cp .env.example .env
-# edite .env (OPENAI_API_KEY, etc.)
+# edit .env (OPENAI_API_KEY, etc.)
 
-# 3) Bootstrap completo (DB + ingestões + Studio)
+# 3) Full bootstrap (DB + ingestions + Studio)
 make bootstrap-complete
 
-# 4) Acesse
+# 4) Access
 make studio-up
-# Health check estendido
+# Extended health check
 curl http://localhost:2024/ok
 # => {"status":"ok","db":"ok|down","checkpointer":"ok|noop"}
 ```
 
-### Ambiente local
+### Local environment
 
 ```bash
-# Dependências
+# Dependencies
 pip install -e .
 
-# Banco
+# Database
 make db-start
 make db-wait
 make db-init
 make db-seed
 
-# Ingestões
+# Ingestions
 make ingest-analytics
 make ingest-vectors   # inclui ANALYZE doc_chunks
 
@@ -140,21 +140,21 @@ Quick test (CLI)
 
 ```bash
 # Analytics
-make query QUERY="Quantos pedidos existem no total?"
+make query QUERY="How many orders are there in total?"
 # Knowledge
-make query QUERY="Quais são as melhores práticas de precificação no e-commerce?"
-# Commerce com documento
-make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Order.docx"
+make query QUERY="What are the best pricing practices in e‑commerce?"
+# Commerce with attachment
+make query QUERY="Analyze this order" ATTACHMENT="data/samples/orders/Simple Order.docx"
 ```
 
 ---
 
 ## Configuration
 
-- `.env` (carregado pelo runtime) + YAMLs em `app/config/*.yaml`
-- Settings Pydantic (`app/config/settings.py`) com nested keys e substituição de env
+- `.env` (loaded at runtime) + YAMLs in `app/config/*.yaml`
+- Pydantic Settings (`app/config/settings.py`) with nested keys and env overrides
 
-Principais variáveis
+Key variables
 ```bash
 OPENAI_API_KEY=...
 DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app
@@ -162,18 +162,18 @@ LOG_LEVEL=INFO
 REQUIRE_SQL_APPROVAL=false
 ```
 
-Modelos centralizados
+Centralized model configs
 - `settings.models.router`
 - `settings.models.analytics_planner`
 - `settings.models.analytics_normalizer`
-- `settings.models.knowledge_answerer` (e mini)
+- `settings.models.knowledge_answerer` (and mini)
 - `settings.models.commerce_extractor`, `commerce_summarizer`
 - `settings.models.embeddings`
 
-Row caps e timeouts (analytics executor)
+Row caps and timeouts (analytics executor)
 - `analytics.executor.default_timeout_seconds`
 - `analytics.executor.default_row_cap`
-- Heurística: se SQL contém `GROUP BY`, eleva cap ao máximo configurado (evita truncar listas pequenas como 27 estados)
+- Heuristic: if SQL contains `GROUP BY`, raise cap to configured max (avoids truncating small lists like 27 states)
 
 ---
 
@@ -182,7 +182,7 @@ Row caps e timeouts (analytics executor)
 ### LangGraph Studio
 
 - UI: `https://smith.langchain.com/studio/?baseUrl=http://localhost:2024`
-- Threads: preservam contexto; visualize estado, nós e interrupções humanas
+- Threads preserve context; visualize state, nodes and human interrupts
 
 ### CLI (`scripts/query_assistant.py` via Make)
 
@@ -205,9 +205,9 @@ make query QUERY="Detalhe por estado" THREAD_ID=thr-...
 - Normalizer: PT‑BR, formatação de negócios, fallback inteligente
 
 ### Knowledge (RAG)
-- Retriever: pgvector sobre `doc_chunks` (1536 dims), filtros leves, dedupe por doc
-- Ranker: heurístico (overlap, frase, penalidades de tamanho)
-- Answerer: resposta PT‑BR com citações; fallback extractivo se LLM indisponível
+- Retriever: pgvector over `doc_chunks` (1536 dims), light filters, per‑doc dedupe
+- Ranker: heuristic (overlap, phrase, length penalties)
+- Answerer: pt‑BR answer with citations; extractive fallback if LLM unavailable
 
 RAG schema (DDL incluída em `data/samples/schema.sql`)
 ```sql
@@ -225,12 +225,12 @@ CREATE INDEX IF NOT EXISTS idx_doc_chunks_embedding_ivfflat
 ```
 
 ### Commerce
-- Processor: PDF/DOCX/TXT/Imagens com OCR (Tesseract) e fallbacks
-- Extractor (LLM): JSON Schema estruturado (modelos via `settings.models`)
-- Summarizer: visão executiva PT‑BR, riscos e próximos passos
+- Processor: PDF/DOCX/TXT/Images with OCR (Tesseract) and fallbacks
+- Extractor (LLM): structured JSON Schema (models via `settings.models`)
+- Summarizer: executive pt‑BR view, risks and next steps
 
 ### Triage
-- Resposta curta PT‑BR quando faltar contexto + follow‑ups objetivos
+- Short pt‑BR reply when context is missing + objective follow‑ups
 
 ---
 
@@ -240,18 +240,18 @@ Endpoints (ASGI — `app/api/server.py`)
 - `GET /`     → landing
 - `GET /health` → liveness
 - `GET /ready`  → readiness
-- `GET /ok`     → health estendido (DB e checkpointer)
-- `GET /graph`  → handlers do LangGraph Server (Studio)
+- `GET /ok`     → extended health (DB and checkpointer)
+- `GET /graph`  → LangGraph Server handlers (Studio)
 
 ---
 
 ## Development
 
-Estrutura
+Structure
 ```bash
-app/        # código principal
-scripts/    # ingestões, batch, CLI
-data/       # datasets e amostras
+app/        # main code
+scripts/    # ingestions, batch, CLI
+data/       # datasets and samples
 ```
 
 Makefile (principais)
@@ -285,10 +285,10 @@ make logs logs-db shell shell-db clean install-deps
 ```
 
 Scripts
-- `scripts/ingest_analytics.py`: carrega CSVs Olist
-- `scripts/ingest_vectors.py`: indexa documentos em `doc_chunks`
-- `scripts/gen_allowlist.py`: gera allowlist (tabelas/colunas) em `app/routing/allowlist.json`
-- `scripts/query_assistant.py`: CLI para consultar o assistente (Studio server)
+- `scripts/ingest_analytics.py`: load Olist CSVs
+- `scripts/ingest_vectors.py`: index documents into `doc_chunks`
+- `scripts/gen_allowlist.py`: generate allowlist (tables/columns) into `app/routing/allowlist.json`
+- `scripts/query_assistant.py`: CLI to query the assistant (Studio server)
 
 ---
 
@@ -298,7 +298,7 @@ Scripts
 - E2E: `tests/e2e/*`
 - Batch YAMLs: `tests/batch/*.yaml`
 
-Executar
+Run
 ```bash
 make test
 make test-unit
@@ -316,7 +316,7 @@ log = get_logger("agent.analytics").bind(thread_id="thr-1")
 log.info("planned", sql="...", limit=200)
 ```
 
-Tracing (opcional)
+Tracing (optional)
 ```python
 from app.infra.tracing import start_span
 with start_span("node.analytics.exec"):
@@ -333,13 +333,13 @@ curl http://localhost:2024/ok
 
 ## Troubleshooting
 
-- Banco não responde
+- Database is not responding
 ```bash
 make db-status
 make db-stop && make db-start
 ```
-- OpenAI indisponível
+- OpenAI unavailable
 ```bash
 echo $OPENAI_API_KEY
 ```
-- Vetores lentos após ingestão: confirme `ANALYZE doc_chunks;` (Make já inclui)
+- Vectors slow after ingestion: confirm `ANALYZE doc_chunks;` (Make already includes)
