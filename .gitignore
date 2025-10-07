@@ -5,7 +5,7 @@
 Thumbs.db
 .idea/
 .vscode/
-.docs/
+docs/native-improvements.md
 
 # -----------------------------------------------------------------------------
 # Python
