@@ -1,39 +1,45 @@
 """
-LangGraph checkpointer helpers (Postgres with safe fallbacks).
+LangGraph native checkpointer backends with safe fallbacks.
 
 Overview
 --------
-Thin factory around LangGraph's checkpoint backends. Prefers Postgres when
-available and gracefully degrades to a no-op checkpointer if the optional
-dependency or configuration is missing.
+Factory for LangGraph's native checkpoint backends (PostgresSaver). Uses cached
+factory pattern for deterministic initialization without global mutable state.
+Gracefully degrades to a no-op checkpointer when dependencies or configuration
+are missing.
 
 Design
 ------
-- Optional import of LangGraph Postgres saver (`PostgresSaver`).
-- No hard dependency on other internal modules; stdlib logging only.
-- Global getter `get_checkpointer()` returns a configured instance or a
-  no-op implementation that satisfies the minimal Saver-like surface.
+- Native LangGraph PostgresSaver with `functools.lru_cache` for deterministic initialization.
+- No global mutable state; Settings-based configuration.
+- Fallback to no-op saver when backend is unavailable or disabled.
 
 Integration
 -----------
-- Initialized during application bootstrap using a configuration mapping.
+- Configured via Pydantic Settings (`app.config.settings.CheckpointerConfig`).
 - Returns a saver compatible with LangGraph runtime.
-- When not configured or disabled, the returned saver is a `_NoopSaver`.
+- When not configured or disabled, returns a `_NoopSaver`.
 
 Usage
 -----
->>> from app.infra.checkpointer import configure_from_config, get_checkpointer
->>> cfg = {"database": {"url": "postgresql+psycopg://..."},
-...        "checkpointer": {"enabled": True, "backend": "postgres", "table": "checkpoints"}}
->>> configure_from_config(cfg)
+>>> from app.infra.checkpointer import get_checkpointer
 >>> saver = get_checkpointer()
+>>> # or with explicit settings
+>>> from app.config import _get_settings
+>>> settings = _get_settings()
+>>> saver = get_checkpointer(
+...     enabled=settings.checkpointer.enabled,
+...     backend=settings.checkpointer.backend,
+...     url=settings.database.url,
+...     table=settings.checkpointer.table
+... )
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
-from collections.abc import Mapping
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -46,14 +52,9 @@ except Exception:  # pragma: no cover - keep optional
     _imported_PostgresSaver = None
 _PostgresSaver = _imported_PostgresSaver
 
-# Global holder (configured at runtime)
-_CHECKPOINTER: Any | None = None
-
 __all__ = [
-    "is_configured",
     "get_checkpointer",
-    "configure_postgres",
-    "configure_from_config",
+    "is_noop",
 ]
 
 
@@ -81,103 +82,93 @@ class _NoopSaver:
 # ---------------------------------------------------------------------------
 
 
-def is_configured() -> bool:
-    """Return whether a non-noop checkpointer has been configured."""
+@functools.lru_cache(maxsize=1)
+def get_checkpointer(
+    enabled: bool | None = None,
+    backend: str | None = None,
+    url: str | None = None,
+    table: str | None = None,
+) -> Any:
+    """Return a configured checkpointer using native LangGraph backends (cached).
 
-    return _CHECKPOINTER is not None and not isinstance(_CHECKPOINTER, _NoopSaver)
-
-
-def get_checkpointer() -> Any:
-    """Return the configured checkpointer or a no-op saver if none was set."""
-
-    return _CHECKPOINTER or _NoopSaver("not-configured")
-
-
-def configure_postgres(*, url: str, table: str = "checkpoints") -> Any:
-    """Configure a Postgres-based checkpointer using LangGraph's PostgresSaver.
+    This function uses `functools.lru_cache` to ensure deterministic, side-effect-free
+    initialization. The checkpointer is created once and reused across calls with the
+    same parameters.
 
     Parameters
     ----------
+    enabled:
+        Whether the checkpointer is enabled. If False or None, returns a no-op saver.
+        Defaults to environment variable CHECKPOINTER_ENABLED or True.
+    backend:
+        Backend type ('postgres' or 'noop'). Defaults to environment variable
+        CHECKPOINTER_BACKEND or 'postgres'.
     url:
-        SQLAlchemy/psycopg-style connection string, e.g.,
-        ``postgresql+psycopg://user:pass@host:5432/db``.
+        Database connection string (e.g., 'postgresql://user:pass@host:5432/db').
+        Defaults to environment variable DATABASE_URL.
     table:
-        Table name to store checkpoints.
-    """
+        Table name for storing checkpoints. Defaults to environment variable
+        CHECKPOINTER_TABLE or 'checkpoints'.
 
-    global _CHECKPOINTER
+    Returns
+    -------
+    Any
+        A LangGraph-compatible checkpointer (PostgresSaver) or a no-op saver.
+    """
+    # Load configuration from environment if not provided
+    if enabled is None:
+        env_enabled = os.getenv("CHECKPOINTER_ENABLED")
+        if env_enabled is not None:
+            enabled = env_enabled.strip().lower() not in {"0", "false", "no", "off"}
+        else:
+            enabled = True
+
+    if not enabled:
+        _log.info("checkpointer disabled; using Noop")
+        return _NoopSaver("disabled")
+
+    backend = backend or os.getenv("CHECKPOINTER_BACKEND", "postgres").strip().lower()
+    table = table or os.getenv("CHECKPOINTER_TABLE", "checkpoints").strip() or "checkpoints"
+    url = url or os.getenv("DATABASE_URL", "").strip()
+
+    if backend != "postgres":
+        _log.warning("unknown checkpointer backend '%s'; using Noop", backend)
+        return _NoopSaver(f"unknown-backend:{backend}")
 
     if not url:
         _log.warning("checkpointer.postgres: missing database URL; using Noop")
-        _CHECKPOINTER = _NoopSaver("missing-db-url")
-        return _CHECKPOINTER
+        return _NoopSaver("missing-db-url")
 
     if _PostgresSaver is None:
         _log.info("langgraph PostgresSaver not available; using Noop")
-        _CHECKPOINTER = _NoopSaver("missing-dependency")
-        return _CHECKPOINTER
+        return _NoopSaver("missing-dependency")
 
-    # Create saver using the most common constructor; fall back if signature differs
+    # Create saver using native LangGraph API
     try:
+        # Prefer from_conn_string if available (standard API)
         if hasattr(_PostgresSaver, "from_conn_string"):
             saver = _PostgresSaver.from_conn_string(url, table_name=table)
-        elif hasattr(_PostgresSaver, "from_connection_string"):
-            saver = _PostgresSaver.from_connection_string(url, table_name=table)
         else:
-            # Last resort: try direct construction with common keyword
+            # Fallback: direct construction
             saver = _PostgresSaver(url, table_name=table)
+        _log.info("PostgresSaver initialized", table=table, backend="postgres")
+        return saver
     except Exception as exc:  # pragma: no cover - defensive around API drift
         _log.exception("failed to initialize Postgres checkpointer; falling back to Noop")
-        saver = _NoopSaver(f"init-error: {exc.__class__.__name__}")
-
-    _CHECKPOINTER = saver
-    return _CHECKPOINTER
+        return _NoopSaver(f"init-error: {exc.__class__.__name__}")
 
 
-def configure_from_config(cfg: Mapping[str, Any]) -> Any:
-    """Configure the checkpointer from a nested config mapping.
+def is_noop(saver: Any) -> bool:
+    """Check whether the given saver is a no-op implementation.
 
-    Expected keys (all optional):
-        cfg["checkpointer"]["enabled"]: bool
-        cfg["checkpointer"]["backend"]: "postgres" | "noop"
-        cfg["checkpointer"]["table"]: str
-        cfg["database"]["url"]: str
+    Parameters
+    ----------
+    saver:
+        The saver instance to check.
 
-    Returns the configured saver (or a `_NoopSaver`).
+    Returns
+    -------
+    bool
+        True if the saver is a no-op implementation, False otherwise.
     """
-
-    cp = cfg.get("checkpointer", {}) if isinstance(cfg.get("checkpointer"), Mapping) else {}
-    db = cfg.get("database", {}) if isinstance(cfg.get("database"), Mapping) else {}
-
-    # Environment overrides (take precedence if present)
-    env_enabled = os.getenv("CHECKPOINTER_ENABLED")
-    if env_enabled is not None:
-        enabled = env_enabled.strip().lower() not in {"0", "false", "no", "off"}
-    else:
-        enabled = bool(cp.get("enabled", True))
-
-    backend = str(os.getenv("CHECKPOINTER_BACKEND", cp.get("backend", "postgres"))).strip().lower()
-    table = str(os.getenv("CHECKPOINTER_TABLE", cp.get("table", "checkpoints"))).strip() or "checkpoints"
-    url = (str(db.get("url", "")).strip() or os.getenv("DATABASE_URL", "").strip())
-
-    if not enabled:
-        _log.info("checkpointer disabled in config; using Noop")
-        _set_noop("disabled")
-        return get_checkpointer()
-
-    if backend == "postgres":
-        return configure_postgres(url=url, table=table)
-
-    _log.warning("unknown checkpointer backend '%s'; using Noop", backend)
-    _set_noop(f"unknown-backend:{backend}")
-    return get_checkpointer()
-
-
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
-
-
-def _set_noop(reason: str) -> None:
-    global _CHECKPOINTER
-    _CHECKPOINTER = _NoopSaver(reason)
+    return isinstance(saver, _NoopSaver)

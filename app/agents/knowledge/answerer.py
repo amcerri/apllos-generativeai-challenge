@@ -229,10 +229,12 @@ def _compose_summary_ptbr(query: str, hits: Sequence[_HitView], cap_chars: int) 
     
     # Generate conversational response using LLM
     try:
-        from openai import OpenAI
-        import os
+        from app.infra.llm_client import get_llm_client
         
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        client = get_llm_client()
+        
+        if not client.is_available():
+            raise Exception("LLM client not available")
         
         prompt = f"""Você é um assistente especializado em e-commerce. Com base nos documentos fornecidos, responda à pergunta de forma conversacional e natural, como se estivesse conversando com alguém.
 
@@ -251,17 +253,20 @@ Instruções:
 
 Resposta:"""
 
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+        response = client.chat_completion(
             messages=[
                 {"role": "system", "content": "Você é um especialista em e-commerce que responde perguntas de forma conversacional e útil."},
                 {"role": "user", "content": prompt}
             ],
+            model="gpt-3.5-turbo",
             max_tokens=800,
             temperature=0.7
         )
         
-        answer = response.choices[0].message.content.strip()
+        if response is None:
+            raise Exception("LLM response is None")
+        
+        answer = response.text.strip()
         
         # Cap length if needed
         if len(answer) > cap_chars:
