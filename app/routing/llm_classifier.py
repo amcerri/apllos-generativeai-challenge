@@ -104,18 +104,14 @@ class JSONLLMBackend(Protocol):
 
 
 class OpenAIJSONBackend:
-    """Minimal OpenAI backend using strict JSON Schema response formatting.
-
-    Requires the `openai` SDK (>= 1.0). If the package or credentials are not
-    available, construction will raise and the caller should handle fallback.
-    """
+    """Backend using centralized LLM client with JSON Schema response formatting."""
 
     def __init__(self, *, model: str = "gpt-4.1-mini") -> None:
-        try:
-            from openai import OpenAI
-        except Exception as exc:  # pragma: no cover - optional path
-            raise RuntimeError("openai SDK not available") from exc
-        self._client = OpenAI()
+        from app.infra.llm_client import get_llm_client
+
+        self._client = get_llm_client()
+        if not self._client.is_available():
+            raise RuntimeError("LLM client not available")
         self._default_model = model
 
     def generate_json(
@@ -129,28 +125,26 @@ class OpenAIJSONBackend:
         max_output_tokens: int | None = None,
     ) -> Mapping[str, Any]:
         model_name = model or self._default_model
-
-        response = self._client.chat.completions.create(
+        resp = self._client.chat_completion(
+            messages=[{"role": "system", "content": system}, *messages],
             model=model_name,
             temperature=temperature,
-            messages=[{"role": "system", "content": system}, *messages],
+            max_tokens=max_output_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
-                    "name": str(json_schema.get("title", "RouterDecision"))[:32]
-                    or "RouterDecision",
+                    "name": str(json_schema.get("title", "RouterDecision"))[:32] or "RouterDecision",
                     "schema": json_schema,
                     "strict": True,
                 },
             },
-            max_tokens=max_output_tokens,
+            max_retries=0,
         )
-        # Extract JSON content (single choice expected)
-        content = (response.choices[0].message.content or "").strip()
-        try:
-            return json.loads(content)
-        except Exception as exc:
-            raise RuntimeError("backend returned non-JSON content") from exc
+        content = (resp.text if resp else "").strip()
+        data = self._client.extract_json(content, schema=dict(json_schema))
+        if data is None:
+            raise RuntimeError("backend returned non-JSON content")
+        return data
 
 
 # ---------------------------------------------------------------------------

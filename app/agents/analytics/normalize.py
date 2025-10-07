@@ -211,10 +211,15 @@ class AnalyticsNormalizer:
     ) -> dict[str, Any] | None:
         """Use LLM to normalize the results."""
         
+        # Use centralized LLM client (with retries/timeouts handled there)
         try:
-            from openai import OpenAI
-        except ImportError:
-            self.log.warning("OpenAI package not available")
+            from app.infra.llm_client import get_llm_client
+            client = get_llm_client()
+            if not client.is_available():
+                self.log.warning("LLM client not available")
+                return None
+        except Exception as exc:
+            self.log.warning(f"LLM client init failed: {exc}")
             return None
         
         # Get configuration
@@ -230,9 +235,6 @@ class AnalyticsNormalizer:
             max_tokens = config.models.analytics_normalizer.max_tokens
             temperature = config.models.analytics_normalizer.temperature
             max_examples = config.analytics.normalizer.max_examples_in_prompt
-        
-        # Initialize OpenAI client
-        client = OpenAI()
         
         # Prepare compact input for LLM (convert non-serializable types)
         def convert_for_json(obj):
@@ -290,35 +292,38 @@ class AnalyticsNormalizer:
         
         # Call LLM with configured parameters
         try:
-            response = client.chat.completions.create(
-                model=model,
+            resp = client.chat_completion(
                 messages=messages,
+                model=model,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
+                # Ask for plain JSON object to simplify parsing
+                response_format={"type": "json_object"},
+                max_retries=0,
             )
-            
-            response_text = response.choices[0].message.content or ""
-            response_text = response_text.strip()
-            
+            response_text = (resp.text if resp else "").strip()
         except Exception as e:
             self.log.warning(f"LLM API call failed: {e}")
             return None
         
         # Parse response
+        # Prefer centralized JSON extraction helper
+        response_data = None
         try:
-            response_data = json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to extract JSON from code blocks
+            response_data = client.extract_json(response_text)
+        except Exception:
+            response_data = None
+        if response_data is None:
+            # Try to extract JSON from fenced blocks as a last resort
             json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
             if json_match:
                 try:
                     response_data = json.loads(json_match.group(1))
                 except json.JSONDecodeError:
-                    self.log.warning("LLM response could not be parsed as JSON")
-                    return None
-            else:
-                self.log.warning("LLM response could not be parsed as JSON")
-                return None
+                    response_data = None
+        if response_data is None:
+            self.log.warning("LLM response could not be parsed as JSON")
+            return None
         
         # For large datasets, append all data after LLM analysis
         if input_data.get("has_more_data", False) and result.rows:

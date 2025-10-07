@@ -137,9 +137,9 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
             assistant = get_assistant(settings)
             lg_app = create_server(assistant)
             app.mount("/graph", lg_app)
-            log.info("LangGraph handlers mounted", path="/graph")
+            log.info("LangGraph handlers mounted", extra={"path": "/graph"})
         except Exception as exc:  # defensive: server still usable
-            log.exception("failed to mount langgraph handlers", error=type(exc).__name__)
+            log.exception("failed to mount langgraph handlers", extra={"error": type(exc).__name__})
 
         return app
 

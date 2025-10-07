@@ -151,7 +151,7 @@ def get_checkpointer(
         else:
             # Fallback: direct construction
             saver = _PostgresSaver(url, table_name=table)
-        _log.info("PostgresSaver initialized", table=table, backend="postgres")
+        _log.info("PostgresSaver initialized", extra={"table": table, "backend": "postgres"})
         return saver
     except Exception as exc:  # pragma: no cover - defensive around API drift
         _log.exception("failed to initialize Postgres checkpointer; falling back to Noop")

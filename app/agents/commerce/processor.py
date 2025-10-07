@@ -182,7 +182,7 @@ class DocumentProcessor:
                 return self._process_image(content, filename)
             else:
                 # Unknown format, try OCR as last resort
-                self.log.warning("Unknown file format, attempting OCR", filename=filename, mime_type=mime_type)
+                self.log.warning("Unknown file format, attempting OCR", extra={"filename": filename, "mime_type": mime_type})
                 return self._process_image(content, filename)
 
     def _process_pdf(self, content: bytes, filename: str) -> dict[str, Any]:
@@ -424,7 +424,7 @@ class DocumentProcessor:
 
     def _error_result(self, error: str, filename: str, warnings: list[str] | None = None) -> dict[str, Any]:
         """Return standardized error result."""
-        self.log.error("Document processing failed", filename=filename, error=error)
+        self.log.error("Document processing failed", extra={"filename": filename, "error": error})
         return {
             "text": "",
             "metadata": {"filename": filename, "error": error},

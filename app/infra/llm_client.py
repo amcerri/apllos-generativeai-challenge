@@ -150,9 +150,9 @@ class LLMClient:
         else:
             try:
                 self._client = _OpenAI(api_key=self.api_key, timeout=self.timeout)
-                self.log.info("LLM client initialized", model=model, timeout=timeout)
+                self.log.info("LLM client initialized", extra={"model": model, "timeout": timeout})
             except Exception as exc:
-                self.log.error("Failed to initialize OpenAI client", error=str(exc))
+                self.log.error("Failed to initialize OpenAI client", extra={"error": str(exc)})
                 self._client = None
 
     def chat_completion(
@@ -197,9 +197,7 @@ class LLMClient:
             try:
                 self.log.debug(
                     "LLM request attempt",
-                    attempt=attempt + 1,
-                    model=model,
-                    messages_count=len(messages),
+                    extra={"attempt": attempt + 1, "model": model, "messages_count": len(messages)},
                 )
 
                 response = self._client.chat.completions.create(
@@ -213,17 +211,31 @@ class LLMClient:
                 # Extract response data
                 choice = response.choices[0]
                 text = choice.message.content or ""
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                    "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-                    "total_tokens": response.usage.total_tokens if response.usage else 0,
-                }
+                # Normalize usage to a plain dict
+                if response.usage is None:
+                    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                else:
+                    try:
+                        usage = {
+                            "prompt_tokens": int(getattr(response.usage, "prompt_tokens", 0) or 0),
+                            "completion_tokens": int(getattr(response.usage, "completion_tokens", 0) or 0),
+                            "total_tokens": int(getattr(response.usage, "total_tokens", 0) or 0),
+                        }
+                    except Exception:
+                        try:
+                            # If it's already a mapping
+                            u = dict(response.usage)
+                            usage = {
+                                "prompt_tokens": int(u.get("prompt_tokens", 0) or 0),
+                                "completion_tokens": int(u.get("completion_tokens", 0) or 0),
+                                "total_tokens": int(u.get("total_tokens", 0) or 0),
+                            }
+                        except Exception:
+                            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
                 self.log.debug(
                     "LLM response received",
-                    model=model,
-                    text_length=len(text),
-                    usage=usage,
+                    extra={"model": model, "text_length": len(text), "usage": usage},
                 )
 
                 return LLMResponse(
@@ -238,17 +250,15 @@ class LLMClient:
                 last_exception = exc
                 self.log.warning(
                     "LLM request failed",
-                    attempt=attempt + 1,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
+                    extra={"attempt": attempt + 1, "error": str(exc), "error_type": type(exc).__name__},
                 )
 
                 if attempt < retries:
                     delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    self.log.info("Retrying LLM request", delay=delay)
+                    self.log.info("Retrying LLM request", extra={"delay": delay})
                     time.sleep(delay)
                 else:
-                    self.log.error("All LLM retry attempts failed", error=str(exc))
+                    self.log.error("All LLM retry attempts failed", extra={"error": str(exc)})
 
         return None
 
@@ -316,9 +326,9 @@ class LLMClient:
                     continue
 
         except Exception as exc:
-            self.log.warning("Fallback JSON parsing failed", error=str(exc))
+            self.log.warning("Fallback JSON parsing failed", extra={"error": str(exc)})
 
-        self.log.warning("All JSON extraction methods failed", text_preview=text[:100])
+        self.log.warning("All JSON extraction methods failed", extra={"text_preview": text[:100]})
         return None
 
     def is_available(self) -> bool:

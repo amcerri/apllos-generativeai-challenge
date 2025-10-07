@@ -83,18 +83,7 @@ try:
 except Exception:  # pragma: no cover - optional
     pass
 
-OpenAIClient: Any = None
-try:  # OpenAI SDK v1 style
-    from openai import OpenAI as _OpenAIClient
-
-    OpenAIClient = _OpenAIClient
-except Exception:  # pragma: no cover - optional
-    try:  # Legacy SDK
-        import openai as _openai
-
-        OpenAIClient = _openai
-    except Exception:  # pragma: no cover - optional
-        OpenAIClient = None
+OpenAIClient: Any = None  # legacy placeholder (unused; centralized client in use)
 
 PdfReader: Any = None
 try:
@@ -103,6 +92,8 @@ try:
     PdfReader = _PdfReader
 except Exception:  # pragma: no cover - optional
     PdfReader = None
+
+from app.infra.llm_client import get_llm_client
 
 # ---------------------------------------------------------------------------
 # Constants & dataclasses
@@ -217,27 +208,12 @@ def chunk_text(text: str, *, max_chars: int, overlap: int) -> list[str]:
 
 
 def _openai_embed(texts: Sequence[str], *, model: str) -> list[list[float]]:
-    if OpenAIClient is None:
-        raise RuntimeError("OpenAI SDK not available")
-
-    # New SDK (client = OpenAI())
-    if hasattr(OpenAIClient, "Embeddings") or hasattr(OpenAIClient, "OpenAI"):
-        try:
-            client = OpenAIClient() if callable(OpenAIClient) else OpenAIClient
-            resp = client.embeddings.create(model=model, input=list(texts))
-            return [list(d.embedding) for d in resp.data]
-        except Exception as exc:  # fall back below
-            raise RuntimeError(f"openai embedding failed: {type(exc).__name__}") from exc
-
-    # Legacy SDK style (openai.Embedding.create)
-    if hasattr(OpenAIClient, "Embedding"):
-        try:
-            resp = OpenAIClient.Embedding.create(model=model, input=list(texts))
-            return [list(d["embedding"]) for d in resp["data"]]
-        except Exception as exc:  # fall back below
-            raise RuntimeError(f"openai embedding failed: {type(exc).__name__}") from exc
-
-    raise RuntimeError("Unsupported OpenAI client")
+    # Prefer centralized client
+    client = get_llm_client()
+    if not client.is_available() or not hasattr(client, "_client") or client._client is None:  # type: ignore[attr-defined]
+        raise RuntimeError("LLM client not available")
+    resp = client._client.embeddings.create(model=model, input=list(texts))  # type: ignore[attr-defined]
+    return [list(d.embedding) for d in resp.data]
 
 
 def _fallback_embed(texts: Sequence[str], *, dim: int) -> list[list[float]]:
@@ -440,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         files = files[: max(0, int(opts.limit))]
 
     if not files:
-        log.warning("no files matched", dir=str(opts.docs_dir), patterns=opts.patterns)
+        log.warning("no files matched", extra={"dir": str(opts.docs_dir), "patterns": opts.patterns})
         return 0
 
     total_chunks = 0
@@ -448,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
         for path in files:
             title, text = load_text(path)
             if not text.strip():
-                log.info("skip empty/unsupported file", path=str(path))
+                log.info("skip empty/unsupported file", extra={"path": str(path)})
                 continue
 
             chunks = chunk_text(text, max_chars=opts.max_chars, overlap=opts.overlap)
@@ -483,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     with engine.begin() as conn:
         conn.exec_driver_sql(f"ANALYZE {schema}.{name}")
 
-    log.info("ingest complete", files=len(files), chunks=total_chunks)
+    log.info("ingest complete", extra={"files": len(files), "chunks": total_chunks})
     return 0
 
 
