@@ -5,14 +5,13 @@ Overview
 --------
 Expose an ASGI app compatible with LangGraph Server / Studio. The server mounts
 LangGraph's HTTP handlers under `/graph` when available and provides minimal
-health endpoints. All dependencies are optional at import time to keep the POC
-lightweight and friendly to static checks.
+health endpoints. Uses single guard for optional dependencies with graceful fallbacks.
 
 Design
 ------
-- Optional imports for FastAPI, LangGraph and Uvicorn with graceful fallbacks.
-- Single factory `get_app(settings)` returning the ASGI app.
-- Logs and tracing via infra helpers when present.
+- Single guard for FastAPI/LangGraph unavailability with graceful fallbacks.
+- Logs via stdlib logging with start_span no-op fallback.
+- Simplified error handling and conditional logic.
 
 Integration
 -----------
@@ -34,69 +33,35 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 # ---------------------------------------------------------------------------
-# Optional infra: logging & tracing (safe fallbacks)
+# Optional dependencies guard
 # ---------------------------------------------------------------------------
+_DEPS_AVAILABLE = True
 try:
     from app.infra.logging import get_logger
+    from app.infra.tracing import start_span
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from langgraph.server import create_server
+    from app.graph.assistant import get_assistant
+    import uvicorn
 except Exception:  # pragma: no cover - optional
+    _DEPS_AVAILABLE = False
     import logging as _logging
-
-    def get_logger(component: str, **initial_values: Any) -> Any:  # noqa: D401 - simple fallback
-        return _logging.getLogger(component)
-
-
-start_span: Any
-try:
-    from app.infra.tracing import start_span as _start_span
-
-    start_span = _start_span
-except Exception:  # pragma: no cover - optional
     from contextlib import nullcontext as _nullcontext
-
-    def _fallback_start_span(_name: str, _attrs: dict[str, Any] | None = None):
+    
+    def get_logger(component: str, **initial_values: Any) -> Any:
+        return _logging.getLogger(component)
+    
+    def start_span(_name: str, _attrs: dict[str, Any] | None = None):
         return _nullcontext()
-
-    start_span = _fallback_start_span
-
-# ---------------------------------------------------------------------------
-# Optional framework & LangGraph imports
-# ---------------------------------------------------------------------------
-FastAPI: Any
-CORSMiddleware: Any
-try:
-    from fastapi import FastAPI as _FastAPI
-    from fastapi.middleware.cors import CORSMiddleware as _CORSMiddleware
-
-    FastAPI = _FastAPI
-    CORSMiddleware = _CORSMiddleware
-except Exception:  # pragma: no cover - optional
+    
+    def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
+        return {"engine": "stub", "nodes": [], "require_sql_approval": True}
+    
     FastAPI = None
     CORSMiddleware = None
-
-create_server: Any
-try:
-    from langgraph.server import create_server as _create_server
-
-    create_server = _create_server
-except Exception:  # pragma: no cover - optional
     create_server = None
-
-# Assistant factory (optional)
-try:
-    from app.graph.assistant import get_assistant as _get_assistant
-
-    get_assistant = _get_assistant
-except Exception:  # pragma: no cover - optional
-
-    def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:  # fallback stub
-        return {"engine": "stub", "nodes": [], "require_sql_approval": True}
-
-
-# Uvicorn (optional) for local runs via `python -m app.api.server`
-try:
-    import uvicorn as _uvicorn
-except Exception:  # pragma: no cover - optional
-    _uvicorn = None
+    uvicorn = None
 
 __all__ = ["get_app", "run"]
 
@@ -128,9 +93,8 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
     """Return an ASGI application exposing the assistant endpoints."""
     log = get_logger("api.server")
 
-    # If FastAPI is not available, return the assistant graph (stub or real) so
-    # that callers can still interact programmatically.
-    if FastAPI is None:
+    # Single guard: if dependencies are not available, return assistant stub
+    if not _DEPS_AVAILABLE:
         return get_assistant(settings)
 
     allow_cors = _as_bool(os.environ.get("API_ENABLE_CORS"), True)
@@ -150,8 +114,8 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
                 "ready": "/ready",
             }
 
-        # CORS (optional, default enabled)
-        if allow_cors and "CORSMiddleware" in globals() and CORSMiddleware is not None:
+        # CORS middleware (simplified conditional)
+        if allow_cors:
             app.add_middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
@@ -168,15 +132,14 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
         def ready() -> dict[str, str]:
             return {"status": "ready"}
 
-        # Mount LangGraph Server handlers, if present
-        if create_server is not None:
-            try:
-                assistant = get_assistant(settings)
-                lg_app = create_server(assistant)
-                app.mount("/graph", lg_app)
-                log.info("LangGraph handlers mounted", path="/graph")
-            except Exception as exc:  # defensive: server still usable
-                log.exception("failed to mount langgraph handlers", error=type(exc).__name__)
+        # Mount LangGraph Server handlers
+        try:
+            assistant = get_assistant(settings)
+            lg_app = create_server(assistant)
+            app.mount("/graph", lg_app)
+            log.info("LangGraph handlers mounted", path="/graph")
+        except Exception as exc:  # defensive: server still usable
+            log.exception("failed to mount langgraph handlers", error=type(exc).__name__)
 
         return app
 
@@ -187,12 +150,12 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
 
 
 def run() -> None:  # pragma: no cover - manual use only
-    if _uvicorn is None:
+    if not _DEPS_AVAILABLE or uvicorn is None:
         return
     app = get_app()
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8000"))
-    _uvicorn.run(app, host=host, port=port, log_level=os.environ.get("UVICORN_LOG_LEVEL", "info"))
+    uvicorn.run(app, host=host, port=port, log_level=os.environ.get("UVICORN_LOG_LEVEL", "info"))
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience
