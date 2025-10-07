@@ -8,18 +8,27 @@
 
 ## Contents
 
-- Overview
-- Architecture
-- Quick Start
-- Configuration
-- Usage (Studio, CLI)
-- Agents (Analytics, Knowledge, Commerce, Triage)
-- API (health, graph)
-- Development (Makefile targets, scripts)
-- Testing
-- Observability
-- Troubleshooting
-- License
+- [Apllos Generative AI Challenge](#apllos-generative-ai-challenge)
+  - [Contents](#contents)
+  - [Overview](#overview)
+  - [Architecture](#architecture)
+  - [Quick Start](#quick-start)
+    - [Docker (recomendado)](#docker-recomendado)
+    - [Ambiente local](#ambiente-local)
+  - [Configuration](#configuration)
+  - [Usage](#usage)
+    - [LangGraph Studio](#langgraph-studio)
+    - [CLI (`scripts/query_assistant.py` via Make)](#cli-scriptsquery_assistantpy-via-make)
+  - [Agents](#agents)
+    - [Analytics](#analytics)
+    - [Knowledge (RAG)](#knowledge-rag)
+    - [Commerce](#commerce)
+    - [Triage](#triage)
+  - [API](#api)
+  - [Development](#development)
+  - [Testing](#testing)
+  - [Observability](#observability)
+  - [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -37,44 +46,44 @@
 ## Architecture
 
 ```mermaid
-graph TB
+flowchart TB
     subgraph "Interface"
-        CLI[CLI]
-        API[REST (FastAPI)]
-        STUDIO[LangGraph Studio]
+        CLI["CLI"]
+        API["REST (FastAPI)"]
+        STUDIO["LangGraph Studio"]
     end
     subgraph "Orchestration"
-        LG[LangGraph]
-        RT[LLM Router]
-        SP[Supervisor]
+        LG["LangGraph"]
+        RT["LLM Router"]
+        SP["Supervisor"]
     end
     subgraph "Agents"
-        KA[Knowledge (RAG)]
-        AA[Analytics]
-        CA[Commerce]
-        TR[Triage]
+        KA["Knowledge (RAG)"]
+        AA["Analytics"]
+        CA["Commerce"]
+        TR["Triage"]
     end
     subgraph "Data"
-        PG[(PostgreSQL analytics)]
-        VEC[(pgvector doc_chunks)]
-        DOCS[(Docs store)]
+        PG[("PostgreSQL analytics")]
+        VEC[("pgvector doc_chunks")]
+        DOCS[("Docs store")]
     end
     subgraph "External"
-        OAI[OpenAI]
+        OAI["OpenAI"]
     end
-    CLI-->API
-    STUDIO-->LG
-    API-->RT-->SP
-    SP-->KA
-    SP-->AA
-    SP-->CA
-    SP-->TR
-    KA-->VEC
-    AA-->PG
-    CA-->DOCS
-    KA-->OAI
-    AA-->OAI
-    CA-->OAI
+    CLI --> API
+    STUDIO --> LG
+    API --> RT --> SP
+    SP --> KA
+    SP --> AA
+    SP --> CA
+    SP --> TR
+    KA --> VEC
+    AA --> PG
+    CA --> DOCS
+    KA --> OAI
+    AA --> OAI
+    CA --> OAI
 ```
 
 Key decisions
@@ -87,6 +96,7 @@ Key decisions
 ## Quick Start
 
 ### Docker (recomendado)
+
 ```bash
 # 1) Clone
 git clone https://github.com/amcerri/apllos-generativeai-challenge.git
@@ -107,6 +117,7 @@ curl http://localhost:2024/ok
 ```
 
 ### Ambiente local
+
 ```bash
 # Dependências
 pip install -e .
@@ -126,6 +137,7 @@ make studio-up
 ```
 
 Quick test (CLI)
+
 ```bash
 # Analytics
 make query QUERY="Quantos pedidos existem no total?"
@@ -168,10 +180,12 @@ Row caps e timeouts (analytics executor)
 ## Usage
 
 ### LangGraph Studio
+
 - UI: `https://smith.langchain.com/studio/?baseUrl=http://localhost:2024`
 - Threads: preservam contexto; visualize estado, nós e interrupções humanas
 
 ### CLI (`scripts/query_assistant.py` via Make)
+
 ```bash
 # Query simples
 make query QUERY="Qual a receita total?"
@@ -329,9 +343,3 @@ make db-stop && make db-start
 echo $OPENAI_API_KEY
 ```
 - Vetores lentos após ingestão: confirme `ANALYZE doc_chunks;` (Make já inclui)
-
----
-
-## License
-
-MIT
