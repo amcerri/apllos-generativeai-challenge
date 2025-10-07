@@ -1,0 +1,39 @@
+# Architectural Decisions (ADRs)
+
+A curated list of significant design decisions and their rationale.
+
+## ADR-001: Optional Dependencies and Graceful Degradation
+
+- Decision: All heavy deps (FastAPI, LangGraph, OpenAI, SQLAlchemy, Prometheus, OTEL) are optional at import time. Modules provide stubs/no-ops when unavailable.
+- Rationale: Keep tests deterministic, enable partial functionality without full stack, improve DX.
+- Consequences: Feature flags and fallbacks must be maintained; some behavior differs between dev and fully provisioned envs.
+
+## ADR-002: Context-First Routing with Single-Pass Fallback
+
+- Decision: Use an LLM classifier with deterministic supervisor guardrails and allow at most one fallback.
+- Rationale: Reduce oscillations and ensure predictable behavior under uncertainty; emphasize structural cues (allowlist, SQL shape).
+- Consequences: Some ambiguous requests may route conservatively to triage or single fallback.
+
+## ADR-003: Analytics Safety (Planner/Executor)
+
+- Decision: Enforce allowlist, block cross-schema joins, require LIMIT on non-aggregates; executor read-only, statement timeouts, client row caps, and EXPLAIN-only dry-run on rejection.
+- Rationale: Prevent harmful or expensive queries; maintain user trust with approvals.
+- Consequences: Some complex queries require adjustments; human approval adds latency when enabled.
+
+## ADR-004: RAG with Deterministic Fallbacks
+
+- Decision: Retriever uses embeddings with deterministic fallback; ranker is heuristic with optional LLM reranker; answerer can fallback to extractive summarization.
+- Rationale: Ensure the assistant remains useful when LLMs are degraded.
+- Consequences: Answer quality may vary; citations always included to maintain traceability.
+
+## ADR-005: Commerce Documents via Hybrid Extraction
+
+- Decision: LLM structured output first, with heuristic reconciliation of totals; processor supports OCR and multi-format.
+- Rationale: Balance accuracy and robustness across diverse document layouts.
+- Consequences: LLM costs present; OCR introduces latency; provide warnings and risks for operator visibility.
+
+## ADR-006: Centralized LLM Client
+
+- Decision: Single wrapper handles timeouts, retries, JSON extraction for all components.
+- Rationale: Consistency, observability, and controlled failure behavior.
+- Consequences: Client abstraction must track provider API changes.
