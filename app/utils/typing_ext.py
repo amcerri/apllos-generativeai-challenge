@@ -3,14 +3,14 @@ Typing extensions and common aliases
 
 Overview
 --------
-Shared typing utilities and aliases used across the project. Prefer modern
-Python 3.11+ features (e.g., X | Y unions) and keep this module stdlib‑only.
+Essential typing utilities using modern Python 3.11+ features.
+Focuses on JSON serialization contracts and essential protocols.
 
 Design
 ------
 - Provide JSON‑related aliases (recursive) for serialization contracts.
-- Small utility protocols (e.g., `SupportsToDict`).
-- Lightweight helpers like `is_json_compatible` and common TypeVars.
+- Essential protocols (e.g., `SupportsToDict`).
+- Lightweight helpers for JSON compatibility checking.
 
 Integration
 -----------
@@ -64,7 +64,6 @@ __all__: Final[list[str]] = [
     "JSONArray",
     "JSONObject",
     "SupportsToDict",
-    "SupportsStr",
     "is_json_compatible",
 ]
 
@@ -80,12 +79,6 @@ class SupportsToDict(Protocol):
         ...
 
 
-@runtime_checkable
-class SupportsStr(Protocol):
-    """Objects that provide a meaningful string representation."""
-
-    def __str__(self) -> str:  # pragma: no cover - structural typing
-        ...
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +89,7 @@ class SupportsStr(Protocol):
 def is_json_compatible(value: Any) -> bool:
     """Return True if *value* fits the JSONValue alias (by structural check).
 
-    Accepts primitives, lists/tuples, and mappings with string keys. For objects
-    exposing `to_dict()`, the function validates the returned mapping.
+    Accepts primitives, lists/tuples, and mappings with string keys.
     """
 
     # Primitives
@@ -117,21 +109,5 @@ def is_json_compatible(value: Any) -> bool:
             if not is_json_compatible(item):
                 return False
         return True
-
-    # Mutable variants (for completeness)
-    if isinstance(value, MutableMapping | MutableSequence):
-        return (
-            is_json_compatible(dict(value))
-            if isinstance(value, MutableMapping)
-            else is_json_compatible(list(value))
-        )
-
-    # Objects with to_dict()
-    if hasattr(value, "to_dict") and callable(value.to_dict):
-        try:
-            as_dict = value.to_dict()
-        except Exception:
-            return False
-        return is_json_compatible(as_dict)
 
     return False
