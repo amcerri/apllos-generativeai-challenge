@@ -194,7 +194,7 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
 
         if fallback_applied:
             # Calibrate confidence conservatively upward but capped.
-            target = 0.78 if chosen in {"analytics", "knowledge"} else 0.7
+            target = 0.8 if chosen in {"analytics", "knowledge"} else 0.72
             confidence = max(confidence, target)
             signals.add("supervisor_fallback")
             reason = _append_reason(reason, f"fallback→{chosen}")

@@ -303,10 +303,11 @@ class LLMClassifier:
         knowledge_score = 0.3 if (knowledge_phrasing and not hit_tables and not hit_columns) else 0.0
 
         # Aggregate per-agent scores (bounded in [0,1])
+        # Tuned weights to reduce over-routing to analytics when signals are weak
         scores = {
-            "analytics": min(1.0, allowlist_score + sqlish_score),
-            "commerce": min(1.0, commerce_score),
-            "knowledge": min(1.0, knowledge_score),
+            "analytics": min(1.0, 0.8 * allowlist_score + 0.6 * sqlish_score),
+            "commerce": min(1.0, 0.9 * commerce_score),
+            "knowledge": min(1.0, 1.0 * knowledge_score),
         }
         agent, best = max(scores.items(), key=lambda kv: kv[1])
 
@@ -316,7 +317,7 @@ class LLMClassifier:
             confidence = 0.35
             reason = "fallback: low structured signals"
         else:
-            confidence = min(0.9, 0.5 + 0.4 * best)
+            confidence = min(0.92, 0.48 + 0.42 * best)
             if agent == "analytics":
                 reason = "allowlist/SQL structure indicates tabular intent"
             elif agent == "commerce":
