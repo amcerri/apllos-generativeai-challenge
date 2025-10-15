@@ -36,7 +36,7 @@ models:
     name: ${ROUTER_MODEL:-gpt-4o-mini}
     temperature: 0.0
     max_tokens: 400
-    timeout_seconds: 30
+    timeout_seconds: 60
 
   # Analytics planner: reasoning model that synthesizes safe SQL
   analytics_planner:

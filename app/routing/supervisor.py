@@ -161,6 +161,13 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
             )
             return _coerce_router_decision(final)
 
+        # LLM-FIRST GUARDRAILS: Only apply when LLM decision is clearly wrong
+        # Note: Most validation is now handled by the LLM classifier itself
+        # The supervisor only applies minimal guardrails to avoid over-correction
+
+
+
+
         # Single‑pass fallback rules (context‑first)
         fallback_applied = False
         chosen = agent
@@ -185,12 +192,9 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
             chosen = "analytics"
             fallback_applied = True
         elif agent == "triage":
-            if doc_cues:
-                chosen = "knowledge"
-                fallback_applied = True
-            elif allowlist_cues:
-                chosen = "analytics"
-                fallback_applied = True
+            # Don't redirect triage - let it stay as triage
+            # This prevents greetings and meta questions from being redirected
+            pass
 
         if fallback_applied:
             # Calibrate confidence conservatively upward but capped.
