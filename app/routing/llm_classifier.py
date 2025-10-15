@@ -66,6 +66,13 @@ except Exception:  # pragma: no cover - optional
 
     start_span = _fallback_start_span
 
+# Optional metrics
+try:
+    from app.infra.metrics import inc_counter as _inc_counter
+except Exception:  # pragma: no cover - optional
+    def _inc_counter(_name: str, labels: Mapping[str, str] | None = None, amount: float = 1.0) -> None:
+        return
+
 
 # Optional: RouterDecision dataclass
 ROUTER_DECISION_CLS: Any
@@ -206,16 +213,92 @@ class LLMClassifier:
         with start_span("routing.classify"):
             try:
                 system = self._load_system_prompt(allowlist or {})
-                examples = self._load_examples()
-                messages = [
-                    *examples,
-                    {"role": "user", "content": message},
-                ]
                 schema = _routerdecision_json_schema()
                 if self._backend is None:
                     raise RuntimeError("no backend configured")
-                
-                # Try LLM first, but fallback to heuristic if it fails
+
+                # -------------------------------------------------------------
+                # Ensemble routing (feature-flagged via env)
+                # -------------------------------------------------------------
+                import os as _os
+                ensemble_enabled = str(_os.getenv("ROUTER_ENSEMBLE_ENABLED", "true")).strip().lower() in {"1","true","yes","on"}
+                scorer_enabled = str(_os.getenv("ROUTER_SCORER_ENABLED", "true")).strip().lower() in {"1","true","yes","on"}
+
+                if ensemble_enabled:
+                    # Build three message variants using diverse example subsets
+                    ex_all = self._load_examples()
+
+                    def _filter_examples(kind: str) -> list[dict[str, str]]:
+                        if not ex_all:
+                            return []
+                        out: list[dict[str, str]] = []
+                        for row in ex_all:
+                            c = (row.get("content", "") or "").lower()
+                            if kind == "analytics" and any(k in c for k in ("quantos", "média", "soma", "select", "orders")):
+                                out.append(row)
+                            elif kind == "commerce" and any(k in c for k in ("fatura", "nota fiscal", "invoice", "contrato", "pedido")):
+                                out.append(row)
+                            elif kind == "knowledge" and any(k in c for k in ("o que é", "como", "estratégias", "definição")):
+                                out.append(row)
+                        # keep it short to reduce latency
+                        return out[:6]
+
+                    variants = [
+                        ("neutral", ex_all[:6] if ex_all else []),
+                        ("analytics", _filter_examples("analytics")),
+                        ("commerce", _filter_examples("commerce")),
+                    ]
+                    votes: list[dict[str, Any]] = []
+                    for tag, exs in variants:
+                        messages = [*exs, {"role": "user", "content": message}]
+                        try:
+                            raw = self._backend.generate_json(
+                                system=system,
+                                messages=messages,
+                                json_schema=schema,
+                                model=self.model,
+                                temperature=self.temperature,
+                                max_output_tokens=self.max_output_tokens,
+                            )
+                            dec = _normalize_router_decision(raw, thread_id=thread_id)
+                            if self._validate_decision(dec, message):
+                                votes.append({"tag": tag, "decision": dec})
+                            else:
+                                self.log.info("ensemble: invalid LLM decision", extra={"tag": tag, "decision": dec})
+                        except Exception as _e:
+                            self.log.info("ensemble: variant failed", extra={"tag": tag, "reason": str(_e)})
+
+                    # Majority voting
+                    if votes:
+                        from collections import Counter as _Counter
+                        agent_counts = _Counter(v["decision"]["agent"] for v in votes)
+                        top_agent, top_count = next(iter(agent_counts.most_common(1)))
+                        # If clear majority, take the first decision for that agent
+                        if top_count >= 2 or len(agent_counts) == 1:
+                            chosen = next(v for v in votes if v["decision"]["agent"] == top_agent)["decision"]
+                            chosen["signals"] = list({*chosen.get("signals", []), "ensemble_majority"})
+                            # Apply optional confidence calibration
+                            chosen = self._apply_confidence_calibration(chosen)
+                            return self._return_final(chosen)
+
+                        # Tie-breaker using scorer
+                        if scorer_enabled:
+                            try:
+                                scorer_dec = self._score_agents(message, candidates=[d["decision"] for d in votes])
+                                scorer_dec["signals"] = list({*scorer_dec.get("signals", []), "ensemble_scorer"})
+                                scorer_dec = self._apply_confidence_calibration(scorer_dec)
+                                return self._return_final(scorer_dec)
+                            except Exception as _se:
+                                self.log.info("scorer failed; using first vote", extra={"reason": str(_se)})
+                                first = self._apply_confidence_calibration(votes[0]["decision"])
+                                return self._return_final(first)
+
+                    # If ensemble produced nothing valid, fall back to single-shot below
+
+                # -------------------------------------------------------------
+                # Single-shot LLM route (fallback)
+                # -------------------------------------------------------------
+                messages = [*self._load_examples(), {"role": "user", "content": message}]
                 try:
                     raw = self._backend.generate_json(
                         system=system,
@@ -226,31 +309,117 @@ class LLMClassifier:
                         max_output_tokens=self.max_output_tokens,
                     )
                     decision = _normalize_router_decision(raw, thread_id=thread_id)
-                    
-                    # VALIDATION: Check if LLM decision makes sense
-                    # If it's clearly wrong, use heuristic instead
                     if self._validate_decision(decision, message):
-                        return _coerce_router_decision(decision)
+                        decision = self._apply_confidence_calibration(decision)
+                        return self._return_final(decision)
                     else:
                         self.log.info("LLM decision invalid, using heuristic", extra={"llm_decision": decision})
-                        # Force heuristic for invalid decisions
-                        decision = self._heuristic_decide(
-                            message, allowlist or {}, thread_id=thread_id, locale=locale
-                        )
-                        return _coerce_router_decision(decision)
-                        
+                        decision = self._heuristic_decide(message, allowlist or {}, thread_id=thread_id, locale=locale)
+                        decision = self._apply_confidence_calibration(decision)
+                        return self._return_final(decision)
                 except Exception as llm_exc:
                     self.log.info("LLM failed, using heuristic", extra={"reason": str(llm_exc)})
-                    decision = self._heuristic_decide(
-                        message, allowlist or {}, thread_id=thread_id, locale=locale
-                    )
-                    return _coerce_router_decision(decision)
+                    decision = self._heuristic_decide(message, allowlist or {}, thread_id=thread_id, locale=locale)
+                    decision = self._apply_confidence_calibration(decision)
+                    return self._return_final(decision)
             except Exception as exc:
                 self.log.info("classifier fallback engaged", extra={"reason": str(exc)})
                 decision = self._heuristic_decide(
                     message, allowlist or {}, thread_id=thread_id, locale=locale
                 )
-                return _coerce_router_decision(decision)
+            decision = self._apply_confidence_calibration(decision)
+            return self._return_final(decision)
+
+    # ---------------------------------------------------------------------
+    # Scorer (tie-breaker)
+    # ---------------------------------------------------------------------
+    def _score_agents(self, message: str, *, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        """Score candidate decisions using an LLM scorer prompt and return the best.
+
+        The scorer receives the user message and candidate agent rationales and
+        outputs normalized scores per agent. We pick the highest-scoring candidate.
+        """
+        if not candidates:
+            raise ValueError("no candidates to score")
+        try:
+            import json as _json
+            # Build compact scorer prompt
+            summary = [{"agent": c.get("agent"), "reason": c.get("reason", "")} for c in candidates]
+            scorer_system = (
+                "You are a routing scorer. Given a user message and candidate agents with reasons, "
+                "return JSON {\"scores\": {agent: float in [0,1], ...}} where scores sum is not required."
+            )
+            scorer_schema = {
+                "type": "object",
+                "properties": {"scores": {"type": "object", "additionalProperties": {"type": "number"}}},
+                "required": ["scores"],
+                "additionalProperties": False,
+            }
+            messages = [
+                {"role": "user", "content": f"message: {message}\ncandidates: {_json.dumps(summary, ensure_ascii=False)}"}
+            ]
+            raw = self._backend.generate_json(
+                system=scorer_system,
+                messages=messages,
+                json_schema=scorer_schema,
+                model=self.model,
+                temperature=self.temperature,
+                max_output_tokens=256,
+            )
+            scores = dict(raw.get("scores", {}))
+            # Choose candidate with max score; default to first if missing
+            ranked = sorted(((scores.get(c.get("agent"), 0.0), idx) for idx, c in enumerate(candidates)), reverse=True)
+            best_idx = ranked[0][1] if ranked else 0
+            return candidates[best_idx]
+        except Exception as e:
+            # If scorer fails, return first candidate
+            self.log.info("scorer exception", extra={"reason": str(e)})
+            return candidates[0]
+
+    # ---------------------------------------------------------------------
+    # Confidence calibration
+    # ---------------------------------------------------------------------
+    def _apply_confidence_calibration(self, decision: dict[str, Any]) -> dict[str, Any]:
+        """Apply simple piecewise calibration to decision["confidence"].
+
+        Controlled by env `ROUTER_CALIBRATION` with JSON like:
+        {"breaks": [0.3, 0.6, 0.85], "scales": [0.9, 1.0, 1.05, 1.0]}
+        Fallback: conservative default that slightly boosts mid-range.
+        """
+        try:
+            import os as _os, json as _json
+            raw = _os.getenv("ROUTER_CALIBRATION")
+            if raw:
+                cfg = _json.loads(raw)
+                breaks = list(cfg.get("breaks", []))
+                scales = list(cfg.get("scales", []))
+            else:
+                breaks = [0.3, 0.6, 0.85]
+                scales = [0.95, 1.00, 1.03, 1.00]
+        except Exception:
+            breaks = [0.3, 0.6, 0.85]
+            scales = [0.95, 1.00, 1.03, 1.00]
+
+        c = float(decision.get("confidence", 0.5) or 0.5)
+        # find scale bucket
+        idx = 0
+        for b in breaks:
+            if c > b:
+                idx += 1
+        s = scales[min(idx, len(scales) - 1)]
+        calibrated = max(0.0, min(1.0, c * float(s)))
+        out = dict(decision)
+        out["confidence"] = calibrated
+        return out
+
+    def _return_final(self, decision: dict[str, Any]) -> Any:
+        """Record metrics and coerce the RouterDecision for return."""
+        try:
+            agent = str(decision.get("agent", "triage"))
+            _inc_counter("router_decisions_total", {"agent": agent})
+        except Exception:
+            pass
+        return _coerce_router_decision(decision)
 
     def _validate_decision(self, decision: dict, message: str) -> bool:
         """Validate if the LLM decision makes sense given the message."""

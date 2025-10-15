@@ -416,9 +416,44 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 content_preview = attachment.get("content", "")[:200] + "..." if len(attachment.get("content", "")) > 200 else attachment.get("content", "")
                 q = f"{q} (Anexo: {filename} - {content_preview})"
             
-            log.info("Route node debug", 
+            # --- Lightweight routing probes (evidence-augmented) -----------------
+            probe_signals: list[str] = []
+            # Attachment probe
+            if attachment:
+                probe_signals.append("attachment_present")
+                mt = str(attachment.get("mime_type") or "").strip()
+                if mt:
+                    probe_signals.append(f"attachment_mime:{mt}")
+
+            # SQL probe (robust-ish regex for SELECT/FROM/CTE)
+            try:
+                import re as _re
+                ql = q.lower()
+                has_sql_block = "```sql" in ql
+                has_select_from = bool(_re.search(r"\bselect\b[\s\S]*?\bfrom\b", ql))
+                has_with_cte = ql.strip().startswith("with ")
+                if has_sql_block or has_select_from or has_with_cte:
+                    probe_signals.append("sql_probe_true")
+            except Exception:
+                pass
+
+            # Shallow RAG probe (very cheap): top_k=2 with high threshold
+            rag_hits = 0
+            rag_min_score = None
+            try:
+                _res = retriever.retrieve(query=q, top_k=2, min_score=0.82) if retriever is not None else None
+                if _res and getattr(_res, "hits", None):
+                    rag_hits = len(_res.hits)
+                    if rag_hits > 0:
+                        rag_min_score = min(float(h.get("score", 0.0) if isinstance(h, dict) else getattr(h, "score", 0.0)) for h in (_res.hits if isinstance(_res.hits, list) else []))
+                        probe_signals.append("rag_probe_hit")
+            except Exception:
+                pass
+
+            log.info("Route node debug",
                     original_query=q,
-                    has_attachment=bool(attachment))
+                    has_attachment=bool(attachment),
+                    routing_probes=probe_signals)
             
             with start_span("node.route"):
                 dec = classifier.classify(q)
@@ -440,12 +475,39 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         "thread_id": getattr(dec, "thread_id", ""),
                     }
                 
+                # Merge probe signals with router signals for observability only.
+                merged_signals = list(dec_dict.get("signals", [])) + probe_signals
+
+                # Secondary intent hinting (feature-flagged): add weak hint when probes conflict
+                try:
+                    import os as _os
+                    secondary_enabled = str(_os.getenv("ROUTER_SECONDARY_HINTS", "true")).strip().lower() in {"1","true","yes","on"}
+                except Exception:
+                    secondary_enabled = True
+                if secondary_enabled:
+                    # If sql probe absent but rag hit exists, hint knowledge as secondary
+                    if ("sql_probe_true" not in probe_signals) and ("rag_probe_hit" in probe_signals):
+                        merged_signals.append("secondary:knowledge")
+                    # If sql probe present and no rag hit, hint analytics
+                    if ("sql_probe_true" in probe_signals) and ("rag_probe_hit" not in probe_signals):
+                        merged_signals.append("secondary:analytics")
+
+                # Build lightweight routing context for supervisor
+                routing_ctx = {
+                    "rag_hits": int(rag_hits),
+                    "rag_min_score": float(rag_min_score) if rag_min_score is not None else None,
+                    "allowlist_tables": tuple(dec_dict.get("tables", []) or []),
+                    "allowlist_columns": tuple(dec_dict.get("columns", []) or []),
+                    "extra_signals": tuple(probe_signals),
+                }
+
                 out = {
                     "allowlist": allowlist or {},  # Include allowlist in state
-                    "router_decision": dec_dict,
+                    "router_decision": {**dec_dict, "signals": merged_signals},
                     "tables": list(dec_dict.get("tables", [])),
                     "columns": list(dec_dict.get("columns", [])),
-                    "signals": list(dec_dict.get("signals", [])),
+                    "signals": merged_signals,
+                    "routing_ctx": routing_ctx,
                 }
             _inc_counter("requests_total", {"agent": "router", "node": "route"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "route"})
@@ -459,8 +521,21 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         router_decision=state.get("router_decision"),
                         state_keys=list(state.keys()))
                 dec = state.get("router_decision") or {}
-                # Don't pass context to avoid incorrect fallbacks
-                dec2 = supervise(dec)
+                # Build routing context from state (probes and allowlist cues)
+                try:
+                    from app.routing.supervisor import RoutingContext as _RoutingContext  # local import for optional dep
+                    ctx_data = state.get("routing_ctx") or {}
+                    rctx = _RoutingContext(
+                        rag_hits=int(ctx_data.get("rag_hits", 0) or 0),
+                        rag_min_score=ctx_data.get("rag_min_score"),
+                        allowlist_tables=tuple(ctx_data.get("allowlist_tables", ()) or ()),
+                        allowlist_columns=tuple(ctx_data.get("allowlist_columns", ()) or ()),
+                        extra_signals=tuple(ctx_data.get("extra_signals", ()) or ()),
+                    )
+                except Exception:
+                    rctx = None
+
+                dec2 = supervise(dec, rctx)
                 # Convert RouterDecision to dict if it's a dataclass
                 if hasattr(dec2, '__dict__'):
                     dec2_dict = dec2.__dict__

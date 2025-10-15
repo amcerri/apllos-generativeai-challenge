@@ -101,7 +101,7 @@ class OpenAIConfig(BaseModel):
         Embeddings model name
     """
     
-    request_timeout_ms: int = Field(default=30000, description="Request timeout in milliseconds")
+    request_timeout_ms: int = Field(default=90000, description="Request timeout in milliseconds")
     max_retries: int = Field(default=3, description="Maximum retries")
     api_base: Optional[str] = Field(default=None, description="OpenAI API base URL")
     
@@ -140,7 +140,7 @@ class ModelConfig(BaseModel):
     name: str = Field(default="gpt-4o-mini", description="Model name")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Model temperature")
     max_tokens: int = Field(default=800, ge=1, description="Maximum tokens")
-    timeout_seconds: int = Field(default=60, ge=1, description="Timeout in seconds")
+    timeout_seconds: int = Field(default=90, ge=1, description="Timeout in seconds")
     
     # Optional output configuration
     output: Optional[Dict[str, Any]] = Field(default=None, description="Output configuration")
@@ -169,7 +169,7 @@ class EmbeddingsConfig(BaseModel):
     name: str = Field(default="text-embedding-3-small", description="Model name")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="Model temperature")
     max_tokens: int = Field(default=0, ge=0, description="Maximum tokens (not used for embeddings)")
-    timeout_seconds: int = Field(default=60, ge=1, description="Timeout in seconds")
+    timeout_seconds: int = Field(default=90, ge=1, description="Timeout in seconds")
     parameters: Dict[str, Any] = Field(
         default_factory=lambda: {"dimensions": 1536, "batch_size": 256},
         description="Embeddings parameters"
@@ -281,7 +281,7 @@ class AnalyticsExecutorConfig(BaseModel):
     """
     
     explain_analyze: bool = Field(default=False, description="Enable EXPLAIN ANALYZE")
-    default_timeout_seconds: int = Field(default=60, ge=1, description="Default timeout")
+    default_timeout_seconds: int = Field(default=90, ge=1, description="Default timeout")
     default_row_cap: int = Field(default=2000, ge=1, description="Default row cap")
     max_row_cap: int = Field(default=10000, ge=1, description="Maximum row cap")
 
