@@ -5,6 +5,11 @@
 # - `##` comments are displayed on `make help`.
 # - Docker Compose controls Postgres services (`db`) and app (`app`).
 
+# --- Routing evaluation ----------------------------------------------------
+.PHONY: test-routing
+test-routing:
+	python scripts/eval_routing.py --input tests/batch/test_routing.yaml || true
+
 # ----- Core tools & project metadata -----------------------------------------
 SHELL          := /bin/bash
 PROJECT        ?= apllos-generativeai-challenge

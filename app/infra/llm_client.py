@@ -304,9 +304,23 @@ class LLMClient:
             self.log.warning("Empty text provided for JSON extraction")
             return None
 
+        # Normalize common wrappers (strip code fences)
+        t0 = text.strip()
+        if t0.startswith("```"):
+            try:
+                # remove first fence line and last fence if present
+                lines = t0.splitlines()
+                if len(lines) >= 2 and lines[0].startswith("```"):
+                    if lines[-1].startswith("```"):
+                        t0 = "\n".join(lines[1:-1]).strip()
+                    else:
+                        t0 = "\n".join(lines[1:]).strip()
+            except Exception:
+                pass
+
         # Try direct JSON parsing first
         try:
-            result = json.loads(text)
+            result = json.loads(t0)
             self.log.debug("JSON extracted successfully", keys=list(result.keys()) if isinstance(result, dict) else None)
             return result
         except json.JSONDecodeError as e:
@@ -315,34 +329,70 @@ class LLMClient:
         if not fallback_parsing:
             return None
 
-        # Fallback: extract JSON using regex
+        # Fallback 1: extract first JSON object/array and balance delimiters
         try:
-            # Look for JSON object in the text
-            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-            matches = re.findall(json_pattern, text, re.DOTALL)
-            
-            for match in matches:
+            s = text
+            # normalize smart quotes
+            s = s.replace("“", '"').replace("”", '"').replace("’", "'")
+            # find first JSON start
+            start_idx_obj = s.find('{')
+            start_idx_arr = s.find('[')
+            starts = [idx for idx in [start_idx_obj, start_idx_arr] if idx != -1]
+            if starts:
+                start = min(starts)
+                candidate = s[start:]
+                # balance braces/brackets to cut a plausible JSON snippet
+                def _balanced_cut(payload: str) -> str:
+                    depth_obj = 0
+                    depth_arr = 0
+                    for i, ch in enumerate(payload):
+                        if ch == '{':
+                            depth_obj += 1
+                        elif ch == '}':
+                            depth_obj = max(0, depth_obj - 1)
+                        elif ch == '[':
+                            depth_arr += 1
+                        elif ch == ']':
+                            depth_arr = max(0, depth_arr - 1)
+                        if depth_obj == 0 and depth_arr == 0 and i > 0:
+                            return payload[: i + 1]
+                    return payload
+                snippet = _balanced_cut(candidate).strip()
+                # remove trailing commas before } or ]
+                snippet = re.sub(r",\s*([}\]])", r"\1", snippet)
+                # try load
                 try:
-                    result = json.loads(match)
-                    self.log.debug("JSON extracted via regex fallback", keys=list(result.keys()) if isinstance(result, dict) else None)
+                    result = json.loads(snippet)
+                    self.log.debug("JSON extracted via balanced snippet")
                     return result
                 except json.JSONDecodeError:
-                    continue
-
-            # Try to find JSON array
-            array_pattern = r'\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]'
-            array_matches = re.findall(array_pattern, text, re.DOTALL)
-            
-            for match in array_matches:
-                try:
-                    result = json.loads(match)
-                    self.log.debug("JSON array extracted via regex fallback")
-                    return {"data": result}  # Wrap array in object
-                except json.JSONDecodeError:
-                    continue
+                    pass
 
         except Exception as exc:
             self.log.warning("Fallback JSON parsing failed", extra={"error": str(exc)})
+
+        # Fallback 2: regex search for objects/arrays, as last resort
+        try:
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            for match in re.findall(json_pattern, text, re.DOTALL):
+                try:
+                    m2 = re.sub(r",\s*([}\]])", r"\1", match)
+                    result = json.loads(m2)
+                    self.log.debug("JSON extracted via regex object")
+                    return result
+                except json.JSONDecodeError:
+                    continue
+            array_pattern = r'\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]'
+            for match in re.findall(array_pattern, text, re.DOTALL):
+                try:
+                    m2 = re.sub(r",\s*([}\]])", r"\1", match)
+                    result = json.loads(m2)
+                    self.log.debug("JSON extracted via regex array")
+                    return {"data": result}
+                except json.JSONDecodeError:
+                    continue
+        except Exception as exc:
+            self.log.warning("Regex JSON parsing failed", extra={"error": str(exc)})
 
         self.log.warning("All JSON extraction methods failed", extra={"text_preview": text[:100]})
         return None
@@ -391,14 +441,16 @@ def get_llm_client() -> LLMClient:
 
         api_key = os.getenv("OPENAI_API_KEY")
         model = "gpt-4o-mini"
-        timeout = 60.0
-        max_retries = 3
+        # Pull defaults from settings when available
+        try:
+            from app.config.settings import get_settings as _get_settings  # local import
+            _cfg = _get_settings()
+            timeout = float(getattr(getattr(_cfg, "openai"), "request_timeout_ms", 90000) / 1000.0)
+            max_retries = int(getattr(getattr(_cfg, "openai"), "max_retries", 3))
+        except Exception:
+            timeout = 90.0
+            max_retries = 3
 
-        _LLM_CLIENT = LLMClient(
-            api_key=api_key,
-            model=model,
-            timeout=timeout,
-            max_retries=max_retries,
-        )
+        _LLM_CLIENT = LLMClient(api_key=api_key, model=model, timeout=timeout, max_retries=max_retries)
     
     return _LLM_CLIENT

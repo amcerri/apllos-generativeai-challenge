@@ -87,6 +87,9 @@ flowchart TB
     CA --> OAI
 ```
 
+Routing flags
+- `ROUTER_ENSEMBLE_ENABLED` (default true) and `ROUTER_SCORER_ENABLED` (default true) enable the LLM ensemble router and scorer tie-breaker. See `docs/routing.md`.
+
 Key decisions
 - Fallbacks everywhere (no hard deps at import time)
 - Settings via Pydantic + YAML; models centralized under `settings.models.*`
