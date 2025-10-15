@@ -14,6 +14,7 @@ Covers document processor, extractor(s), and summarizer.
 ## LLM Extractor ([app/agents/commerce/extractor_llm.py](../../app/agents/commerce/extractor_llm.py))
 
 - OpenAI JSON Schema structured extraction with business focus and risks; adds usage metadata.
+- State-of-the-art prompt engineering with Chain-of-Thought reasoning and self-consistency checks.
 - Fallback: heuristic extractor when LLM unavailable/errors.
 
 ## Heuristic Extractor ([app/agents/commerce/extractor.py](../../app/agents/commerce/extractor.py))
@@ -25,3 +26,4 @@ Covers document processor, extractor(s), and summarizer.
 ## Summarizer ([app/agents/commerce/summarizer.py](../../app/agents/commerce/summarizer.py))
 
 - PT-BR summary with document identity, totals, dates, top items (configurable counts), risks, and follow-ups.
+- Confidence calibration for risk assessment and business insights.

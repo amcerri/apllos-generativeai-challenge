@@ -16,6 +16,8 @@ Covers retriever, ranker, and answerer.
 
 ## Answerer ([app/agents/knowledge/answerer.py](../../app/agents/knowledge/answerer.py))
 
-- Produces PT-BR answer with mandatory citations.
+- Produces PT-BR answer with mandatory citations and cross-validation.
+- State-of-the-art prompt engineering with Chain-of-Thought reasoning and confidence calibration.
 - Attempts LLM composition with compact context; compresses if above char cap; fallback to extractive bullets.
+- Cross-validation: forces `no_context=true` when relevance is low or no relevant hits for conceptual questions.
 - Always returns `citations` referencing either public `url` or `doc_id`.

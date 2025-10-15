@@ -21,22 +21,22 @@ Explains the configuration model ([app/config/settings.py](../app/config/setting
 - `analytics`:
   - `planner`: default/max limits, disallow `SELECT *`, enforce LIMIT.
   - `sql`: read-only, max_rows, timeout, `allowlist_path`.
-  - `executor`: default timeout, row caps, max cap; EXPLAIN ANALYZE toggle.
-  - `normalizer`: examples in prompt, JSON extraction.
+  - `executor`: default timeout (increased to 120s), row caps, max cap; EXPLAIN ANALYZE toggle; window functions support.
+  - `normalizer`: examples in prompt, JSON extraction, `complete_data_threshold` (configurable, default 100 records).
 - `knowledge`:
   - `retrieval`: top_k, min_score, dedupe, index, default_min_score.
   - `ranker`: rerank_top_k.
-  - `answerer`: max_tokens, require_citations, summary char caps.
+  - `answerer`: max_tokens, require_citations, summary char caps, cross-validation.
 - `commerce`:
-  - `extraction`: min_confidence, JSON schema strictness.
+  - `extraction`: min_confidence, JSON schema strictness, Chain-of-Thought reasoning.
   - `validation`: line_total tolerance, default currency.
-  - `summarizer` and `conversation` parameters.
+  - `summarizer` and `conversation` parameters with confidence calibration.
 - `document_processing`: OCR settings, supported formats, size/page limits.
-- `routing`: thresholds for classifier/supervisor interplay with RAG.
+- `routing`: thresholds for LLM-first classifier/supervisor interplay with RAG; enhanced validation rules.
 - `interruptions`: human approval required actions and timeouts.
 - `database`: URL, pooling, echo, read-only default.
 - `checkpointer`: enabled/backend/table/cleanup.
-- `observability`: log level/JSON, tracing flag/ratio, debug toggles.
+- `observability`: log level/JSON, tracing flag/ratio (increased to 60s), debug toggles.
 
 ## Environment Variables
 

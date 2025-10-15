@@ -34,10 +34,11 @@
 
 ## Overview
 
-- Multi‑agent orchestration with router + supervisor and optional human approval gates
-- Safe analytics SQL (allowlist, read‑only, timeouts, row caps)
-- Knowledge RAG over pgvector (`doc_chunks`) with citations
+- Multi‑agent orchestration with LLM-first routing and intelligent supervisor guardrails
+- Safe analytics SQL (allowlist, read‑only, timeouts, row caps) with intelligent data balancing
+- Knowledge RAG over pgvector (`doc_chunks`) with cross-validation and citations
 - Commerce processor (PDF/DOCX/TXT/OCR) → LLM extraction → summarization
+- State-of-the-art prompt engineering (Chain-of-Thought, Self-Consistency, Confidence Calibration)
 - Portable: Docker Compose or local development
 - Strong DX: Makefile, scripts, tests, logging, optional tracing
 
@@ -180,9 +181,11 @@ Model tier and flags
 - `settings.models.enable_normalizer_llm`: enable LLM normalizer for analytics
 
 Row caps and timeouts (analytics executor)
-- `analytics.executor.default_timeout_seconds`
+- `analytics.executor.default_timeout_seconds` (increased to 120s)
 - `analytics.executor.default_row_cap`
+- `analytics.normalizer.complete_data_threshold` (configurable, default 100 records)
 - Heuristic: if SQL contains `GROUP BY`, raise cap to configured max (avoids truncating small lists like 27 states)
+- LLM-first intelligent data balancing: complete data vs. analytical insights based on dataset size and query intent
 
 ---
 
@@ -209,14 +212,14 @@ make query QUERY="Detalhe por estado" THREAD_ID=thr-...
 ## Agents
 
 ### Analytics
-- Planner: NL → safe SQL (allowlist, no DDL/DML, prefix fix)
-- Executor: read‑only, timeout, row cap (with GROUP BY heuristic)
-- Normalizer: pt‑BR business formatting with intelligent fallback
+- Planner: NL → safe SQL (allowlist, no DDL/DML, prefix fix) with Chain-of-Thought reasoning
+- Executor: read‑only, timeout, row cap (with GROUP BY heuristic) and window functions support
+- Normalizer: LLM-first intelligent data balancing (complete data vs. analytical insights) with configurable thresholds
 
 ### Knowledge (RAG)
 - Retriever: pgvector over `doc_chunks` (1536 dims), light filters, per‑doc dedupe
 - Ranker: heuristic (overlap, phrase, length penalties) with optional LLM reranker
-- Answerer: pt‑BR answer with citations; extractive fallback if LLM unavailable
+- Answerer: pt‑BR answer with cross-validation, citations, and confidence calibration; extractive fallback if LLM unavailable
 
 RAG schema (DDL included in [data/samples/schema.sql](data/samples/schema.sql))
 ```sql
@@ -235,8 +238,8 @@ CREATE INDEX IF NOT EXISTS idx_doc_chunks_embedding_ivfflat
 
 ### Commerce
 - Processor: PDF/DOCX/TXT/Images with OCR (Tesseract) and fallbacks
-- Extractor (LLM): structured JSON Schema (models via `settings.models`)
-- Summarizer: executive pt‑BR view, risks and next steps
+- Extractor (LLM): structured JSON Schema with Chain-of-Thought reasoning and self-consistency checks
+- Summarizer: executive pt‑BR view, risks and next steps with confidence calibration
 
 ### Triage
 - Short pt‑BR reply when context is missing + objective follow‑ups
@@ -359,6 +362,7 @@ Directed tracing and node metrics
 
 Normalizer prompts
 - The analytics normalizer loads the system prompt and examples from [app/prompts/analytics/normalizer_system.txt](app/prompts/analytics/normalizer_system.txt) and [normalizer_examples.jsonl](app/prompts/analytics/normalizer_examples.jsonl) when present, falling back to an embedded prompt if not available.
+- LLM-first approach: intelligent data balancing with configurable thresholds, human-like responses, and analytical insights for large datasets.
 
 Planner and Executor safety
 - The planner enforces allowlist identifiers, blocks cross‑schema joins, validates join tables and extends temporal column detection (e.g., created/purchase/approved/delivered/estimated).
