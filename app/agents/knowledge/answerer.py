@@ -147,6 +147,28 @@ class KnowledgeAnswerer:
         hits = _coerce_hits(ranked)
         max_cit = max_citations or self.max_citations
         cap_chars = max_chars or self.max_chars
+        
+        # CROSS-VALIDATION: Check if content is relevant to the query
+        if not no_context and hits:
+            relevance_score = _calculate_relevance_score(query, hits)
+            
+            # Enhanced relevance checking
+            if relevance_score < 0.3:  # Low relevance threshold
+                self.log.info("Knowledge cross-validation failed: low relevance", 
+                             extra={"query": query, "relevance_score": relevance_score})
+                no_context = True
+            elif relevance_score < 0.5:  # Medium relevance - warn but proceed
+                self.log.warning("Knowledge cross-validation: medium relevance", 
+                               extra={"query": query, "relevance_score": relevance_score})
+                
+        # ADDITIONAL CROSS-VALIDATION: Check for conceptual questions without relevant content
+        conceptual_patterns = ["como começar", "como funciona", "o que é", "estratégias", "melhores práticas"]
+        is_conceptual = any(pattern in query.lower() for pattern in conceptual_patterns)
+        
+        if is_conceptual and not hits:
+            self.log.info("Knowledge cross-validation: conceptual question without content", 
+                         extra={"query": query, "is_conceptual": True})
+            no_context = True
 
         with start_span("agent.knowledge.answer"):
             if no_context is True or not hits:
@@ -548,3 +570,42 @@ def _smart_shorten(text: str, cap_chars: int) -> str:
     if last_space > 0:
         return (candidate[:last_space].rstrip() + "...")
     return candidate.rstrip() + "..."
+
+
+def _calculate_relevance_score(query: str, hits: Sequence[HitLike]) -> float:
+    """Calculate relevance score between query and hits."""
+    if not hits:
+        return 0.0
+        
+    query_lower = query.lower()
+    query_terms = set(re.findall(r'\b\w+\b', query_lower))
+    
+    total_score = 0.0
+    hit_count = 0
+    
+    for hit in hits[:5]:  # Check top 5 hits
+        hit_text = hit.text.lower()
+        hit_terms = set(re.findall(r'\b\w+\b', hit_text))
+        
+        # Calculate term overlap
+        overlap = len(query_terms.intersection(hit_terms))
+        if query_terms:
+            term_score = overlap / len(query_terms)
+        else:
+            term_score = 0.0
+            
+        # Calculate semantic similarity (simple keyword matching)
+        semantic_score = 0.0
+        for term in query_terms:
+            if term in hit_text:
+                semantic_score += 1.0
+                
+        if query_terms:
+            semantic_score = semantic_score / len(query_terms)
+            
+        # Combined score
+        hit_score = (term_score + semantic_score) / 2.0
+        total_score += hit_score
+        hit_count += 1
+        
+    return total_score / hit_count if hit_count > 0 else 0.0

@@ -26,7 +26,7 @@ analytics:
   
   executor:
     explain_analyze: false  # Enable only in staging if needed
-    default_timeout_seconds: 60
+    default_timeout_seconds: 120  # Increased from 60 to 120 seconds
     default_row_cap: 2000
     max_row_cap: 10000      # Hard upper bound safeguard
   
@@ -34,6 +34,7 @@ analytics:
     fallback_enabled: true
     max_examples_in_prompt: 1  # For efficiency
     json_extraction_regex: true  # Try to extract JSON from malformed responses
+    complete_data_threshold: 100  # Datasets <= this size can show complete data
 
 # ----------------------------------------------------------------------------
 # Knowledge Agent Configuration

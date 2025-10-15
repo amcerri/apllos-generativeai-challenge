@@ -181,15 +181,7 @@ class AnalyticsNormalizer:
         result_view = _as_result(result)
         user_query = question or "Consulta de dados"
         
-        # For penetration queries with large datasets, use fallback directly
-        if (result_view.row_count > 500 and 
-            ('penetração' in user_query.lower() or 'penetration' in user_query.lower()) and
-            result_view.rows and 
-            'state' in result_view.rows[0] and 'category' in result_view.rows[0]):
-            self.log.info("Using fallback for large penetration query")
-            return self._fallback_normalize(user_query, plan_view, result_view)
-        
-        # Try LLM-powered normalization with fallback
+        # Always try LLM first for human-like responses
         try:
             llm_result = self._normalize_with_llm(user_query, plan_view, result_view)
             if llm_result:
@@ -340,10 +332,8 @@ class AnalyticsNormalizer:
             self.log.warning("LLM response could not be parsed as JSON")
             return None
         
-        # For large datasets, append all data after LLM analysis
-        if input_data.get("has_more_data", False) and result.rows:
-            if "text" in response_data:
-                response_data["text"] += self._format_all_data(result.rows, user_query)
+        # For large datasets, let the LLM handle the formatting completely
+        # Don't append additional data as the LLM should handle everything
         
         return response_data
     
@@ -352,12 +342,12 @@ class AnalyticsNormalizer:
         if not rows:
             return ""
         
-        # For very large datasets, provide intelligent analysis instead of raw data
-        if len(rows) > 50:
+        # For very large datasets (>100 rows), provide intelligent analysis instead of raw data
+        if len(rows) > 100:
             return self._format_large_dataset_analysis(rows, user_query)
         
-        # For medium datasets (20-50 rows), show key insights + sample data
-        if len(rows) > 20:
+        # For medium datasets (50-100 rows), show key insights + sample data
+        if len(rows) > 50:
             return self._format_medium_dataset_analysis(rows, user_query)
         
         # For small datasets, show all data with proper formatting
@@ -397,8 +387,8 @@ class AnalyticsNormalizer:
         # Detect patterns and add intelligent insights
         pattern_insights = self._detect_patterns_and_insights(rows, user_query)
         
-        # Show sample of data (top 10-15 items)
-        sample_size = min(15, len(rows))
+        # Show sample of data (top 25 items for better coverage)
+        sample_size = min(25, len(rows))
         sample_data = self._format_small_dataset_data(rows[:sample_size], user_query)
         
         if len(rows) > sample_size:
@@ -427,6 +417,124 @@ class AnalyticsNormalizer:
                 text_parts.append(f"{i}. {', '.join(values)}")
         
         return pattern_insights + "\n".join(text_parts)
+    
+    def _format_complete_data(self, rows: list[Mapping[str, Any]], user_query: str = "") -> str:
+        """Format complete data for queries that need all results."""
+        if not rows:
+            return ""
+        
+        # Detect patterns and add intelligent insights
+        pattern_insights = self._detect_patterns_and_insights(rows, user_query)
+        
+        text_parts = ["\n\nDados completos:"]
+        for i, row in enumerate(rows, 1):
+            values = []
+            for k, v in row.items():
+                if v is not None:
+                    if isinstance(v, (int, float)) and v > 1000:
+                        values.append(f"{k}: {v:,.0f}")
+                    else:
+                        values.append(f"{k}: {v}")
+            if values:
+                text_parts.append(f"{i}. {', '.join(values)}")
+        
+        return pattern_insights + "\n".join(text_parts)
+    
+    def _should_show_complete_data(self, user_query: str, result_view: _ResultView) -> bool:
+        """Use heuristics and LLM to decide if complete data should be shown or intelligent analysis."""
+        try:
+            # Quick heuristics for obvious cases
+            # Get threshold from config or use default
+            try:
+                from app.config.settings import get_settings
+                config = get_settings()
+                if config and hasattr(config, 'analytics') and hasattr(config.analytics, 'complete_data_threshold'):
+                    threshold = config.analytics.complete_data_threshold
+                else:
+                    threshold = 100  # Default threshold
+            except:
+                threshold = 100  # Fallback threshold
+            
+            if result_view.row_count <= threshold:
+                return True  # Small datasets always show complete
+            
+            if result_view.row_count > 5000:
+                return False  # Very large datasets always use analysis
+            
+            # Minimal heuristics for obvious cases only (20% keyword assistance)
+            query_lower = user_query.lower()
+            
+            # Only the most obvious cases - very few keywords
+            # BUT: Only for small datasets (<= 200 records)
+            obvious_complete_patterns = [
+                'todos os estados', 'cada estado', 'cada categoria', 'todos os vendedores'
+            ]
+            
+            obvious_analysis_patterns = [
+                'identifique padrões', 'identificar padrões', 'padrões sazonais',
+                'tendências de crescimento', 'análise de tendências'
+            ]
+            
+            # Check only the most obvious cases
+            for pattern in obvious_analysis_patterns:
+                if pattern in query_lower:
+                    self.log.info(f"Found obvious analysis pattern '{pattern}' in query")
+                    return False
+            
+            # Only apply complete data patterns for small datasets (<= threshold records)
+            for pattern in obvious_complete_patterns:
+                if pattern in query_lower and result_view.row_count <= threshold:
+                    self.log.info(f"Found obvious complete data pattern '{pattern}' in query (small dataset: {result_view.row_count} records)")
+                    return True
+            
+            # Use LLM for most cases (80% LLM decision)
+            decision_prompt = f"""
+Analise a consulta do usuário e determine se deve mostrar TODOS os dados ou usar análise inteligente.
+
+CONSULTA: "{user_query}"
+NÚMERO DE REGISTROS: {result_view.row_count}
+
+REGRAS CLARAS:
+- MOSTRAR TODOS: Quando o usuário pede métricas específicas por grupo (ex: "tempo médio por transportadora", "vendas por categoria")
+- ANÁLISE INTELIGENTE: Quando o usuário pede insights, padrões, tendências (ex: "identifique padrões", "tendências de crescimento")
+
+DECISÃO:
+- Se a consulta pede "tempo médio por X", "vendas por X", "penetração por X" → MOSTRAR TODOS
+- Se a consulta pede "identifique padrões", "tendências", "insights" → ANÁLISE INTELIGENTE
+- Se a consulta pede métricas específicas por grupo → MOSTRAR TODOS
+- Se a consulta pede análise de padrões/tendências → ANÁLISE INTELIGENTE
+
+EXEMPLOS ESPECÍFICOS:
+- "tempo médio por transportadora" → MOSTRAR TODOS (métricas específicas)
+- "identifique padrões sazonais" → ANÁLISE INTELIGENTE (insights)
+- "penetração por estado" → MOSTRAR TODOS (métricas específicas)
+- "crescimento trimestre a trimestre" → ANÁLISE INTELIGENTE (tendências)
+
+Responda APENAS com uma das opções: MOSTRAR_TODOS ou ANALISE_INTELIGENTE
+"""
+            
+            from app.infra.llm_client import get_llm_client
+            llm = get_llm_client()
+            
+            response = llm.extract_json(
+                prompt=decision_prompt,
+                response_format={"type": "json_object", "schema": {
+                    "type": "object",
+                    "properties": {
+                        "decision": {"type": "string", "enum": ["MOSTRAR_TODOS", "ANALISE_INTELIGENTE"]}
+                    },
+                    "required": ["decision"]
+                }}
+            )
+            
+            decision = response.get("decision", "ANALISE_INTELIGENTE")
+            self.log.info(f"LLM decision for query '{user_query}': {decision}")
+            self.log.info(f"LLM response: {response}")
+            return decision == "MOSTRAR_TODOS"
+            
+        except Exception as e:
+            self.log.warning(f"Decision logic failed: {e}, using intelligent analysis")
+            return False
     
     def _analyze_temporal_patterns(self, rows: list[Mapping[str, Any]], user_query: str) -> str:
         """Analyze temporal/seasonal patterns for large datasets."""
@@ -1004,32 +1112,19 @@ class AnalyticsNormalizer:
     ) -> dict[str, Any]:
         """Simple fallback normalization when LLM fails."""
         
-        # Basic formatting for common cases
-        if result.row_count == 0:
-            text = f"Nenhum resultado encontrado para a consulta: {user_query}"
-        elif result.row_count == 1 and len(result.rows) == 1:
-            # Single row result
-            row = result.rows[0]
-            if len(row) == 1:
-                # Single value
-                value = list(row.values())[0]
-                if isinstance(value, (int, float)):
-                    if value > 1000:
-                        text = f"O resultado é {value:,.0f}."
-                    else:
-                        text = f"O resultado é {value}."
-                else:
-                    text = f"O resultado é {value}."
-            else:
-                # Multiple columns in single row
-                text = f"Resultado encontrado com {len(row)} campos."
-        else:
-            # Multiple rows
-            text = f"Encontrados {result.row_count} registros."
-            
-            # Show all data for any size dataset
-            if result.rows:
-                text += self._format_all_data(result.rows, user_query)
+        # Let LLM handle ALL formatting - no hardcoded messages
+        # Just provide basic data structure for LLM to work with
+        text = f"Encontrados {result.row_count} registros."
+        
+        # Use the same LLM-based decision logic
+        needs_complete_data = self._should_show_complete_data(user_query, result)
+        
+        if needs_complete_data and result.rows:
+            # Show all data for complete analysis
+            text += self._format_complete_data(result.rows, user_query)
+        elif result.rows:
+            # Use intelligent formatting for other cases
+            text += self._format_all_data(result.rows, user_query)
         
         return {
             "text": text,

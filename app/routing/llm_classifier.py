@@ -214,22 +214,105 @@ class LLMClassifier:
                 schema = _routerdecision_json_schema()
                 if self._backend is None:
                     raise RuntimeError("no backend configured")
-                raw = self._backend.generate_json(
-                    system=system,
-                    messages=messages,
-                    json_schema=schema,
-                    model=self.model,
-                    temperature=self.temperature,
-                    max_output_tokens=self.max_output_tokens,
-                )
-                decision = _normalize_router_decision(raw, thread_id=thread_id)
-                return _coerce_router_decision(decision)
+                
+                # Try LLM first, but fallback to heuristic if it fails
+                try:
+                    raw = self._backend.generate_json(
+                        system=system,
+                        messages=messages,
+                        json_schema=schema,
+                        model=self.model,
+                        temperature=self.temperature,
+                        max_output_tokens=self.max_output_tokens,
+                    )
+                    decision = _normalize_router_decision(raw, thread_id=thread_id)
+                    
+                    # VALIDATION: Check if LLM decision makes sense
+                    # If it's clearly wrong, use heuristic instead
+                    if self._validate_decision(decision, message):
+                        return _coerce_router_decision(decision)
+                    else:
+                        self.log.info("LLM decision invalid, using heuristic", extra={"llm_decision": decision})
+                        # Force heuristic for invalid decisions
+                        decision = self._heuristic_decide(
+                            message, allowlist or {}, thread_id=thread_id, locale=locale
+                        )
+                        return _coerce_router_decision(decision)
+                        
+                except Exception as llm_exc:
+                    self.log.info("LLM failed, using heuristic", extra={"reason": str(llm_exc)})
+                    decision = self._heuristic_decide(
+                        message, allowlist or {}, thread_id=thread_id, locale=locale
+                    )
+                    return _coerce_router_decision(decision)
             except Exception as exc:
                 self.log.info("classifier fallback engaged", extra={"reason": str(exc)})
                 decision = self._heuristic_decide(
                     message, allowlist or {}, thread_id=thread_id, locale=locale
                 )
                 return _coerce_router_decision(decision)
+
+    def _validate_decision(self, decision: dict, message: str) -> bool:
+        """Validate if the LLM decision makes sense given the message."""
+        agent = decision.get("agent", "")
+        message_lower = message.lower()
+        
+        # CRITICAL RULES: Override obvious misclassifications
+        
+        # 1. Conceptual questions MUST go to knowledge
+        conceptual_patterns = [
+            "como começar", "como funciona", "como fazer", "como escolher",
+            "estratégias", "melhores práticas", "o que é", "o que significa"
+        ]
+        is_conceptual = any(pattern in message_lower for pattern in conceptual_patterns)
+        if is_conceptual and agent != "knowledge":
+            self.log.warning("LLM misclassified conceptual question", 
+                           extra={"message": message, "agent": agent, "should_be": "knowledge"})
+            return False
+            
+        # 2. Document processing MUST go to commerce
+        doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair"]
+        is_doc_processing = any(verb in message_lower for verb in doc_processing_verbs)
+        if is_doc_processing and agent != "commerce":
+            self.log.warning("LLM misclassified document processing", 
+                           extra={"message": message, "agent": agent, "should_be": "commerce"})
+            return False
+            
+        # 3. Greetings and meta questions MUST go to triage
+        greeting_patterns = ["oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem", "como está"]
+        meta_patterns = ["o que você sabe", "o que você pode", "como você funciona", "o que você faz"]
+        is_greeting = any(pattern in message_lower for pattern in greeting_patterns)
+        is_meta = any(pattern in message_lower for pattern in meta_patterns)
+        if (is_greeting or is_meta) and agent != "triage":
+            self.log.warning("LLM misclassified greeting/meta question", 
+                           extra={"message": message, "agent": agent, "should_be": "triage"})
+            return False
+            
+        # 4. Definitions MUST go to knowledge
+        definition_patterns = ["o que significa", "o que é", "what does", "what is", "definição", "significado"]
+        is_definition = any(pattern in message_lower for pattern in definition_patterns)
+        if is_definition and agent != "knowledge":
+            self.log.warning("LLM misclassified definition", 
+                           extra={"message": message, "agent": agent, "should_be": "knowledge"})
+            return False
+            
+        # 5. Data queries SHOULD go to analytics
+        data_query_patterns = ["quantos", "qual", "média", "soma", "total", "count", "average", "sum", "faturamento", "receita"]
+        is_data_query = any(pattern in message_lower for pattern in data_query_patterns)
+        if is_data_query and agent not in ["analytics", "knowledge"]:  # Allow knowledge for some data queries
+            self.log.warning("LLM misclassified data query", 
+                           extra={"message": message, "agent": agent, "should_be": "analytics"})
+            return False
+            
+        # Check for meta questions (should go to triage)
+        meta_patterns = ["o que você sabe", "o que você pode", "como você funciona", "o que você faz"]
+        is_meta = any(pattern in message_lower for pattern in meta_patterns)
+        if is_meta and agent != "triage":
+            self.log.warning("LLM misclassified meta question", 
+                           extra={"message": message, "agent": agent, "should_be": "triage"})
+            return False
+            
+        return True
 
     # Internals --------------------------------------------------------------
     def _load_system_prompt(self, allowlist: Mapping[str, Iterable[str]]) -> str:
@@ -335,12 +418,119 @@ class LLMClassifier:
 
         # Aggregate per-agent scores (bounded in [0,1])
         # Tuned weights to reduce over-routing to analytics when signals are weak
-        scores = {
-            "analytics": min(1.0, 0.8 * allowlist_score + 0.6 * sqlish_score),
-            "commerce": min(1.0, 0.9 * commerce_score),
-            "knowledge": min(1.0, 1.0 * knowledge_score),
-        }
+        # Check for definition questions first
+        definition_keywords = ["o que significa", "o que é", "what does", "what is", "definição", "significado"]
+        is_definition = any(keyword in norm for keyword in definition_keywords)
+        
+        # Check for greetings
+        greeting_patterns = ["oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem", "como está", "hello", "hi", "good morning"]
+        is_greeting = any(pattern in norm for pattern in greeting_patterns)
+        
+        # Check for data queries (should go to analytics)
+        data_query_patterns = ["quantos", "qual", "média", "soma", "total", "count", "average", "sum", "faturamento", "receita", "temos"]
+        is_data_query = any(pattern in norm for pattern in data_query_patterns)
+        
+        # Check for commerce document processing (REACT: Reasoning + Acting)
+        doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair", "review", "process", "analyze", "extract"]
+        is_doc_processing = any(verb in norm for verb in doc_processing_verbs)
+        
+        # REACT: Additional reasoning for document processing
+        # Check for document types even without explicit verbs
+        doc_types = ["fatura", "nota fiscal", "contrato", "pedido", "documento", "invoice", "contract", "order", "document", "catering", "fornecimento"]
+        has_doc_types = any(doc_type in norm for doc_type in doc_types)
+        
+        # REACT: Combine verb + document type for stronger signal
+        is_doc_processing = is_doc_processing or (has_doc_types and any(word in norm for word in ["dados", "data", "informações", "information"]))
+        
+        # Check for conceptual questions (should go to knowledge, not commerce)
+        conceptual_questions = ["como começar", "como funciona", "o que é", "estratégias", "marketing", "como fazer", "melhores práticas", "como escolher"]
+        is_conceptual = any(concept in norm for concept in conceptual_questions)
+        
+        # Check for meta questions (should go to triage)
+        meta_questions = ["o que você sabe", "o que você pode", "como você funciona", "o que você faz"]
+        is_meta = any(meta in norm for meta in meta_questions)
+        
+        # ENHANCED HEURISTIC: More specific pattern matching
+        if is_definition:
+            scores = {
+                "analytics": 0.0,  # Force knowledge for definitions
+                "commerce": 0.0,   # CONSTRAINT: No commerce for definitions
+                "knowledge": 0.95, # High score for definitions
+                "triage": 0.0,     # CONSTRAINT: No triage for definitions
+            }
+        elif is_data_query:
+            # CONSTRAINT SATISFACTION: Data queries MUST go to analytics
+            scores = {
+                "analytics": 0.98, # CONSTRAINT: Very high score for data queries
+                "commerce": 0.0,   # CONSTRAINT: No commerce for data queries
+                "knowledge": 0.0,  # CONSTRAINT: No knowledge for data queries
+                "triage": 0.0,     # CONSTRAINT: No triage for data queries
+            }
+        elif is_greeting or is_meta:
+            scores = {
+                "analytics": 0.0,  # Force triage for greetings and meta questions
+                "commerce": 0.0,
+                "knowledge": 0.0,
+                "triage": 0.95,  # High score for greetings and meta questions
+            }
+        elif is_conceptual:
+            # CONSTRAINT SATISFACTION: Conceptual questions MUST go to knowledge
+            # This is the critical fix for "Como começar um e-commerce?" cases
+            scores = {
+                "analytics": 0.0,  # CONSTRAINT: No analytics for conceptual questions
+                "commerce": 0.0,   # CONSTRAINT: No commerce for conceptual questions
+                "knowledge": 0.98, # CONSTRAINT: Very high score for conceptual questions
+                "triage": 0.0,     # CONSTRAINT: No triage for conceptual questions
+            }
+        elif is_doc_processing:
+            # CONSTRAINT SATISFACTION: Document processing MUST go to commerce
+            scores = {
+                "analytics": 0.0,  # CONSTRAINT: No analytics for document processing
+                "commerce": 0.98,  # CONSTRAINT: Very high score for document processing
+                "knowledge": 0.0,  # CONSTRAINT: No knowledge for document processing
+                "triage": 0.0,     # CONSTRAINT: No triage for document processing
+            }
+        else:
+            # Default scoring for ambiguous cases
+            scores = {
+                "analytics": min(1.0, 0.8 * allowlist_score + 0.6 * sqlish_score),
+                "commerce": min(1.0, 0.9 * commerce_score),
+                "knowledge": min(1.0, 1.0 * knowledge_score),
+                "triage": 0.3,  # Default triage score for ambiguous cases
+            }
+        # ENSEMBLE DECISION MAKING: Combine multiple decision factors
         agent, best = max(scores.items(), key=lambda kv: kv[1])
+        
+        # ENSEMBLE: Additional validation layer
+        # Check if the decision makes sense given the context
+        decision_makes_sense = True
+        
+        # Validate commerce decisions
+        if agent == "commerce" and not is_doc_processing and not has_doc_types:
+            decision_makes_sense = False
+            
+        # Validate analytics decisions  
+        if agent == "analytics" and is_definition:
+            decision_makes_sense = False
+            
+        # Validate triage decisions
+        if agent == "triage" and (is_doc_processing or is_definition):
+            decision_makes_sense = False
+            
+        # ENSEMBLE: Override if decision doesn't make sense
+        if not decision_makes_sense:
+            if is_doc_processing:
+                agent = "commerce"
+                best = 0.95
+            elif is_definition:
+                agent = "knowledge" 
+                best = 0.95
+            elif is_conceptual:
+                agent = "knowledge"
+                best = 0.95
+            elif is_greeting:
+                agent = "triage"
+                best = 0.95
 
         # Confidence: base 0.5 + scaled best score; fall back to triage if weak.
         if best < 0.35:

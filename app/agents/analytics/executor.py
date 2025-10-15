@@ -235,7 +235,14 @@ class AnalyticsExecutor:
                 _BREAKER_OPEN_UNTIL.pop(key, None)
 
             except Exception as exc:  # capture and continue with diagnostics
-                warnings.append(f"execution_error: {type(exc).__name__}")
+                # Check if it's a timeout error
+                if "timeout" in str(exc).lower() or "statement_timeout" in str(exc).lower():
+                    warnings.append("query_timeout")
+                elif "function not allowed" in str(exc).lower():
+                    warnings.append("function_blocked")
+                else:
+                    warnings.append(f"execution_error: {type(exc).__name__}")
+                
                 # increment breaker failures and open if threshold crossed
                 fail = _BREAKER_FAILURES.get(key, 0) + 1
                 _BREAKER_FAILURES[key] = fail
@@ -297,11 +304,28 @@ def _assert_safe_select(sql: str) -> None:
     _ALLOWED_FUNCS = {
         "count", "sum", "avg", "min", "max", "coalesce", "nullif", "date_trunc", "extract",
         "upper", "lower", "substring", "round", "floor", "ceil", "greatest", "least",
+        "case", "when", "then", "else", "end", "cast", "distinct", "concat", "length",
+        "trim", "ltrim", "rtrim", "replace", "position", "char_length", "octet_length",
+        "abs", "sign", "mod", "power", "sqrt", "exp", "ln", "log", "sin", "cos", "tan",
+        "asin", "acos", "atan", "atan2", "degrees", "radians", "pi", "random",
+        "current_date", "current_time", "current_timestamp", "now", "localtime",
+        "localtimestamp", "timezone", "age", "interval", "to_char", "to_date", "to_number",
+        # Window functions for analytics
+        "lag", "lead", "row_number", "rank", "dense_rank", "ntile", "first_value", 
+        "last_value", "nth_value", "percent_rank", "cume_dist", "over", "partition",
+        "order", "rows", "range", "unbounded", "preceding", "following", "current"
+    }
+    # SQL keywords that are not functions but might be caught by the regex
+    _SQL_KEYWORDS = {
+        "select", "with", "as", "from", "where", "group", "order", "having", "limit", "offset",
+        "join", "inner", "left", "right", "outer", "on", "union", "intersect", "except",
+        "all", "distinct", "and", "or", "not", "in", "exists", "between", "like", "ilike",
+        "is", "null", "true", "false", "asc", "desc", "nulls", "first", "last"
     }
     import re as _re
     for m in _re.finditer(r"\b([a-z_][a-z0-9_]*)\s*\(", sql_l):
         fname = m.group(1)
-        if fname not in _ALLOWED_FUNCS and fname not in {"select", "with"}:
+        if fname not in _ALLOWED_FUNCS and fname not in _SQL_KEYWORDS:
             raise ValueError(f"function not allowed: {fname}")
 
     # Block access to pg_catalog or information_schema explicitly
