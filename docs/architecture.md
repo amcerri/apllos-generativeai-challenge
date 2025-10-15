@@ -28,30 +28,31 @@ See project [README.md](../README.md) for a mermaid diagram.
 ### Routing
 
 - Classifier ([app/routing/llm_classifier.py](../app/routing/llm_classifier.py)):
-  - Primary: OpenAI JSON Schema structured output via centralized LLM client.
-  - Fallback: heuristic context-first rules (allowlist hits, SQL-ish structure, commerce cues).
+  - Primary: OpenAI JSON Schema structured output via centralized LLM client with state-of-the-art prompt engineering.
+  - Enhanced validation with critical override rules for conceptual questions, document processing, data queries, and greetings.
+  - Fallback: heuristic context-first rules (allowlist hits, SQL-ish structure, commerce cues) with improved pattern matching.
   - Output normalized to `RouterDecision` contract.
 - Supervisor ([app/routing/supervisor.py](../app/routing/supervisor.py)):
-  - Context-first deterministic rules; single fallback to avoid loops.
+  - Simplified guardrails with LLM-first approach; single fallback to avoid loops.
   - Confidence recalibration; commerce domination when `commerce_doc` signal exists.
 
 ### Analytics Pipeline
 
-- Planner: NL → safe SQL with allowlist validation; schema prefix fixing; join rules.
-- Executor: read-only transaction; statement_timeout; client row-cap; optional EXPLAIN; circuit breaker per SQL hash.
-- Normalizer: PT-BR narrative; LLM path with robust fallback; insights for large datasets.
+- Planner: NL → safe SQL with allowlist validation; schema prefix fixing; join rules; Chain-of-Thought reasoning.
+- Executor: read-only transaction; statement_timeout; client row-cap; optional EXPLAIN; circuit breaker per SQL hash; window functions support.
+- Normalizer: LLM-first intelligent data balancing; PT-BR narrative with analytical insights; configurable thresholds for complete data vs. intelligent analysis.
 
 ### Knowledge Pipeline
 
 - Retriever: OpenAI embeddings or deterministic hash fallback; pgvector cosine search; filters; per-doc dedupe.
 - Ranker: heuristic reranker with optional LLM reranker.
-- Answerer: PT-BR composition; attempts LLM; extractive fallback; always returns citations.
+- Answerer: PT-BR composition with cross-validation; Chain-of-Thought reasoning; confidence calibration; extractive fallback; always returns citations.
 
 ### Commerce Pipeline
 
 - Processor: PDF/DOCX/TXT/Image extraction; OCR fallback; metadata and warnings.
-- LLM Extractor: JSON Schema structured output; heuristic fallback on error/unavailable.
-- Summarizer: PT-BR summary with totals, top items, risks, and follow-ups.
+- LLM Extractor: JSON Schema structured output with Chain-of-Thought reasoning and self-consistency checks; heuristic fallback on error/unavailable.
+- Summarizer: PT-BR summary with totals, top items, risks, and follow-ups; confidence calibration.
 
 ## API Layer ([app/api/server.py](../app/api/server.py))
 
@@ -74,11 +75,11 @@ See project [README.md](../README.md) for a mermaid diagram.
 ## Safety Principles
 
 - Defense-in-depth:
-  - Planner allowlist validation; join rules; schema prefix fixes.
-  - Executor read-only, timeouts, row caps, and EXPLAIN-only dry-run on rejected approvals.
-  - Knowledge ranker deterministic fallback; answerer extractive fallback.
-  - Commerce extractor reconciles totals and flags inconsistencies.
-- Single-pass routing fallback; no loops.
+  - Planner allowlist validation; join rules; schema prefix fixes; Chain-of-Thought reasoning.
+  - Executor read-only, timeouts, row caps, window functions support, and EXPLAIN-only dry-run on rejected approvals.
+  - Knowledge ranker deterministic fallback; answerer cross-validation and extractive fallback.
+  - Commerce extractor reconciles totals and flags inconsistencies; self-consistency checks.
+- LLM-first routing with intelligent fallbacks; single-pass routing fallback; no loops.
 
 ## Failure Modes and Fallbacks
 
