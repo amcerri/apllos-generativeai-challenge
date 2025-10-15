@@ -233,6 +233,21 @@ class TriageHandler:
 
 
 def _compose_text_ptbr(query: str, agent: str) -> str:
+    q = (query or "").strip()
+
+    # --- Detect greeting -----------------------------------------------------
+    if _looks_like_greeting(q):
+        return _greeting_with_capabilities()
+
+    # --- Detect out-of-scope topics -----------------------------------------
+    oos_topic = _detect_out_of_scope(q)
+    if oos_topic:
+        return (
+            f"No momento não ofereço {oos_topic}. Sugiro usar um site ou aplicativo especializado.\n\n"
+            + _capabilities_block()
+        )
+
+    # --- Default contextual nudge based on suggested agent -------------------
     base = (
         "Ainda não tenho contexto suficiente para responder com precisão. "
         "Vou te direcionar para o melhor caminho."
@@ -257,9 +272,8 @@ def _compose_text_ptbr(query: str, agent: str) -> str:
             "Me diga se busca dados (tabelas/colunas), uma informação de documento (PDF/guia) "
             "ou análise de um arquivo comercial (invoice/PO)."
         )
-    q = (query or "").strip()
     lead = f'Pedido: "{q}"\n' if q else ""
-    return lead + base + " " + hint
+    return lead + base + " " + hint + "\n\n" + _capabilities_block()
 
 
 def _followups_for(agent: str) -> list[str]:
@@ -286,6 +300,70 @@ def _followups_for(agent: str) -> list[str]:
         "Há algum período, número de pedido ou produto específico?",
         "Deseja que eu dê exemplos do que posso fazer?",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Local intent helpers for triage rendering
+# ---------------------------------------------------------------------------
+
+
+def _looks_like_greeting(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    greetings = (
+        "oi",
+        "olá",
+        "ola",
+        "bom dia",
+        "boa tarde",
+        "boa noite",
+        "tudo bem",
+        "e aí",
+        "eaí",
+        "hello",
+        "hi",
+    )
+    return any(g in t for g in greetings)
+
+
+def _greeting_with_capabilities() -> str:
+    import datetime as _dt
+    hour = _dt.datetime.now().hour
+    if 5 <= hour < 12:
+        sal = "Bom dia"
+    elif 12 <= hour < 18:
+        sal = "Boa tarde"
+    else:
+        sal = "Boa noite"
+    return f"{sal}! Em que posso ajudar?\n\n" + _capabilities_block()
+
+
+def _detect_out_of_scope(text: str) -> str | None:
+    t = (text or "").lower()
+    weather = ("previsão do tempo", "previsao do tempo", "meteorologia", "clima", "tempo em ")
+    news = ("notícias", "noticias", "news")
+    markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
+    code = ("programar em", "escreva um código", "write code")
+    if any(k in t for k in weather):
+        return "previsão do tempo/meteorologia"
+    if any(k in t for k in news):
+        return "notícias em tempo real"
+    if any(k in t for k in markets):
+        return "cotações/mercado financeiro em tempo real"
+    if any(k in t for k in code):
+        return "geração de código fora do contexto do projeto"
+    return None
+
+
+def _capabilities_block() -> str:
+    return (
+        "Posso ajudar com:\n"
+        "- Analytics: consultas em dados Olist (SQL seguro, séries temporais, top‑N, métricas).\n"
+        "- Knowledge (RAG): respostas com citações a partir de documentos.\n"
+        "- Commerce: processamento de documentos (PDF/DOCX/TXT) e extração estruturada.\n"
+        "- Triage: orientação e encaminhamento para o fluxo correto."
+    )
 
 
 # ---------------------------------------------------------------------------
