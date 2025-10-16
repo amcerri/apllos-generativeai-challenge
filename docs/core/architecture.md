@@ -4,13 +4,27 @@ This document explains the overall system architecture and how LangGraph orchest
 
 ## High-Level Architecture
 
-- Interface: CLI, REST API (FastAPI), LangGraph Studio.
-- Orchestration: LangGraph graph with routing classifier and deterministic supervisor.
-- Agents: Analytics, Knowledge (RAG), Commerce, Triage.
-- Data: PostgreSQL (analytics), pgvector `doc_chunks` (RAG), local docs store.
-- External: OpenAI (chat + embeddings), optional Prometheus/OpenTelemetry.
+The project is built on a multi-agent architecture that combines LLM-first decision making with deterministic fallbacks. The system is designed for high availability, safety, and intelligent routing.
 
-See project [README.md](../README.md) for a mermaid diagram.
+### Core Components
+
+- **Interface Layer**: CLI, REST API (FastAPI), LangGraph Studio
+- **Orchestration Layer**: LangGraph graph with intelligent routing and deterministic supervision
+- **Agent Layer**: Four specialized agents (Analytics, Knowledge, Commerce, Triage)
+- **Data Layer**: PostgreSQL (analytics), pgvector `doc_chunks` (RAG), local document store
+- **Infrastructure Layer**: LLM client, database connections, observability stack
+- **External Services**: OpenAI (chat + embeddings), optional Prometheus/OpenTelemetry
+
+### System Flow
+
+```
+User Input   →   Router   →   Supervisor   →   Agent Pipeline   →   LLM Processing   →   Database   →   Response
+     ↓             ↓              ↓                  ↓                    ↓                 ↓              ↓
+  CLI/API      LLM-based     Guardrails         Specialized          OpenAI API         PostgreSQL       PT-BR
+               Classifier   & Fallbacks         Processing          (GPT-4o-mini)       + pgvector       Output
+```
+
+See project [README.md](../README.md) for a detailed mermaid diagram.
 
 ## Graph Overview ([app/graph/build.py](../app/graph/build.py))
 
@@ -85,10 +99,8 @@ See project [README.md](../README.md) for a mermaid diagram.
 
 - Missing dependencies (LLM/DB/langgraph/prometheus/otel): graceful stubs or no-ops.
 - LLM errors: planner/normalizer/answerer/extractor revert to deterministic strategies.
-- DB errors/timeouts: executor circuit breaker opens for repeated failures.
+- DB errors/timeouts: executor circuit breaker opens for repeated failures
 
-## Extensibility
+---
 
-- Add new agent: create pipeline nodes and wire conditional edge from `supervisor`.
-- Replace LLMs: adjust centralized `llm_client` or settings.
-- Add metrics: register counters/histograms in `infra.metrics`.
+**← [Back to Documentation Index](../README.md)**

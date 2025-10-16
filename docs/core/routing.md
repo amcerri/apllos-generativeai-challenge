@@ -1,12 +1,73 @@
 # Routing: LLM-First with Ensemble and Probes
 
-This document summarizes the routing stack and the new improvements.
+This document provides a comprehensive overview of the routing system, explaining the differences between the Router (LLM Classifier) and Supervisor, and detailing the ensemble routing capabilities.
 
 ## Overview
 
-- Classifier: `app/routing/llm_classifier.py::LLMClassifier`
-- Supervisor: `app/routing/supervisor.py::supervise`
-- Probes: executed in `app/graph/build.py::node_route` and passed as `routing_ctx` to supervisor
+The routing system consists of two main components working in tandem:
+
+- **Router (LLM Classifier)**: `app/routing/llm_classifier.py::LLMClassifier` - Primary decision maker using LLM
+- **Supervisor**: `app/routing/supervisor.py::supervise` - Deterministic guardrails and fallback logic
+- **Probes**: Evidence-gathering mechanisms executed in `app/graph/build.py::node_route` and passed as `routing_ctx` to supervisor
+
+## Router vs Supervisor: Key Differences
+
+### Router (LLM Classifier)
+**Purpose**: Primary intelligent decision maker using LLM with structured output
+
+**Responsibilities**:
+- Analyzes natural language queries for intent and context
+- Uses state-of-the-art prompt engineering with Chain-of-Thought reasoning
+- Produces structured `RouterDecision` with confidence scores
+- Implements ensemble routing with multiple LLM variants
+- Falls back to deterministic heuristics when LLM unavailable
+
+**Key Features**:
+- JSON Schema structured output for consistent decision format
+- Enhanced validation with critical override rules
+- Context-first routing prioritizing structural evidence
+- Self-consistency checks and confidence calibration
+- Few-shot examples for improved classification accuracy
+
+**Output**: `RouterDecision` containing:
+- `agent`: Target agent (analytics, knowledge, commerce, triage)
+- `confidence`: Confidence score (0.0-1.0)
+- `reason`: Human-readable explanation
+- `tables`: Detected database tables
+- `columns`: Detected database columns
+- `signals`: Routing signals and hints
+- `thread_id`: Conversation thread identifier
+
+### Supervisor
+**Purpose**: Deterministic guardrails and business rule enforcement
+
+**Responsibilities**:
+- Applies safety constraints and business rules
+- Handles single-pass fallbacks to prevent routing loops
+- Recalibrates confidence scores conservatively
+- Enforces domain-specific routing rules
+- Provides final routing decision with safety guarantees
+
+**Key Features**:
+- Commerce document dominance detection
+- Analytics vs Knowledge fallback logic
+- Confidence recalibration for fallback decisions
+- Single-pass fallback to avoid oscillations
+- Context-aware routing using probe signals
+
+**Input**: `RouterDecision` + `RoutingContext` (probe results)
+**Output**: Final `RouterDecision` with applied guardrails
+
+### Decision Flow
+
+```
+Query → Router (LLM) → RouterDecision → Supervisor → Final Decision → Agent
+  ↓         ↓              ↓              ↓             ↓               ↓
+Input   Analysis       Structured      Guardrails   Validated      Specialized
+        & Context       Decision      & Fallbacks    Decision      Processing
+```
+
+## Router Implementation Details
 
 ## Improvements
 
@@ -87,3 +148,7 @@ This section explains how messages are routed to agents using an LLM-based class
 - State-of-the-art prompt engineering: Chain-of-Thought, self-consistency checks, confidence calibration.
 - Determinism under failure: when LLM unavailable, heuristic ensures predictable routing.
 - Safety: limit to single fallback per message to avoid oscillation.
+
+---
+
+**← [Back to Documentation Index](../README.md)**

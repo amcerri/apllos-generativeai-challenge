@@ -12,3 +12,7 @@ Covers the triage handler used when context is missing or classification is weak
 
 - Prioritizes clarity and next steps over attempting to answer without context.
 - Works as a safe default when classifier confidence is low or signals conflict.
+
+---
+
+**← [Back to Documentation Index](../README.md)**

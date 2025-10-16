@@ -7,14 +7,14 @@ Covers document processor, extractor(s), and summarizer.
 - Input: attachment `{filename, content (bytes/base64 or text), mime_type}`.
 - PDF: pypdf text extraction first; fallback to OCR via pdf2image + pytesseract.
 - DOCX: python-docx paragraphs and tables.
-- TXT: robust decoding with fallbacks.
+- TXT: decoding with fallbacks.
 - Images: PIL + optional OpenCV preprocessing for OCR.
 - Output: `{text, metadata, method, warnings, success}`.
 
 ## LLM Extractor ([app/agents/commerce/extractor_llm.py](../../app/agents/commerce/extractor_llm.py))
 
 - OpenAI JSON Schema structured extraction with business focus and risks; adds usage metadata.
-- State-of-the-art prompt engineering with Chain-of-Thought reasoning and self-consistency checks.
+- Prompt engineering with Chain-of-Thought reasoning and self-consistency checks.
 - Fallback: heuristic extractor when LLM unavailable/errors.
 
 ## Heuristic Extractor ([app/agents/commerce/extractor.py](../../app/agents/commerce/extractor.py))
@@ -27,3 +27,7 @@ Covers document processor, extractor(s), and summarizer.
 
 - PT-BR summary with document identity, totals, dates, top items (configurable counts), risks, and follow-ups.
 - Confidence calibration for risk assessment and business insights.
+
+---
+
+**← [Back to Documentation Index](../README.md)**

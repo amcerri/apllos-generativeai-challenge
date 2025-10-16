@@ -1,12 +1,25 @@
 # Architectural Decisions (ADRs)
 
-A curated list of significant design decisions and their rationale.
+This document provides a curated list of significant design decisions and their rationale, explaining the architectural choices that shape the Apllos Assistant system.
 
 ## ADR-001: Optional Dependencies and Graceful Degradation
 
-- Decision: All heavy deps (FastAPI, LangGraph, OpenAI, SQLAlchemy, Prometheus, OTEL) are optional at import time. Modules provide stubs/no-ops when unavailable.
-- Rationale: Keep tests deterministic, enable partial functionality without full stack, improve DX.
-- Consequences: Feature flags and fallbacks must be maintained; some behavior differs between dev and fully provisioned envs.
+**Decision**: All heavy dependencies (FastAPI, LangGraph, OpenAI, SQLAlchemy, Prometheus, OpenTelemetry) are optional at import time. Modules provide stubs/no-ops when unavailable.
+
+**Rationale**: 
+- Keep tests deterministic and fast
+- Enable partial functionality without full stack
+- Improve developer experience (DX)
+- Allow deployment in constrained environments
+- Facilitate testing without external dependencies
+
+**Consequences**: 
+- Feature flags and fallbacks must be maintained
+- Some behavior differs between development and fully provisioned environments
+- Requires careful handling of optional imports
+- Testing must cover both full and minimal configurations
+
+**Implementation**: Uses try/except blocks for optional imports and provides no-op implementations when dependencies are unavailable.
 
 ## ADR-002: Context-First Routing with Single-Pass Fallback
 
@@ -55,3 +68,7 @@ A curated list of significant design decisions and their rationale.
 - Decision: Implement enhanced validation with critical override rules for conceptual questions, document processing, data queries, and greetings in the routing classifier.
 - Rationale: Ensure correct routing of edge cases and improve overall system reliability.
 - Consequences: More complex routing logic but significantly better classification accuracy for edge cases.
+
+---
+
+**← [Back to Documentation Index](../README.md)**
