@@ -1,14 +1,27 @@
 # API Server and Endpoints
 
-Describes the ASGI API provided for local runs and integration, and how it integrates with LangGraph Server and Studio.
+This document provides details about the ASGI (_Asynchronous Server Gateway Interface_) API server, endpoints, and integration with LangGraph Server and Studio.
 
-## Overview
+## API Overview
 
-- Implementation: [app/api/server.py](../app/api/server.py)
-- Framework: FastAPI (optional at import time; graceful fallback to stubs)
-- Mounted: LangGraph Server handlers under `/graph`
-- Health endpoints: `/health`, `/ready`, `/ok`
-- Metrics endpoint: `/metrics` (only if `prometheus_client` is installed)
+The Apllos Assistant provides a REST API built on FastAPI with health monitoring and LangGraph integration:
+
+- **Implementation**: [app/api/server.py](../app/api/server.py)
+- **Framework**: FastAPI (optional at import time; graceful fallback to stubs)
+- **Integration**: LangGraph Server handlers mounted under `/graph`
+- **Health Monitoring**: Multiple health check endpoints
+- **Metrics**: Prometheus-compatible metrics endpoint
+- **CORS**: Configurable cross-origin resource sharing
+
+## API Architecture
+
+```
+FastAPI Application
+├── Health Endpoints (/health, /ready, /ok)
+├── LangGraph Server (/graph/*)
+├── Metrics Endpoint (/metrics)
+└── CORS Configuration
+```
 
 ## Endpoints
 
@@ -44,3 +57,7 @@ Describes the ASGI API provided for local runs and integration, and how it integ
 
 - If FastAPI/langgraph unavailable at import, `get_app()` returns a stub assistant payload to keep imports safe.
 - Metrics mount is best-effort; logs a notice when not available.
+
+---
+
+**← [Back to Documentation Index](../README.md)**

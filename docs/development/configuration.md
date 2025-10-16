@@ -1,17 +1,37 @@
 # Configuration and Models Settings
 
-Explains the configuration model ([app/config/settings.py](../app/config/settings.py)) and YAML files under `app/config/*.yaml`.
+This document provides comprehensive details about the configuration system, including all settings, environment variables, and customization options.
 
-## Settings Loader
+## Configuration Architecture
 
-- `Settings` (Pydantic Settings) merges:
-  - [config.yaml](../app/config/config.yaml): app/server basics
-  - [models.yaml](../app/config/models.yaml): LLM and embeddings models
-  - [agents.yaml](../app/config/agents.yaml): per-agent settings
-  - [database.yaml](../app/config/database.yaml): DB and checkpointer
-  - [observability.yaml](../app/config/observability.yaml): logging, tracing, debug
-- Environment variables support with `${VAR:-default}` substitution.
-- Global accessor: `from app.config.settings import get_settings`.
+The system uses a hierarchical configuration approach with Pydantic Settings for type safety and validation:
+
+### Settings Loader
+
+- **`Settings` (Pydantic Settings)** merges multiple YAML files:
+  - [config.yaml](../app/config/config.yaml): Application and server basics
+  - [models.yaml](../app/config/models.yaml): LLM and embeddings model configurations
+  - [agents.yaml](../app/config/agents.yaml): Per-agent specific settings
+  - [database.yaml](../app/config/database.yaml): Database and checkpointer configuration
+  - [observability.yaml](../app/config/observability.yaml): Logging, tracing, and debugging
+- **Environment variables** support with `${VAR:-default}` substitution syntax
+- **Global accessor**: `from app.config.settings import get_settings`
+- **Type safety**: All settings are validated using Pydantic models
+- **Override precedence**: Environment variables > YAML files > defaults
+
+### Configuration Loading Process
+
+```
+Environment Variables (highest priority)
+    ↓
+YAML Files (app/config/*.yaml)
+    ↓
+Pydantic Defaults (lowest priority)
+    ↓
+Validated Settings Object
+```
+
+## Detailed Configuration Sections
 
 ## Key Sections
 
@@ -52,3 +72,7 @@ Common vars:
 
 - Override model names via env (e.g., `ANALYTICS_PLANNER_MODEL`) or YAML edits.
 - Embeddings dimensions must match pgvector index (`1536` by default).
+
+---
+
+**← [Back to Documentation Index](../README.md)**

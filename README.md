@@ -4,96 +4,37 @@
 
 > Multi‑Agent assistant for e‑commerce analytics, knowledge retrieval (RAG) and commerce document processing, powered by LangGraph.
 
----
-
 ## Contents
 
-- [Apllos Generative AI Challenge](#apllos-generative-ai-challenge)
-  - [Contents](#contents)
-  - [Overview](#overview)
-  - [Architecture](#architecture)
-  - [Quick Start](#quick-start)
-    - [Docker (recommended)](#docker-recommended)
-    - [Local environment](#local-environment)
-  - [Configuration](#configuration)
-  - [Usage](#usage)
-    - [LangGraph Studio](#langgraph-studio)
-    - [CLI (`scripts/query_assistant.py` via Make)](#cli-scriptsquery_assistantpy-via-make)
-  - [Agents](#agents)
-    - [Analytics](#analytics)
-    - [Knowledge (RAG)](#knowledge-rag)
-    - [Commerce](#commerce)
-    - [Triage](#triage)
-  - [API](#api)
-  - [Development](#development)
-  - [Testing](#testing)
-  - [Observability](#observability)
-  - [Troubleshooting](#troubleshooting)
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Agents](#agents)
+- [API](#api)
+- [Development](#development)
+- [Documentation](#documentation)
 
 ---
 
 ## Overview
 
-- Multi‑agent orchestration with LLM-first routing and intelligent supervisor guardrails
-- Safe analytics SQL (allowlist, read‑only, timeouts, row caps) with intelligent data balancing
-- Knowledge RAG over pgvector (`doc_chunks`) with cross-validation and citations
-- Commerce processor (PDF/DOCX/TXT/OCR) → LLM extraction → summarization
-- State-of-the-art prompt engineering (Chain-of-Thought, Self-Consistency, Confidence Calibration)
-- Portable: Docker Compose or local development
-- Strong DX: Makefile, scripts, tests, logging, optional tracing
+The Apllos Generative AI Challenge Assistant is a multi-agent system designed for e-commerce analytics, knowledge retrieval, and document processing. Built with LangGraph and powered by LLMs, it provides context-aware responses in Brazilian Portuguese.
 
----
+### Key Features
 
-## Architecture
+- **Multi-Agent Orchestration**: LLM-based routing with supervisor guardrails
+- **Analytics**: SQL generation with allowlist validation, read-only execution, and data balancing
+- **Knowledge RAG**: Vector-based document retrieval with cross-validation and citations
+- **Document Processing**: Multi-format support (PDF/DOCX/TXT/OCR) with structured extraction
+- **Prompt Engineering**: Chain-of-Thought reasoning, self-consistency checks, and confidence calibration
+- **Deployment**: Docker Compose deployment with observability and error handling
 
-```mermaid
-flowchart TB
-    subgraph "Interface"
-        CLI["CLI"]
-        API["REST (FastAPI)"]
-        STUDIO["LangGraph Studio"]
-    end
-    subgraph "Orchestration"
-        LG["LangGraph"]
-        RT["LLM Router"]
-        SP["Supervisor"]
-    end
-    subgraph "Agents"
-        KA["Knowledge (RAG)"]
-        AA["Analytics"]
-        CA["Commerce"]
-        TR["Triage"]
-    end
-    subgraph "Data"
-        PG[("PostgreSQL analytics")]
-        VEC[("pgvector doc_chunks")]
-        DOCS[("Docs store")]
-    end
-    subgraph "External"
-        OAI["OpenAI"]
-    end
-    CLI --> API
-    STUDIO --> LG
-    API --> RT --> SP
-    SP --> KA
-    SP --> AA
-    SP --> CA
-    SP --> TR
-    KA --> VEC
-    AA --> PG
-    CA --> DOCS
-    KA --> OAI
-    AA --> OAI
-    CA --> OAI
-```
+### Core Capabilities
 
-Routing flags
-- `ROUTER_ENSEMBLE_ENABLED` (default true) and `ROUTER_SCORER_ENABLED` (default true) enable the LLM ensemble router and scorer tie-breaker. See `docs/routing.md`.
-
-Key decisions
-- Fallbacks everywhere (no hard deps at import time)
-- Settings via Pydantic + YAML; models centralized under `settings.models.*`
-- Human approval gates for SQL (interrupts) when enabled
+- **Analytics Agent**: Converts natural language queries into SQL with data balancing
+- **Knowledge Agent**: Retrieves and synthesizes information from document stores with citations
+- **Commerce Agent**: Processes commercial documents with structured data extraction
+- **Triage Agent**: Handles ambiguous queries with fallback and guidance
 
 ---
 
@@ -153,126 +94,122 @@ make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Or
 
 ---
 
-## Configuration
+## Architecture
 
-- `.env` (loaded at runtime) + YAMLs in `app/config/*.yaml`
-- Pydantic Settings ([app/config/settings.py](app/config/settings.py)) with nested keys and env overrides
-
-Key variables
-```bash
-OPENAI_API_KEY=...
-DATABASE_URL=postgresql+psycopg://app:app@localhost:5432/app
-LOG_LEVEL=INFO
-REQUIRE_SQL_APPROVAL=false
-# CORS allowed origins (comma-separated, only for API server)
-API_ALLOWED_ORIGINS=http://localhost:3000
-# Executor meta: show safe SQL preview instead of full SQL
-EXECUTOR_SANITIZE_SQL=false
+```mermaid
+flowchart TB
+    subgraph "Interface"
+        CLI["CLI"]
+        API["REST (FastAPI)"]
+        STUDIO["LangGraph Studio"]
+    end
+    subgraph "Orchestration"
+        LG["LangGraph"]
+        RT["LLM Router"]
+        SP["Supervisor"]
+    end
+    subgraph "Agents"
+        KA["Knowledge (RAG)"]
+        AA["Analytics"]
+        CA["Commerce"]
+        TR["Triage"]
+    end
+    subgraph "Data"
+        PG[("PostgreSQL analytics")]
+        VEC[("pgvector doc_chunks")]
+        DOCS[("Docs store")]
+    end
+    subgraph "External"
+        OAI["OpenAI"]
+    end
+    CLI --> API
+    STUDIO --> LG
+    API --> RT --> SP
+    SP --> KA
+    SP --> AA
+    SP --> CA
+    SP --> TR
+    KA --> VEC
+    AA --> PG
+    CA --> DOCS
+    KA --> OAI
+    AA --> OAI
+    CA --> OAI
 ```
 
-Centralized model configs
-- `settings.models.router`
-- `settings.models.analytics_planner`
-- `settings.models.analytics_normalizer`
-- `settings.models.knowledge_answerer` (and mini)
-- `settings.models.commerce_extractor`, `commerce_summarizer`
-- `settings.models.embeddings`
+**Key decisions:**
 
-Model tier and flags
-- `settings.models.tier`: `economy|standard|premium`
-- `settings.models.enable_reranker`: enable LLM reranker for RAG
-- `settings.models.enable_normalizer_llm`: enable LLM normalizer for analytics
-
-Row caps and timeouts (analytics executor)
-- `analytics.executor.default_timeout_seconds` (increased to 120s)
-- `analytics.executor.default_row_cap`
-- `analytics.normalizer.complete_data_threshold` (configurable, default 100 records)
-- Heuristic: if SQL contains `GROUP BY`, raise cap to configured max (avoids truncating small lists like 27 states)
-- LLM-first intelligent data balancing: complete data vs. analytical insights based on dataset size and query intent
-
----
-
-## Usage
-
-### LangGraph Studio
-
-- UI: `https://smith.langchain.com/studio/?baseUrl=http://localhost:2024`
-- Threads preserve context; visualize state, nodes and human interrupts
-
-### CLI ([scripts/query_assistant.py](scripts/query_assistant.py) via Make)
-
-```bash
-# Simple query (user message in pt-BR)
-make query QUERY="Qual a receita total?"
-# With attachment (auto base64 for binaries)
-make query QUERY="Analise este pedido" ATTACHMENT="data/samples/orders/Simple Order.docx"
-# Reuse thread
-make query QUERY="Detalhe por estado" THREAD_ID=thr-...
-```
+- Fallbacks everywhere (no hard deps at import time)
+- Settings via Pydantic + YAML; models centralized under `settings.models.*`
+- Human approval gates for SQL (interrupts) when enabled
 
 ---
 
 ## Agents
 
 ### Analytics
-- Planner: NL → safe SQL (allowlist, no DDL/DML, prefix fix) with Chain-of-Thought reasoning
-- Executor: read‑only, timeout, row cap (with GROUP BY heuristic) and window functions support
-- Normalizer: LLM-first intelligent data balancing (complete data vs. analytical insights) with configurable thresholds
+
+- **Planner**: NL → safe SQL (allowlist, no DDL/DML, prefix fix) with Chain-of-Thought reasoning
+- **Executor**: read‑only, timeout, row cap (with GROUP BY heuristic) and window functions support
+- **Normalizer**: LLM-first intelligent data balancing (complete data vs. analytical insights) with configurable thresholds
 
 ### Knowledge (RAG)
-- Retriever: pgvector over `doc_chunks` (1536 dims), light filters, per‑doc dedupe
-- Ranker: heuristic (overlap, phrase, length penalties) with optional LLM reranker
-- Answerer: pt‑BR answer with cross-validation, citations, and confidence calibration; extractive fallback if LLM unavailable
 
-RAG schema (DDL included in [data/samples/schema.sql](data/samples/schema.sql))
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE TABLE IF NOT EXISTS doc_chunks (
-  doc_id TEXT, chunk_id TEXT,
-  title TEXT, content TEXT, source TEXT,
-  metadata JSONB,
-  embedding vector(1536),
-  PRIMARY KEY (doc_id, chunk_id)
-);
--- IVFFLAT (cosine)
-CREATE INDEX IF NOT EXISTS idx_doc_chunks_embedding_ivfflat
-  ON doc_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-```
+- **Retriever**: pgvector over `doc_chunks` (1536 dims), light filters, per‑doc dedupe
+- **Ranker**: heuristic (overlap, phrase, length penalties) with optional LLM reranker
+- **Answerer**: pt‑BR answer with cross-validation, citations, and confidence calibration; extractive fallback if LLM unavailable
 
 ### Commerce
-- Processor: PDF/DOCX/TXT/Images with OCR (Tesseract) and fallbacks
-- Extractor (LLM): structured JSON Schema with Chain-of-Thought reasoning and self-consistency checks
-- Summarizer: executive pt‑BR view, risks and next steps with confidence calibration
+
+- **Processor**: PDF/DOCX/TXT/Images with OCR (Tesseract) and fallbacks
+- **Extractor (LLM)**: structured JSON Schema with Chain-of-Thought reasoning and self-consistency checks
+- **Summarizer**: executive pt‑BR view, risks and next steps with confidence calibration
 
 ### Triage
+
 - Short pt‑BR reply when context is missing + objective follow‑ups
 
 ---
 
 ## API
 
-Endpoints (ASGI — [app/api/server.py](app/api/server.py))
-- `GET /`     → landing
-- `GET /health` → liveness
-- `GET /ready`  → readiness
-- `GET /ok`     → extended health (DB and checkpointer)
-- `GET /graph`  → LangGraph Server handlers (Studio)
+The Apllos Assistant provides a comprehensive REST API built with FastAPI and LangGraph integration.
 
-Notes
-- CORS can be restricted using `API_ALLOWED_ORIGINS` (comma-separated).
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Landing page with system information |
+| `/health` | GET | Liveness probe for container orchestration |
+| `/ready` | GET | Readiness probe for load balancers |
+| `/ok` | GET | Extended health check (DB and checkpointer status) |
+| `/metrics` | GET | Prometheus metrics (when `prometheus_client` is installed) |
+| `/graph` | GET | LangGraph Server handlers for Studio integration |
+
+### Health Check Response
+
+```json
+{
+  "status": "ok",
+  "db": "ok|down",
+  "checkpointer": "ok|noop"
+}
+```
 
 ---
 
 ## Development
 
-Structure
+### Structure
+
 ```bash
 app/        # main code
 scripts/    # ingestions, batch, CLI
 data/       # datasets and samples
 ```
 
-Makefile (highlights)
+### Makefile (highlights)
+
 ```bash
 # Bootstrap
 make bootstrap            # reset + setup + ingest + studio + validate
@@ -302,21 +239,19 @@ make batch-query     # INPUT=queries.yaml [OUTPUT=results.md]
 make logs logs-db shell shell-db clean install-deps
 ```
 
-Scripts
+### Scripts
+
 - [scripts/ingest_analytics.py](scripts/ingest_analytics.py): load Olist CSVs
 - [scripts/ingest_vectors.py](scripts/ingest_vectors.py): index documents into `doc_chunks`
 - [scripts/gen_allowlist.py](scripts/gen_allowlist.py): generate allowlist (tables/columns) into `app/routing/allowlist.json`
 - [scripts/query_assistant.py](scripts/query_assistant.py): CLI to query the assistant (Studio server)
 
----
-
-## Testing
+### Testing
 
 - Unit: `tests/unit/*`
 - E2E: `tests/e2e/*`
 - Batch YAMLs: `tests/batch/*.yaml`
 
-Run
 ```bash
 make test
 make test-unit
@@ -325,75 +260,36 @@ make test-e2e
 
 ---
 
-## Observability
-Executor/Planner safeguards
-- Executor circuit breaker (per‑SQL hash), statement timeouts, client row cap, and EXPLAIN‑only dry‑run on rejected approvals.
-- Planner validation for allowlisted identifiers and JOINs (blocks cross‑schema and non‑allowlisted), with extended temporal column detection (created/purchase/approved/delivered/estimated).
+## Documentation
 
-Knowledge/RAG controls
-- Retriever supports filters like `min_length` and `doc_type`; ranker accepts optional LLM reranker (`use_llm_reranker=True`) and falls back to heuristics.
+Comprehensive documentation is available in the `docs/` directory:
 
-Commerce processing
-- LLM extractor accepts inferred document type hints; heuristic extractor reconciles totals and flags inconsistencies.
+### Core Architecture
 
-Logging
-```python
-from app.infra.logging import get_logger
-log = get_logger("agent.analytics").bind(thread_id="thr-1")
-log.info("planned", sql="...", limit=200)
-```
+- **[Architecture](docs/core/architecture.md)** - System overview, graph structure, and orchestration patterns
+- **[API Server](docs/core/api.md)** - FastAPI server, health checks, and LangGraph integration
+- **[Infrastructure](docs/core/infra.md)** - LLM client, database, logging, metrics, and tracing
+- **[Observability](docs/core/observability.md)** - Comprehensive monitoring, logging, metrics, and tracing
 
-Tracing (optional)
-```python
-from app.infra.tracing import start_span
-with start_span("node.analytics.exec"):
-    ...
-```
+### Agent Documentation
 
-Health
-Metrics (optional)
-```bash
-# If prometheus_client is installed, the API exposes /metrics
-curl http://localhost:2024/metrics
-# Prometheus scrape endpoint with counters and histograms
-```
+- **[Agents Overview](docs/agents/agents_overview.md)** - Complete guide to all agents and their interactions
+- **[Analytics Agent](docs/agents/analytics.md)** - SQL planning, execution, and normalization
+- **[Knowledge Agent](docs/agents/knowledge.md)** - Document retrieval, ranking, and answer generation
+- **[Commerce Agent](docs/agents/commerce.md)** - Document processing, extraction, and summarization
+- **[Triage Agent](docs/agents/triage.md)** - Fallback handling for ambiguous queries
 
-Directed tracing and node metrics
-- The server can configure a local metrics registry (when `prometheus_client` is installed) and exposes counters and histograms:
-  - Counters: requests by agent/node, routing fallbacks, LLM failures by component
-  - Histograms: node execution latency (ms)
+### Development & Operations
 
-Normalizer prompts
-- The analytics normalizer loads the system prompt and examples from [app/prompts/analytics/normalizer_system.txt](app/prompts/analytics/normalizer_system.txt) and [normalizer_examples.jsonl](app/prompts/analytics/normalizer_examples.jsonl) when present, falling back to an embedded prompt if not available.
-- LLM-first approach: intelligent data balancing with configurable thresholds, human-like responses, and analytical insights for large datasets.
+- **[Configuration](docs/development/configuration.md)** - Settings, models, and environment variables
+- **[Testing](docs/development/testing.md)** - Unit tests, E2E tests, and safety guarantees
+- **[Operations](docs/operations/operations.md)** - Bootstrap, monitoring, and operational procedures
+- **[Troubleshooting](docs/operations/troubleshooting.md)** - Common issues, diagnostic procedures, and solutions
 
-Planner and Executor safety
-- The planner enforces allowlist identifiers, blocks cross‑schema joins, validates join tables and extends temporal column detection (e.g., created/purchase/approved/delivered/estimated).
-- The executor runs queries in read‑only mode, applies statement timeouts and a client row cap, supports EXPLAIN‑only dry‑run (used when SQL approval is rejected), and uses a lightweight circuit breaker per SQL hash to short‑circuit repeated failures/timeouts.
-  - When `EXECUTOR_SANITIZE_SQL=true`, the executor exposes a safe SQL preview in `meta.sql` instead of the full SQL.
+### Reference
 
-Knowledge/RAG controls
-- Retriever supports additional filters such as `min_length` and `doc_type`; the ranker supports an optional LLM reranker flag (`use_llm_reranker=True`) with graceful fallback to deterministic heuristics.
+- **[Examples](docs/reference/examples.md)** - Practical applications and real-world examples
+- **[FAQ](docs/reference/faq.md)** - Frequently asked questions and answers
+- **[Glossary](docs/reference/glossary.md)** - Technical terms and concepts
 
-Commerce processing
-- The LLM extractor accepts lightweight document type hints (inferred from text when missing), and the heuristic extractor reconciles item totals vs. declared totals, flagging inconsistencies.
-
-```bash
-curl http://localhost:2024/ok
-# {"status":"ok","db":"ok|down","checkpointer":"ok|noop"}
-```
-
----
-
-## Troubleshooting
-
-- Database is not responding
-```bash
-make db-status
-make db-stop && make db-start
-```
-- OpenAI unavailable
-```bash
-echo $OPENAI_API_KEY
-```
-- Vectors slow after ingestion: confirm `ANALYZE doc_chunks;` (Make already includes)
+For the complete documentation index, see [docs/README.md](docs/README.md).
