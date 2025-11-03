@@ -9,10 +9,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # System dependencies (psycopg binary works without headers, but libpq5 is useful)
+# Also includes Poppler (for PDF to image conversion) and Tesseract (for OCR)
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       build-essential gcc libpq5 curl git ca-certificates \
+      poppler-utils \
+      tesseract-ocr \
+      tesseract-ocr-eng \
+      tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/*
 
 # App user

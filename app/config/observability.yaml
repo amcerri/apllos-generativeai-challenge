@@ -20,7 +20,7 @@ logging:
 tracing:
   enabled: false
   sample_ratio: 0.0
-  span_timeout_seconds: 60
+  span_timeout_seconds: 240  # Increased to 240 seconds to accommodate LLM processing
 
 # ----------------------------------------------------------------------------
 # Development/Debug Configuration

@@ -11,7 +11,7 @@
 # ----------------------------------------------------------------------------
 openai:
   # Global settings
-  request_timeout_ms: 30000
+  request_timeout_ms: 90000
   max_retries: 3
   api_base: ${OPENAI_API_BASE:-}
   
@@ -76,7 +76,7 @@ models:
     name: ${COMMERCE_MODEL:-gpt-4o-mini}
     temperature: 0.1
     max_tokens: 4000
-    timeout_seconds: 60
+    timeout_seconds: 180  # Increased to 180 seconds for complex document processing
     output:
       format: json_schema
       strict: false

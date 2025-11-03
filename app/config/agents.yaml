@@ -108,7 +108,21 @@ batch_processing:
   sequential_processing: true  # Process queries one by one to avoid overload
   query_timeout_seconds: 60
   batch_id_timestamp: true     # Add unique timestamp to prevent caching
-  
+
+# ----------------------------------------------------------------------------
+# Query Client Configuration
+# ----------------------------------------------------------------------------
+query_client:
+  # HTTP client timeout for requests to LangGraph server
+  http_timeout_seconds: 300  # 5 minutes for document processing
+  # Polling timeout for waiting for query completion
+  polling_timeout_seconds: 300  # 5 minutes for complex document processing
+  polling_interval_seconds: 1   # Check every 1 second
+
+# ----------------------------------------------------------------------------
+# Batch Processing Output Formatting
+# ----------------------------------------------------------------------------
+batch_processing:
   # Output formatting
   markdown:
     include_toc: true

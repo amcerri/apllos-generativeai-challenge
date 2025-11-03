@@ -128,7 +128,8 @@ class CommerceSummarizer:
         """
         with start_span("agent.commerce.summarize"):
             dv = _DocView.from_obj(doc)
-            text = _render_ptbr(dv, top_k=self.top_items, top_items_display=self.top_items_display, max_items_display=self.max_items_display)
+            language = _detect_language(dv)
+            text = _render_multilang(dv, language=language, top_k=self.top_items, top_items_display=self.top_items_display, max_items_display=self.max_items_display)
 
             meta = {
                 "doc_type": dv.doc_type,
@@ -170,6 +171,12 @@ class _DocView:
     items: list[_Item]
     totals: dict[str, Any]
     risks: list[str]
+    buyer: dict[str, Any]
+    vendor: dict[str, Any]
+    shipping: dict[str, Any]
+    terms: dict[str, Any]
+    dates_full: dict[str, Any]
+    meta: dict[str, Any]
 
     @classmethod
     def from_obj(cls, obj: CommerceDocLike | Mapping[str, Any]) -> _DocView:
@@ -200,6 +207,12 @@ class _DocView:
                 items=items,
                 totals=dict(totals),
                 risks=list(obj.get("risks", []) or []),
+                buyer=dict(obj.get("buyer") or {}),
+                vendor=dict(obj.get("vendor") or {}),
+                shipping=dict(obj.get("shipping") or {}),
+                terms=dict(obj.get("terms") or {}),
+                dates_full=dict(dates or {}),
+                meta=dict(obj.get("meta") or {}),
             )
         # Access via attributes (dataclass from extractor)
         ddoc = getattr(obj, "doc", None)
@@ -222,6 +235,12 @@ class _DocView:
                     line_total=getattr(it, "line_total", None),
                 )
             )
+        buyer_obj = getattr(obj, "buyer", {})
+        vendor_obj = getattr(obj, "vendor", {})
+        shipping_obj = getattr(obj, "shipping", {})
+        terms_obj = getattr(obj, "terms", None)
+        meta_obj = getattr(obj, "meta", {})
+        
         return cls(
             doc_type=getattr(ddoc, "doc_type", None),
             doc_id=getattr(ddoc, "doc_id", None),
@@ -231,6 +250,12 @@ class _DocView:
             items=items2,
             totals=totals,
             risks=list(getattr(obj, "risks", []) or []),
+            buyer=dict(buyer_obj) if isinstance(buyer_obj, Mapping) else {},
+            vendor=dict(vendor_obj) if isinstance(vendor_obj, Mapping) else {},
+            shipping=dict(shipping_obj) if isinstance(shipping_obj, Mapping) else {},
+            terms=dict(terms_obj) if isinstance(terms_obj, Mapping) else {},
+            dates_full=dict(dates) if isinstance(dates, Mapping) else {},
+            meta=dict(meta_obj) if isinstance(meta_obj, Mapping) else {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -257,14 +282,138 @@ class _DocView:
 
 
 # ---------------------------------------------------------------------------
-# Rendering helpers (pt-BR)
+# Language detection and multilang rendering
 # ---------------------------------------------------------------------------
+
+
+def _has_value(value: Any) -> bool:
+    """Check if a value is considered non-empty.
+    
+    Returns False for None, empty strings, empty lists, empty dicts, and 0.
+    """
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return len(value) > 0
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
+def _dict_has_any_value(d: dict[str, Any] | None) -> bool:
+    """Check if a dictionary has any non-empty values."""
+    if not d:
+        return False
+    return any(_has_value(v) for v in d.values())
+
+
+def _format_field_value(value: Any, symbol: str = "") -> str:
+    """Format a field value for display based on its type."""
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        if symbol:
+            return f"{symbol} {value:,.2f}" if value != 0 else ""
+        return f"{value:,.2f}"
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, dict)):
+        if len(value) == 0:
+            return ""
+        return str(value)
+    return str(value)
+
+
+def _render_dict_section(d: dict[str, Any], title: str, language: str, symbol: str = "") -> list[str]:
+    """Dynamically render a dictionary section showing only fields with values.
+    
+    Parameters
+    ----------
+    d: Dictionary to render
+    title: Section title (empty string to skip title)
+    language: 'pt' or 'en' for labels
+    symbol: Currency symbol for formatting numbers
+    
+    Returns
+    -------
+    List of lines to add to the output
+    """
+    if not _dict_has_any_value(d):
+        return []
+    
+    lines = []
+    if title:
+        lines.append(title)
+        lines.append("-" * 30)
+    
+    # Display fields exactly as extracted - no keyword translation or fixed labels
+    # Only format the display nicely (capitalize first letter, replace underscores)
+    for key, value in sorted(d.items()):
+        if not _has_value(value):
+            continue
+        
+        # Skip internal/metadata fields
+        if key.startswith("_") or key in ("source_filename", "source_mime", "extracted_at", "extraction_method"):
+            continue
+        
+        # Format the label from the key name (just cosmetic, no translation)
+        # Keep the key as-is, just make it readable
+        label = key.replace("_", " ").strip()
+        # Capitalize first letter of each word
+        label = " ".join(word.capitalize() if word else "" for word in label.split())
+        
+        # Format the value
+        formatted_value = _format_field_value(value, symbol)
+        if formatted_value:
+            lines.append(f"{label}: {formatted_value}")
+    
+    # Only add blank line if we have content (accounting for optional title)
+    if len(lines) > (2 if title else 0):
+        lines.append("")
+        return lines
+    
+    return []
+
+
+def _detect_language(doc: _DocView) -> str:
+    """Detect document language based on currency, item names, and context.
+    
+    Returns 'en' for English or 'pt' for Portuguese (defaults to 'pt').
+    """
+    # Currency-based detection (strong indicator)
+    currency = (doc.currency or "").upper()
+    if currency in {"USD", "GBP", "EUR", "CAD", "AUD", "NZD"}:
+        return "en"
+    
+    # Check item names for English keywords
+    english_keywords = {"order", "item", "quantity", "price", "total", "subtotal", "shipping", "tax"}
+    portuguese_keywords = {"pedido", "item", "quantidade", "preço", "total", "subtotal", "frete", "imposto"}
+    
+    item_text = " ".join([(it.name or "").lower() for it in doc.items[:5]])
+    en_count = sum(1 for kw in english_keywords if kw in item_text)
+    pt_count = sum(1 for kw in portuguese_keywords if kw in item_text)
+    
+    if en_count > pt_count and en_count > 0:
+        return "en"
+    
+    # Default to Portuguese (pt-BR is the primary language)
+    return "pt"
+
+
+def _render_multilang(doc: _DocView, *, language: str = "pt", top_k: int, top_items_display: int = 10, max_items_display: int = 5) -> str:
+    """Render document summary in the specified language."""
+    if language == "en":
+        return _render_en(doc, top_k=top_k, top_items_display=top_items_display, max_items_display=max_items_display)
+    else:
+        return _render_ptbr(doc, top_k=top_k, top_items_display=top_items_display, max_items_display=max_items_display)
 
 
 def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_items_display: int = 5) -> str:
     tipo = _label_doc_type(doc.doc_type)
-    moeda = doc.currency or "(não informada)"
-    simbolo = _currency_symbol(moeda)
+    moeda = doc.currency or ""
+    simbolo = _currency_symbol(moeda) if moeda else ""
     total_txt = _fmt_money(doc.totals.get("grand_total"), simbolo)
 
     linhas = []
@@ -273,29 +422,45 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
     linhas.append("INFORMAÇÕES DO DOCUMENTO")
     linhas.append("=" * 50)
     linhas.append(f"Tipo: {tipo}")
-    linhas.append(f"ID: {doc.doc_id or '(sem ID)'}")
-    linhas.append(f"Moeda: {moeda}")
+    if _has_value(doc.doc_id):
+        linhas.append(f"ID: {doc.doc_id}")
+    if _has_value(doc.currency):
+        linhas.append(f"Moeda: {doc.currency}")
     linhas.append("")
+    
+    # === VENDOR/BUYER (dynamic sections) ===
+    # Show vendor/buyer sections only if they have data
+    if _dict_has_any_value(doc.vendor):
+        vendor_lines = _render_dict_section(doc.vendor, "", "pt", simbolo)
+        linhas.extend(vendor_lines)
+    
+    if _dict_has_any_value(doc.buyer):
+        buyer_lines = _render_dict_section(doc.buyer, "", "pt", simbolo)
+        linhas.extend(buyer_lines)
 
     # === DATAS ===
-    if doc.issue_date or doc.due_date:
-        linhas.append("DATAS")
-        linhas.append("-" * 30)
-        if doc.issue_date:
-            linhas.append(f"Emissão: {doc.issue_date}")
-        if doc.due_date:
-            linhas.append(f"Vencimento: {doc.due_date}")
-        linhas.append("")
+    dates_lines = _render_dict_section(doc.dates_full, "DATAS" if _dict_has_any_value(doc.dates_full) else "", "pt", simbolo)
+    linhas.extend(dates_lines)
 
     # === TOTAIS ===
-    linhas.append("VALORES TOTAIS")
-    linhas.append("-" * 30)
-    sub = _fmt_money(doc.totals.get("subtotal"), simbolo)
-    frete = _fmt_money(doc.totals.get("freight"), simbolo)
-    linhas.append(f"Subtotal: {sub}")
-    linhas.append(f"Frete: {frete}")
-    linhas.append(f"TOTAL GERAL: {total_txt}")
-    linhas.append("")
+    # Render totals dynamically, but format money values specially
+    totals_dict = dict(doc.totals)
+    # Format known money fields
+    if "subtotal" in totals_dict and _has_value(totals_dict["subtotal"]):
+        totals_dict["subtotal"] = _fmt_money(totals_dict["subtotal"], simbolo)
+    if "freight" in totals_dict and _has_value(totals_dict["freight"]):
+        totals_dict["freight"] = _fmt_money(totals_dict["freight"], simbolo)
+    if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+        totals_dict["grand_total"] = total_txt
+    
+    totals_lines = _render_dict_section(totals_dict, "VALORES TOTAIS" if _dict_has_any_value(totals_dict) else "", "pt", "")
+    # Override label for grand_total
+    if totals_lines and "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+        for i, line in enumerate(totals_lines):
+            if "Grand Total" in line or "grand_total" in line.lower():
+                totals_lines[i] = f"TOTAL GERAL: {total_txt}"
+                break
+    linhas.extend(totals_lines)
 
     # === ITENS PRINCIPAIS ===
     itens_ordenados = sorted(
@@ -307,37 +472,18 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
         linhas.append("ITENS PRINCIPAIS")
         linhas.append("-" * 30)
         
-        # Para poucos itens (até top_items_display), mostrar todos. Para muitos, usar max_items_display
+        # Mostrar TODOS os itens - sem limite para commerce agent
         total_itens = len(itens_ordenados)
-        if total_itens <= top_items_display:
-            # Mostrar todos os itens
-            for i, it in enumerate(itens_ordenados, 1):
-                qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
-                up = _fmt_money(it.unit_price, simbolo)
-                lt = _fmt_money(it.line_total, simbolo)
-                nome = it.name or "(sem descrição)"
-                linhas.append(f"{i}. {nome}")
-                linhas.append(f"   Quantidade: {qtd}")
-                linhas.append(f"   Preço unitário: {up}")
-                linhas.append(f"   Total da linha: {lt}")
-                linhas.append("")
-        else:
-            # Para muitos itens, usar max_items_display e mostrar resumo
-            for i, it in enumerate(itens_ordenados[: max(1, int(max_items_display))], 1):
-                qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
-                up = _fmt_money(it.unit_price, simbolo)
-                lt = _fmt_money(it.line_total, simbolo)
-                nome = it.name or "(sem descrição)"
-                linhas.append(f"{i}. {nome}")
-                linhas.append(f"   Quantidade: {qtd}")
-                linhas.append(f"   Preço unitário: {up}")
-                linhas.append(f"   Total da linha: {lt}")
-                linhas.append("")
-            
-            # Mostrar total de itens se houver mais que os mostrados
-            if total_itens > max_items_display:
-                linhas.append(f"... e mais {total_itens - max_items_display} itens")
-                linhas.append("")
+        for i, it in enumerate(itens_ordenados, 1):
+            qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
+            up = _fmt_money(it.unit_price, simbolo)
+            lt = _fmt_money(it.line_total, simbolo)
+            nome = it.name or "(sem descrição)"
+            linhas.append(f"{i}. {nome}")
+            linhas.append(f"   Quantidade: {qtd}")
+            linhas.append(f"   Preço unitário: {up}")
+            linhas.append(f"   Total da linha: {lt}")
+            linhas.append("")
 
     # === RISCOS E ALERTAS ===
     if doc.risks:
@@ -365,6 +511,132 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
         linhas.append("Posso ajudar a investigar ou analisar os dados disponíveis.")
 
     return "\n".join(linhas)
+
+
+def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_items_display: int = 5) -> str:
+    """Render document summary in English."""
+    tipo = _label_doc_type_en(doc.doc_type)
+    currency = doc.currency or ""
+    symbol = _currency_symbol(currency) if currency else ""
+    total_txt = _fmt_money_en(doc.totals.get("grand_total"), symbol)
+
+    lines = []
+
+    # === HEADER ===
+    lines.append("DOCUMENT INFORMATION")
+    lines.append("=" * 50)
+    lines.append(f"Type: {tipo}")
+    if _has_value(doc.doc_id):
+        lines.append(f"ID: {doc.doc_id}")
+    if _has_value(doc.currency):
+        lines.append(f"Currency: {doc.currency}")
+    lines.append("")
+    
+    # === VENDOR/BUYER (dynamic sections) ===
+    # Show vendor/buyer sections only if they have data
+    if _dict_has_any_value(doc.vendor):
+        vendor_lines = _render_dict_section(doc.vendor, "", "en", symbol)
+        lines.extend(vendor_lines)
+    
+    if _dict_has_any_value(doc.buyer):
+        buyer_lines = _render_dict_section(doc.buyer, "", "en", symbol)
+        lines.extend(buyer_lines)
+
+    # === DATES ===
+    dates_lines = _render_dict_section(doc.dates_full, "DATES" if _dict_has_any_value(doc.dates_full) else "", "en", symbol)
+    lines.extend(dates_lines)
+
+    # === TOTALS ===
+    # Render totals dynamically, but format money values specially
+    totals_dict = dict(doc.totals)
+    # Format known money fields
+    if "subtotal" in totals_dict and _has_value(totals_dict["subtotal"]):
+        totals_dict["subtotal"] = _fmt_money_en(totals_dict["subtotal"], symbol)
+    if "freight" in totals_dict and _has_value(totals_dict["freight"]):
+        totals_dict["freight"] = _fmt_money_en(totals_dict["freight"], symbol)
+    if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+        totals_dict["grand_total"] = total_txt
+    
+    totals_lines = _render_dict_section(totals_dict, "TOTAL VALUES" if _dict_has_any_value(totals_dict) else "", "en", "")
+    # Override label for grand_total
+    if totals_lines and "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+        for i, line in enumerate(totals_lines):
+            if "Grand Total" in line or "grand_total" in line.lower():
+                totals_lines[i] = f"GRAND TOTAL: {total_txt}"
+                break
+    lines.extend(totals_lines)
+
+    # === TOP ITEMS ===
+    sorted_items = sorted(
+        doc.items,
+        key=lambda it: (it.line_total or 0.0),
+        reverse=True,
+    )
+    if sorted_items:
+        lines.append("TOP ITEMS")
+        lines.append("-" * 30)
+        
+        # Show ALL items - no limit for commerce agent
+        total_items = len(sorted_items)
+        for i, it in enumerate(sorted_items, 1):
+            qty = _fmt_float_en(it.qty) if it.qty is not None else "?"
+            up = _fmt_money_en(it.unit_price, symbol)
+            lt = _fmt_money_en(it.line_total, symbol)
+            name = it.name or "(no description)"
+            lines.append(f"{i}. {name}")
+            lines.append(f"   Quantity: {qty}")
+            lines.append(f"   Unit Price: {up}")
+            lines.append(f"   Line Total: {lt}")
+            lines.append("")
+
+    # === RISKS AND ALERTS ===
+    if doc.risks:
+        lines.append("RISKS AND ALERTS")
+        lines.append("-" * 30)
+        for r in doc.risks[:10]:
+            # Check if it's an LLM error
+            if r.startswith("llm_error:"):
+                error_type = r.replace("llm_error:", "")
+                lines.append(f"- Processing Error ({error_type}): Failed to automatically analyze document")
+            else:
+                # Explain each risk clearly
+                explanation = _explain_risk_en(r)
+                lines.append(f"- {r}: {explanation}")
+        lines.append("")
+
+    # === INTERACTION ===
+    lines.append("INTERACTION")
+    lines.append("-" * 30)
+    if total_txt != "(not specified)":
+        lines.append("Would you like any specific analysis on this order?")
+        lines.append("I can help with comparisons, simulations, or detailed analyses.")
+    else:
+        lines.append("This document presents some inconsistencies in the values.")
+        lines.append("I can help investigate or analyze the available data.")
+
+    return "\n".join(lines)
+
+
+def _explain_risk_en(risk: str) -> str:
+    """Explain the meaning of each risk type clearly in English."""
+    explanations = {
+        "sum_mismatch": "Item sum does not match declared subtotal",
+        "grand_total_mismatch": "Grand total does not match subtotal + shipping",
+        "missing_core_fields": "Essential fields such as ID, date, or values are missing",
+        "incomplete_lines": "Some items lack complete information",
+        "currency_mismatch": "Inconsistencies in the currency used",
+        "date_inconsistency": "Dates present inconsistencies or are missing",
+        "price_anomaly": "Very high or low prices that may indicate an error",
+        "quantity_anomaly": "Very high or low quantities that may indicate an error",
+        "duplicate_items": "Duplicate items found in the order",
+        "tax_calculation_error": "Error in tax or fee calculation",
+        "shipping_cost_anomaly": "Shipping cost is very high or low",
+        "vendor_mismatch": "Inconsistencies in vendor data",
+        "payment_terms_missing": "Payment terms not specified",
+        "delivery_address_missing": "Delivery address not provided",
+        "contact_info_missing": "Contact information missing",
+    }
+    return explanations.get(risk, "Unidentified risk - requires manual analysis")
 
 
 def _explicar_risco(risco: str) -> str:
@@ -403,6 +675,22 @@ def _label_doc_type(t: str | None) -> str:
     return labels.get(t, t)
 
 
+def _label_doc_type_en(t: str | None) -> str:
+    if not t:
+        return "(type not identified)"
+    labels = {
+        "invoice": "Invoice",
+        "purchase_order": "Purchase Order (PO)",
+        "order_form": "Order Form",
+        "beo": "Banquet Event Order (BEO)",
+        "receipt": "Receipt",
+        "quote": "Quote/Proposal",
+        "contract": "Contract",
+        "shipping_notice": "Shipping Notice",
+    }
+    return labels.get(t, t)
+
+
 def _currency_symbol(code: str) -> str:
     c = (code or "").upper()
     return {
@@ -426,10 +714,26 @@ def _fmt_money(v: Any, sym: str) -> str:
     return f"{sym} {f:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+def _fmt_money_en(v: Any, sym: str) -> str:
+    if v is None:
+        return "(not specified)"
+    try:
+        f = float(v)
+    except Exception:
+        return "(not specified)"
+    return f"{sym} {f:,.2f}"
+
+
 def _fmt_float_ptbr(v: float | None) -> str:
     if v is None:
         return "(não informado)"
     return f"{v:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+def _fmt_float_en(v: float | None) -> str:
+    if v is None:
+        return "(not specified)"
+    return f"{v:,.2f}"
 
 
 def _as_str(v: Any) -> str | None:
@@ -454,19 +758,37 @@ def _as_float(v: Any) -> float | None:
 
 
 def _suggest_followups(doc: _DocView) -> list[str]:
-    base = "este documento"
-    outs: list[str] = []
-    if doc.items:
-        outs.append(f"Quer que eu exporte os itens de {base} em CSV?")
-    if doc.doc_type == "invoice":
-        outs.append("Deseja que eu valide impostos e descontos informados?")
-    if doc.doc_type == "purchase_order":
-        outs.append("Posso cruzar com recebimentos para ver divergências.")
-    if not outs:
-        outs.append(
-            "Posso detalhar mais campos (datas, condições) ou comparar com outros documentos."
-        )
-    return outs
+    # Detect language for followups
+    language = _detect_language(doc)
+    
+    if language == "en":
+        base = "this document"
+        outs: list[str] = []
+        if doc.items:
+            outs.append(f"Would you like me to export the items from {base} to CSV?")
+        if doc.doc_type == "invoice":
+            outs.append("Would you like me to validate the taxes and discounts provided?")
+        if doc.doc_type == "purchase_order":
+            outs.append("I can cross-reference with receipts to check for discrepancies.")
+        if not outs:
+            outs.append(
+                "I can detail more fields (dates, conditions) or compare with other documents."
+            )
+        return outs
+    else:
+        base = "este documento"
+        outs: list[str] = []
+        if doc.items:
+            outs.append(f"Quer que eu exporte os itens de {base} em CSV?")
+        if doc.doc_type == "invoice":
+            outs.append("Deseja que eu valide impostos e descontos informados?")
+        if doc.doc_type == "purchase_order":
+            outs.append("Posso cruzar com recebimentos para ver divergências.")
+        if not outs:
+            outs.append(
+                "Posso detalhar mais campos (datas, condições) ou comparar com outros documentos."
+            )
+        return outs
 
 
 # ---------------------------------------------------------------------------

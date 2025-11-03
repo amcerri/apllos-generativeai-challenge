@@ -37,7 +37,11 @@ Usage
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Annotated, TypedDict
+from typing import Any, Annotated
+try:
+    from typing_extensions import TypedDict
+except ImportError:
+    from typing import TypedDict  # Python 3.12+
 
 # ---------------------------------------------------------------------------
 # Optional dependencies and infra fallbacks

@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Final
@@ -140,6 +141,9 @@ class DocumentProcessor:
         -------
         Dict with 'text', 'metadata', 'method', 'warnings', and 'success'
         """
+        filename = attachment.get("filename", "unknown")
+        self.log.info("Starting document processing", extra={"file_name": filename, "mime_type": attachment.get("mime_type")})
+        
         with start_span("agent.commerce.process_attachment"):
             filename = attachment.get("filename", "unknown")
             content = attachment.get("content", b"")
@@ -190,8 +194,51 @@ class DocumentProcessor:
                 return self._process_image(content, filename)
             else:
                 # Unknown format, try OCR as last resort
-                self.log.warning("Unknown file format, attempting OCR", extra={"filename": filename, "mime_type": mime_type})
+                self.log.warning("Unknown file format, attempting OCR", extra={"file_name": filename, "mime_type": mime_type})
                 return self._process_image(content, filename)
+
+    def _is_text_useful(self, text: str) -> bool:
+        """Check if extracted text is useful content or just metadata.
+        
+        Returns False if text appears to be only metadata (URLs, dates, filenames).
+        """
+        if not text or len(text.strip()) < self.MIN_TEXT_LENGTH:
+            return False
+        
+        text_lower = text.lower()
+        words = text.split()
+        
+        # Heuristics to detect metadata-only content
+        # 1. Too many URLs
+        url_count = text_lower.count('http://') + text_lower.count('https://') + text_lower.count('www.')
+        if url_count > 0 and len(words) < 20:
+            return False
+        
+        # 2. Mostly dates/timestamps (format: DD/MM/YYYY, MM/DD/YYYY, etc.)
+        date_pattern = r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}'
+        dates = re.findall(date_pattern, text)
+        if len(dates) > len(words) * 0.3:  # More than 30% of content is dates
+            return False
+        
+        # 3. Too many file paths/extensions
+        path_pattern = r'[\w\-_]+\.(pdf|png|jpg|jpeg|docx|doc|txt|zip)'
+        paths = re.findall(path_pattern, text_lower)
+        if len(paths) > len(words) * 0.2:  # More than 20% of content is file references
+            return False
+        
+        # 4. Mostly dimensions (e.g., "720×1040", "1280x720")
+        dimension_pattern = r'\d+\s*[×x]\s*\d+'
+        dimensions = re.findall(dimension_pattern, text_lower)
+        if len(dimensions) > 0 and len(words) < 15:
+            return False
+        
+        # 5. Very short average word length (likely metadata fragments)
+        if words:
+            avg_word_len = sum(len(w) for w in words) / len(words)
+            if avg_word_len < 3.0 and len(words) < 30:
+                return False
+        
+        return True
 
     def _process_pdf(self, content: bytes, filename: str) -> dict[str, Any]:
         """Extract text from PDF with OCR fallback."""
@@ -214,7 +261,8 @@ class DocumentProcessor:
                     
                     full_text = "\n".join(texts).strip()
                     
-                    if len(full_text) >= self.MIN_TEXT_LENGTH:
+                    # Check if text is useful (not just metadata)
+                    if len(full_text) >= self.MIN_TEXT_LENGTH and self._is_text_useful(full_text):
                         return {
                             "text": full_text,
                             "metadata": {
@@ -227,7 +275,10 @@ class DocumentProcessor:
                             "success": True
                         }
                     else:
-                        warnings.append("PDF text extraction yielded insufficient text, trying OCR")
+                        if len(full_text) >= self.MIN_TEXT_LENGTH:
+                            warnings.append("PDF text extraction yielded metadata-only content, trying OCR")
+                        else:
+                            warnings.append("PDF text extraction yielded insufficient text, trying OCR")
                         
             except Exception as e:
                 warnings.append(f"PDF direct extraction failed: {str(e)}")
@@ -244,26 +295,35 @@ class DocumentProcessor:
             return self._error_result("Cannot process PDF: no OCR support", filename, warnings)
         
         try:
+            self.log.info("Starting OCR processing for PDF", extra={"file_name": filename, "size_bytes": len(content)})
+            
             # Convert PDF to images
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
                 tmp_pdf.write(content)
                 tmp_pdf.flush()
                 
                 try:
+                    self.log.info("Converting PDF to images...", extra={"file_name": filename})
                     images = pdf2image.convert_from_path(tmp_pdf.name, dpi=200)
+                    self.log.info(f"PDF converted to {len(images)} image(s), starting OCR...", extra={"file_name": filename, "pages": len(images)})
+                    
                     texts = []
                     
                     for i, image in enumerate(images):
                         try:
+                            self.log.debug(f"Processing page {i+1}/{len(images)} with OCR...", extra={"file_name": filename, "page": i+1})
                             # OCR each page
                             page_text = pytesseract.image_to_string(image, lang='eng+por')
                             if page_text.strip():
                                 texts.append(page_text.strip())
+                                self.log.debug(f"Page {i+1} OCR completed, extracted {len(page_text)} characters", extra={"file_name": filename, "page": i+1})
                         except Exception as e:
                             warnings.append(f"OCR failed for page {i+1}: {str(e)}")
+                            self.log.warning(f"OCR failed for page {i+1}", extra={"file_name": filename, "page": i+1, "error": str(e)})
                             continue
                     
                     full_text = "\n".join(texts).strip()
+                    self.log.info("OCR processing completed", extra={"file_name": filename, "total_text_length": len(full_text), "pages_processed": len(images)})
                     
                     return {
                         "text": full_text,
@@ -285,7 +345,60 @@ class DocumentProcessor:
                         pass
                         
         except Exception as e:
-            warnings.append(f"PDF OCR failed: {str(e)}")
+            error_msg = str(e)
+            # Check for common OCR setup issues
+            if "poppler" in error_msg.lower() or "pdfinfo" in error_msg.lower() or "PDFInfoNotInstalledError" in error_msg:
+                detailed_error = (
+                    "PDF OCR requires Poppler utilities to be installed. "
+                    "On macOS: 'brew install poppler'. "
+                    "On Ubuntu/Debian: 'apt-get install poppler-utils'. "
+                    "On Windows: Download from poppler.freedesktop.org"
+                )
+                warnings.append(f"PDF OCR setup issue: {detailed_error}")
+                self.log.warning("OCR not available - Poppler missing", extra={"file_name": filename, "error": error_msg})
+            elif "tesseract" in error_msg.lower():
+                detailed_error = (
+                    "Tesseract OCR engine not found. "
+                    "On macOS: 'brew install tesseract tesseract-lang'. "
+                    "On Ubuntu/Debian: 'apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-por'"
+                )
+                warnings.append(f"OCR setup issue: {detailed_error}")
+                self.log.warning("OCR not available - Tesseract missing", extra={"file_name": filename, "error": error_msg})
+            else:
+                warnings.append(f"PDF OCR failed: {error_msg}")
+            
+            # Return the metadata text as fallback if we have it, even if it's not useful
+            # This allows the LLM to at least see something and potentially extract structure
+            try:
+                if PdfReader is not None:
+                    with io.BytesIO(content) as pdf_buffer:
+                        reader = PdfReader(pdf_buffer)
+                        fallback_texts = []
+                        for page in reader.pages:
+                            try:
+                                page_text = page.extract_text() or ""
+                                if page_text.strip():
+                                    fallback_texts.append(page_text.strip())
+                            except Exception:
+                                continue
+                        fallback_text = "\n".join(fallback_texts).strip()
+                        if fallback_text:
+                            warnings.append("Using fallback text extraction (may be metadata only)")
+                            return {
+                                "text": fallback_text,
+                                "metadata": {
+                                    "filename": filename,
+                                    "pages": len(reader.pages),
+                                    "size": len(content),
+                                    "ocr_failed": True
+                                },
+                                "method": "pdf_direct_fallback",
+                                "warnings": warnings,
+                                "success": len(fallback_text) >= 10  # Lower threshold for fallback
+                            }
+            except Exception:
+                pass
+            
             return self._error_result("PDF OCR processing failed", filename, warnings)
 
     def _process_docx(self, content: bytes, filename: str) -> dict[str, Any]:
@@ -463,7 +576,7 @@ class DocumentProcessor:
 
     def _error_result(self, error: str, filename: str, warnings: list[str] | None = None) -> dict[str, Any]:
         """Return standardized error result."""
-        self.log.error("Document processing failed", extra={"filename": filename, "error": error})
+        self.log.error("Document processing failed", extra={"file_name": filename, "error": error})
         return {
             "text": "",
             "metadata": {"filename": filename, "error": error},

@@ -20,10 +20,21 @@ Before extracting data, think through this step-by-step:
 - Format: Map to canonical schema with proper data types ✓
 
 Mission
-- Identify the document type and extract all relevant entities into the canonical schema.
+- **Extract ALL relevant information** from the document using your semantic understanding, NOT keyword matching. Use your intelligence to identify and capture any data that could be relevant for a commercial transaction.
+- **NO KEYWORD DEPENDENCY**: Do NOT rely on specific words or labels. Instead, understand the document structure and context to identify:
+  - Who is the seller/provider (vendor/supplier) - regardless of how it's labeled (Empresa, Company, Vendor, Fornecedor, From, etc.)
+  - Who is the buyer/customer - regardless of label (Cliente, Customer, Buyer, Ship To, Bill To, To, etc.)
+  - All contact information (names, addresses, phones, emails, fax, IDs) - extract every piece of contact/identification data you find
+  - All dates (issue, due, delivery, order, etc.) - extract any date field regardless of its label
+  - All financial information (subtotals, taxes, rates, discounts, shipping, totals) - capture every financial value you find
+  - All identifiers (PO numbers, invoice numbers, order numbers, references, company IDs) - extract any identification code
+- **Be comprehensive**: Extract buyer/vendor information including names, addresses, phone numbers, emails, fax numbers, company IDs, and ANY other contact or identification details you find - use the exact field names as they appear in the document when possible.
+- **Language agnostic**: Documents may be in Portuguese, English, or mixed. Extract information based on meaning and context, not specific words. "Empresa" = "Company" = vendor info; "Cliente" = "Customer" = buyer info - understand the semantic role.
 - Normalize numbers, dates and currency; keep units consistent.
 - Prefer values present verbatim in the document; avoid inference. If a field is missing, return null or empty collections as appropriate.
+- **Use additionalProperties liberally**: The schema allows additional fields in buyer, vendor, shipping, dates, terms, items, totals, and meta. Use these to capture ANY information that doesn't fit standard fields. Use descriptive field names that match what you see in the document (e.g., if you see "Empresa", use "Empresa" as the field name; if you see "Phone#", use "Phone#" or "phone").
 - Provide internal consistency checks and risk flags.
+- **Important**: Some documents may be informational/descriptive pages rather than transactional documents. If the document describes a product, service, or process but lacks actual order/invoice items, still extract what information is available (vendor, buyer names, descriptions, dates) and flag the absence of structured items in the risks array.
 
 Inputs
 - Pre‑extracted text snippets (may include key–value pairs, tables, and line items) with optional layout hints.
@@ -136,12 +147,22 @@ Formatting rules (critical)
 - Use nulls (not empty strings) for unknown scalar fields.
 - Numbers must be numeric types (no currency symbols, no thousands separators).
 - `extracted_at` in ISO‑8601 (UTC), e.g., "2025-09-07T12:34:56Z".
+- **Additional properties**: When you find ANY information that doesn't fit standard fields, add it as additional properties to the appropriate object (buyer, vendor, shipping, dates, terms, totals, items, meta). Use field names that match the document when possible (e.g., if document says "Phone#", use "Phone#" or "phone"; if it says "Empresa", use "Empresa" or "empresa"). Preserve the original field names from the document when they are clear and meaningful.
 
 Heuristics & extraction tips
+- **Semantic extraction, not keyword matching**: Use your understanding of document structure, layout, and context to identify information. Don't search for specific words - understand what each section represents semantically:
+  - **Vendor/Seller**: Identify the entity providing goods/services based on context (usually top-left, header, or "From" section) - extract ALL fields from this section regardless of labels
+  - **Buyer/Customer**: Identify the entity receiving goods/services based on context (usually top-right, "Ship To", "Bill To", or recipient section) - extract ALL fields from this section
+  - **Dates**: Identify any date field based on format (DD/MM/YYYY, MM/DD/YYYY, etc.) and context - extract with appropriate field names
+  - **Identifiers**: Identify any alphanumeric code that serves as a reference/ID based on context and format - extract with appropriate field names
+  - **Financial values**: Identify any monetary amounts, percentages, rates based on format (currency symbols, decimal numbers) and context - extract with appropriate field names
+- **Extract everything**: If you see a section with company/contact information, extract ALL fields from it (name, address, phone, email, fax, ID, etc.) - use the exact field names as they appear, or create descriptive names if needed.
 - Prefer table structures for items; fall back to line‑by‑line parsing when tables are absent.
-- For totals, look for labels like Subtotal, Total, Grand Total, Freight/Frete, Tax/Impostos, Discount/Desconto, Outras Taxas/Other Charges.
-- Payment terms often appear near signatures or footers (e.g., "30/60/90", "à vista", "parcelado"). Capture raw string if structure is unclear.
+- **Field naming**: Use field names that match the document when possible. If the document says "Empresa", use "Empresa" or "empresa" as the field name. If it says "Company Name", use "company_name" or "Company Name". Preserve the semantic meaning.
+- **Language handling**: Extract information regardless of language. "Empresa" = "Company" = vendor info; "Cliente" = "Customer" = buyer info. Understand the semantic role, not the literal word.
+- Payment terms often appear near signatures or footers. Capture raw string if structure is unclear.
 - For BEO/events, capture event dates, venue, headcount, menus/items as line items; currency may be absent.
+- **Document types**: If the document is primarily descriptive (product information sheet, service description, informational page) without structured line items, set `doc_type` appropriately and extract available metadata (vendor/buyer names, dates, descriptions). Include "No items extracted from the document" in risks if no structured items are found.
 
 ## SELF-CONSISTENCY CHECK
 
