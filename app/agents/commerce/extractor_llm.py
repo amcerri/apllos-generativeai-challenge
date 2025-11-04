@@ -101,6 +101,7 @@ class LLMCommerceExtractor:
         self._config = get_config()
         self._system_prompt = self._load_system_prompt()
         self._json_schema = self._load_json_schema()
+        self._last_text = ""  # Store last processed text for validation
 
     def extract(
         self,
@@ -127,8 +128,20 @@ class LLMCommerceExtractor:
             text = (text or "").strip()
             metadata = metadata or {}
             
-            if not text:
-                return self._empty_document(metadata, ["empty_text"])
+            # Check if text is too short or empty - this likely indicates extraction failure
+            if not text or len(text) < 20:
+                warnings = ["empty_text"] if not text else ["insufficient_text_extraction"]
+                self.log.warning("Empty or very short text extracted", 
+                               extra={"text_length": len(text), "file_name": metadata.get("filename")})
+                return self._empty_document(metadata, warnings)
+            
+            # Check if text looks like placeholder/example data
+            text_lower = text.lower()
+            if any(placeholder in text_lower for placeholder in ["invoice #inv-001", "item a", "example invoice", "sample document"]):
+                warnings = ["placeholder_text_detected"]
+                self.log.warning("Placeholder text detected", 
+                               extra={"file_name": metadata.get("filename")})
+                return self._empty_document(metadata, warnings)
             
             # Check for OpenAI API key
             api_key = os.getenv("OPENAI_API_KEY")
@@ -317,12 +330,46 @@ class LLMCommerceExtractor:
         # Ensure required fields
         if "doc" not in result:
             result["doc"] = {"doc_type": "unknown"}
+        if "risks" not in result:
+            result["risks"] = []
+        
+        # Validate document type - reject non-commercial documents
+        # But be more lenient - if it has commercial structure, it's likely valid
+        doc_type = result.get("doc", {}).get("doc_type", "unknown")
+        valid_commercial_types = {"invoice", "purchase_order", "order_form", "beo", "quote", "proposal", "contract", "receipt", "shipping_notice"}
+        
+        # Check if document has commercial structure (items, totals, buyer/vendor) even if doc_type is unknown
+        has_items = len(result.get("items", [])) > 0
+        has_totals = result.get("totals", {}) and any(v is not None for v in result.get("totals", {}).values() if not isinstance(v, list))
+        has_buyer_vendor = bool(result.get("buyer")) or bool(result.get("vendor"))
+        has_commercial_structure = has_items and (has_totals or has_buyer_vendor)
+        
+        if doc_type == "unknown":
+            if has_commercial_structure:
+                # Document has commercial structure - likely valid but LLM didn't classify correctly
+                # Don't reject - the document has the structure of a commercial document
+                # The LLM may have missed the type but the structure indicates it's commercial
+                self.log.warning("Document has commercial structure (items, totals, buyer/vendor) but doc_type is unknown - allowing through", 
+                               extra={"file_name": metadata.get("filename"), "doc_type": doc_type, 
+                                     "has_items": has_items, "has_totals": has_totals, "has_buyer_vendor": has_buyer_vendor})
+                # Don't add risk - let it pass through as valid commercial document
+                # The summarizer will handle it appropriately
+            else:
+                # No commercial structure - likely not a commercial document
+                result["risks"].append("not_commercial_document")
+                self.log.warning("Document rejected - not a commercial document type and no commercial structure", 
+                               extra={"file_name": metadata.get("filename"), "doc_type": doc_type})
+        elif doc_type not in valid_commercial_types:
+            result["doc"]["doc_type"] = "unknown"
+            result["risks"].append("not_commercial_document")
+            self.log.warning("Document rejected - invalid document type", 
+                           extra={"file_name": metadata.get("filename"), "doc_type": doc_type})
+        
+        # Ensure optional fields exist (but can be null/empty)
         if "items" not in result:
             result["items"] = []
         if "totals" not in result:
             result["totals"] = {}
-        if "risks" not in result:
-            result["risks"] = []
         
         # Debug: log the extracted doc_type
         self.log.info("LLM extraction debug", 
@@ -377,19 +424,9 @@ class LLMCommerceExtractor:
             if currency_hint:
                 parts.append(f"Suggested currency: {currency_hint}")
 
-        # Lightweight detector: derive hints from text when none provided
-        if not doc_type_hint:
-            tl = text.lower()
-            if "invoice" in tl or "fatura" in tl or "nota fiscal" in tl:
-                parts.append("Detected document type: invoice")
-            elif "purchase order" in tl or " po " in tl:
-                parts.append("Detected document type: purchase_order")
-            elif "banquet event order" in tl or " beo " in tl:
-                parts.append("Detected document type: beo")
-            elif "receipt" in tl or "recibo" in tl:
-                parts.append("Detected document type: receipt")
-            elif "quote" in tl or "quotation" in tl or "orcamento" in tl or "orçamento" in tl:
-                parts.append("Detected document type: quote")
+        # Don't do keyword matching - let the LLM identify the document type intelligently
+        # based on structure, content, and context. The system prompt already has
+        # guidance on Portuguese terms, so the LLM should handle this correctly.
         
         # Add the main document text
         parts.append("\n=== DOCUMENT TEXT ===")
@@ -407,6 +444,46 @@ class LLMCommerceExtractor:
         parts.append("- Use additionalProperties to capture any field that doesn't fit standard schema")
         parts.append("- Preserve original field names from document when possible (e.g., if document says 'Empresa', use 'Empresa' as field name)")
         parts.append("- Work in Portuguese, English, or mixed - understand semantic meaning, not literal words")
+        parts.append("")
+        parts.append("CRITICAL VALIDATION RULES:")
+        parts.append("1. DOCUMENT TYPE VALIDATION (PURELY SEMANTIC - NO KEYWORDS OR EXAMPLES):")
+        parts.append("   - FIRST, analyze the document's STRUCTURE and PURPOSE:")
+        parts.append("     * Does it have parties (buyer/seller)? Does it have items with quantities and prices?")
+        parts.append("     * Does it have financial totals? Does it represent a commercial transaction?")
+        parts.append("   - If YES → it's a commercial document. Now classify by PURPOSE and TRANSACTION FLOW:")
+        parts.append("     * Identify WHO is buying and WHO is selling")
+        parts.append("     * Identify the DOCUMENT'S ROLE in the transaction flow")
+        parts.append("     * Identify the TRANSACTION INTENT (ordering, billing, proposing, confirming)")
+        parts.append("     * Analyze the STRUCTURE and how information is organized")
+        parts.append("   - Classification should be based on:")
+        parts.append("     * purchase_order: Buyer initiating order/purchase from vendor")
+        parts.append("     * invoice: Vendor requesting payment for goods/services")
+        parts.append("     * quote: Vendor proposing prices before transaction")
+        parts.append("     * contract: Agreement with terms, conditions, signatures")
+        parts.append("     * receipt: Payment confirmation after transaction")
+        parts.append("     * order_form: Form-based order document")
+        parts.append("     * beo: Event/banquet ordering with event details")
+        parts.append("     * shipping_notice: Document about shipment/delivery")
+        parts.append("   - DO NOT use keyword matching - understand the semantic meaning and purpose")
+        parts.append("   - DO NOT look for specific words - understand the structure and transaction flow")
+        parts.append("   - Works in any language - understand meaning, not words")
+        parts.append("   - If the document is NOT a commercial transaction (no transaction intent, no items, no financial values),")
+        parts.append("     set doc_type to 'unknown' and add risk 'not_commercial_document'")
+        parts.append("")
+        parts.append("2. FLEXIBLE EXTRACTION:")
+        parts.append("   - Extract ANY and ALL relevant information you find - there are NO fixed fields")
+        parts.append("   - Use additionalProperties liberally - add ANY fields you discover (custom fields, special identifiers, etc.)")
+        parts.append("   - Preserve original field names from the document when possible")
+        parts.append("   - If you see a field that's relevant to the transaction, extract it - don't limit yourself to standard fields")
+        parts.append("   - Examples of fields to capture: custom IDs, internal codes, special terms, contact persons, delivery instructions, etc.")
+        parts.append("")
+        parts.append("3. DATA QUALITY:")
+        parts.append("   - DO NOT invent or guess values if they are not in the document")
+        parts.append("   - DO NOT use example/placeholder values (like 'INV-001', 'Item A', etc.)")
+        parts.append("   - If a field is not found, use null (not a placeholder)")
+        parts.append("   - If the document text is empty or too short, return minimal structure with risks indicating extraction issues")
+        parts.append("   - If you cannot extract real data, return null values and add appropriate risks")
+        parts.append("")
         parts.append("- Return a JSON object following the schema with all extracted information")
         
         return "\n".join(parts)
@@ -426,34 +503,36 @@ Return JSON following the canonical commerce document schema with proper data ty
     def _load_json_schema(self) -> dict[str, Any]:
         """Load JSON schema for structured output.
         
-        Schema is designed to be flexible and accept additional properties
-        in buyer, vendor, shipping, dates, terms, items, totals, and meta
-        to capture all relevant information from diverse document formats.
+        Schema is designed to be MAXIMALLY FLEXIBLE - allowing ANY fields to be extracted.
+        Only doc_type is required for validation. All other fields are optional and can be extended.
         """
         return {
             "type": "object",
-            "additionalProperties": False,
+            "additionalProperties": True,  # Allow top-level additional fields
             "properties": {
                 "doc": {
                     "type": "object",
-                    "additionalProperties": False,
+                    "additionalProperties": True,  # Allow additional metadata in doc
                     "properties": {
-                        "doc_type": {"type": "string"},
+                        "doc_type": {
+                            "type": "string",
+                            "enum": ["invoice", "purchase_order", "order_form", "beo", "quote", "proposal", "contract", "receipt", "shipping_notice", "unknown"]
+                        },
                         "doc_id": {"type": ["string", "null"]},
                         "source_filename": {"type": ["string", "null"]},
                         "source_mime": {"type": ["string", "null"]},
                         "extracted_at": {"type": ["string", "null"]},
                         "currency": {"type": ["string", "null"]}
                     },
-                    "required": ["doc_type", "doc_id", "source_filename", "source_mime", "extracted_at", "currency"]
+                    "required": ["doc_type"]
                 },
                 "buyer": {
                     "type": ["object", "null"],
-                    "additionalProperties": True
+                    "additionalProperties": True  # Extract ANY buyer fields found
                 },
                 "vendor": {
                     "type": ["object", "null"],
-                    "additionalProperties": True
+                    "additionalProperties": True  # Extract ANY vendor fields found
                 },
                 "event": {
                     "type": ["object", "null"],
@@ -461,18 +540,19 @@ Return JSON following the canonical commerce document schema with proper data ty
                 },
                 "dates": {
                     "type": ["object", "null"],
-                    "additionalProperties": True
+                    "additionalProperties": True  # Extract ANY date fields found
                 },
                 "shipping": {
                     "type": ["object", "null"],
-                    "additionalProperties": True
+                    "additionalProperties": True  # Extract ANY shipping fields found
                 },
                 "items": {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "additionalProperties": True,
+                        "additionalProperties": True,  # Extract ANY item fields found
                         "properties": {
+                            # These are just SUGGESTIONS - not required, can be extended
                             "line_no": {"type": ["string", "integer", "null"]},
                             "sku": {"type": ["string", "null"]},
                             "name": {"type": ["string", "null"]},
@@ -493,8 +573,9 @@ Return JSON following the canonical commerce document schema with proper data ty
                 },
                 "totals": {
                     "type": ["object", "null"],
-                    "additionalProperties": True,
+                    "additionalProperties": True,  # Extract ANY total/calculation fields found
                     "properties": {
+                        # These are just SUGGESTIONS - not required, can be extended
                         "subtotal": {"type": ["number", "null"]},
                         "discounts": {
                             "type": "array",
@@ -523,20 +604,11 @@ Return JSON following the canonical commerce document schema with proper data ty
                 },
                 "terms": {
                     "type": ["object", "null"],
-                    "additionalProperties": True,
-                    "properties": {
-                        "payment_terms": {"type": ["string", "null"]},
-                        "installments": {"type": ["string", "null"]},
-                        "notes": {"type": ["string", "null"]}
-                    }
+                    "additionalProperties": True  # Extract ANY terms/conditions fields found
                 },
                 "signatures": {
                     "type": ["object", "null"],
-                    "additionalProperties": True,
-                    "properties": {
-                        "customer_signed_at": {"type": ["string", "null"]},
-                        "approver_signed_at": {"type": ["string", "null"]}
-                    }
+                    "additionalProperties": True  # Extract ANY signature fields found
                 },
                 "risks": {"type": "array", "items": {"type": "string"}},
                 "meta": {
@@ -544,7 +616,7 @@ Return JSON following the canonical commerce document schema with proper data ty
                     "additionalProperties": True
                 }
             },
-            "required": ["doc", "items", "totals", "risks"]
+            "required": ["doc", "risks"]  # Only doc and risks are truly required
         }
 
     def _empty_document(self, metadata: dict[str, Any], warnings: list[str]) -> dict[str, Any]:

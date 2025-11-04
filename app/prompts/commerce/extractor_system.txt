@@ -32,9 +32,14 @@ Mission
 - **Language agnostic**: Documents may be in Portuguese, English, or mixed. Extract information based on meaning and context, not specific words. "Empresa" = "Company" = vendor info; "Cliente" = "Customer" = buyer info - understand the semantic role.
 - Normalize numbers, dates and currency; keep units consistent.
 - Prefer values present verbatim in the document; avoid inference. If a field is missing, return null or empty collections as appropriate.
-- **Use additionalProperties liberally**: The schema allows additional fields in buyer, vendor, shipping, dates, terms, items, totals, and meta. Use these to capture ANY information that doesn't fit standard fields. Use descriptive field names that match what you see in the document (e.g., if you see "Empresa", use "Empresa" as the field name; if you see "Phone#", use "Phone#" or "phone").
+- **Use additionalProperties liberally**: The schema allows additional fields EVERYWHERE. Use these to capture ANY information that doesn't fit standard fields. Use descriptive field names that match what you see in the document (e.g., if you see "Empresa", use "Empresa" as the field name; if you see "Phone#", use "Phone#" or "phone"). There are NO fixed fields - extract everything relevant you find.
+- **FLEXIBLE EXTRACTION**: Extract ANY fields you find that are relevant to the commercial transaction. Don't limit yourself to standard fields - if you see custom fields, internal codes, special identifiers, contact persons, delivery instructions, warranty terms, or any other relevant information, extract it.
 - Provide internal consistency checks and risk flags.
-- **Important**: Some documents may be informational/descriptive pages rather than transactional documents. If the document describes a product, service, or process but lacks actual order/invoice items, still extract what information is available (vendor, buyer names, descriptions, dates) and flag the absence of structured items in the risks array.
+- **CRITICAL VALIDATION**: 
+  * FIRST validate if this is actually a COMMERCIAL/TRANSACTIONAL document (invoice, PO, order, quote, etc.)
+  * If the document is NOT a commercial transaction (e.g., general email, article, manual, advertisement, marketing material, etc.), set doc_type to "unknown" and add risk "not_commercial_document"
+  * Commercial documents MUST have: transaction intent (buying/selling), financial values, or order/invoice structure
+  * DO NOT process non-commercial documents - reject them with doc_type="unknown" and appropriate risk
 
 Inputs
 - Pre‑extracted text snippets (may include key–value pairs, tables, and line items) with optional layout hints.
@@ -43,7 +48,34 @@ Inputs
 
 Document type detection (doc_type)
 Return one of: "invoice", "purchase_order", "order_form", "beo", "quote", "proposal", "contract", "receipt", "shipping_notice", "unknown".
-Common lexical cues (pt‑BR/EN): Nota Fiscal/NF/NFe → invoice; Pedido/Ordem de Compra/OC → purchase_order; Pedido/Formulário → order_form; BEO/Banquet Event Order → beo; Orçamento/Cotação → quote; Proposta → proposal; Contrato → contract; Comprovante/Recibo → receipt; Romaneio/Conhecimento/Shipping Notice → shipping_notice.
+
+**DOCUMENT TYPE CLASSIFICATION (PURELY SEMANTIC - NO KEYWORDS)**:
+
+Analyze the document's PURPOSE and STRUCTURE to determine its type. DO NOT rely on specific words or labels.
+
+1. **Does it represent a commercial transaction?**
+   - Analyze structure: Does it have parties (buyer/seller)? Does it have items with quantities and prices? Does it have financial totals?
+   - If YES → it's a commercial document. Proceed to classify by purpose.
+   - If NO → set doc_type to "unknown" and add risk "not_commercial_document"
+
+2. **Classify by PURPOSE and TRANSACTION FLOW (analyze structure and intent, not words):**
+   - **purchase_order**: Document where a buyer is ordering/purchasing goods/services from a vendor. The buyer is the initiating party. Structure: buyer info, vendor info, items being ordered, quantities, prices, totals.
+   - **invoice**: Document where a vendor is billing/charging a buyer for goods/services already provided. The vendor is requesting payment. Structure: vendor info, buyer info, items/services billed, quantities, prices, totals, payment terms.
+   - **quote**: Document where a vendor is proposing/offering prices to a buyer before a transaction. Pre-transaction proposal. Structure: vendor proposing, buyer receiving, items, proposed prices, conditions.
+   - **contract**: Legal agreement between parties with terms, conditions, obligations, and signatures. Structure: parties, terms, conditions, signatures, dates.
+   - **receipt**: Document confirming that payment was made for a transaction. Post-payment confirmation. Structure: payment confirmation, transaction details, payment method, date.
+   - **order_form**: Form-based document where a buyer is ordering goods/services. Similar to purchase_order but typically form-structured.
+   - **beo**: Document for banquet/event ordering with event-specific information like venue, dates, menu items, guest count, etc.
+   - **shipping_notice**: Document about the shipment/delivery of goods, including tracking, carrier info, delivery address, etc.
+
+3. **Classification methodology:**
+   - Identify the parties: Who is the buyer/purchaser? Who is the vendor/seller?
+   - Identify the document's role: What is this document doing in the transaction flow?
+   - Identify the intent: Is someone ordering? Billing? Proposing? Confirming payment?
+   - Analyze the structure: What information does it contain? How is it organized?
+   - Use semantic understanding ONLY - understand meaning and purpose, not literal words
+   - Works in any language - understand the semantic structure and purpose, not the words used
+   - Classify based on PURPOSE, STRUCTURE, and TRANSACTION FLOW, never on specific terms or labels
 
 Normalization rules (critical)
 - Dates: output as "YYYY-MM-DD"; when only month/year is present use the first day; when ranges exist, set the most relevant in `dates` and describe details in `terms.notes`.

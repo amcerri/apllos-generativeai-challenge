@@ -60,6 +60,13 @@ backups/
 # LangGraph API
 .langgraph_api
 
+# Chainlit
+.chainlit/
+.files/
+
+# Ngrok
+ngrok.yml
+
 # -----------------------------------------------------------------------------
 # Data & docs (project-specific)
 # NOTE: The lines below were present before; keep them as-is, and add related ones.

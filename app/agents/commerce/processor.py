@@ -277,8 +277,8 @@ class DocumentProcessor:
                     else:
                         if len(full_text) >= self.MIN_TEXT_LENGTH:
                             warnings.append("PDF text extraction yielded metadata-only content, trying OCR")
-                        else:
-                            warnings.append("PDF text extraction yielded insufficient text, trying OCR")
+                    else:
+                        warnings.append("PDF text extraction yielded insufficient text, trying OCR")
                         
             except Exception as e:
                 warnings.append(f"PDF direct extraction failed: {str(e)}")

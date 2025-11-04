@@ -262,7 +262,8 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
         try:
             import os
             
-            dsn = os.environ.get("DATABASE_URL")
+            # Try APLLOS_DATABASE_URL first (for Chainlit compatibility), then DATABASE_URL
+            dsn = os.environ.get("APLLOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
             if dsn:
                 # Convert postgresql+psycopg:// to postgresql:// for SQLAlchemy
                 if dsn.startswith("postgresql+psycopg://"):

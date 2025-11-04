@@ -309,6 +309,61 @@ def _dict_has_any_value(d: dict[str, Any] | None) -> bool:
     return any(_has_value(v) for v in d.values())
 
 
+def _format_dict_readable(d: dict[str, Any], symbol: str = "", indent: int = 0) -> str:
+    """Format a dictionary in a human-readable way.
+    
+    Parameters
+    ----------
+    d: Dictionary to format
+    symbol: Currency symbol for formatting numbers
+    indent: Indentation level for nested structures
+    
+    Returns
+    -------
+    Formatted string representation
+    """
+    if not d:
+        return ""
+    
+    lines = []
+    prefix = "  " * indent
+    
+    for key, value in sorted(d.items()):
+        if not _has_value(value):
+            continue
+        
+        # Format key name
+        key_label = key.replace("_", " ").strip()
+        key_label = " ".join(word.capitalize() if word else "" for word in key_label.split())
+        
+        # Format value based on type
+        if isinstance(value, dict):
+            # Nested dict - format recursively
+            nested_str = _format_dict_readable(value, symbol, indent + 1)
+            if nested_str:
+                lines.append(f"{prefix}{key_label}:")
+                lines.append(nested_str)
+        elif isinstance(value, list):
+            # List - format each item
+            if value:
+                lines.append(f"{prefix}{key_label}:")
+                for item in value:
+                    if isinstance(item, dict):
+                        item_str = _format_dict_readable(item, symbol, indent + 1)
+                        lines.append(item_str)
+                    else:
+                        formatted_item = _format_field_value(item, symbol)
+                        if formatted_item:
+                            lines.append(f"{prefix}  - {formatted_item}")
+        else:
+            # Simple value
+            formatted_value = _format_field_value(value, symbol)
+            if formatted_value:
+                lines.append(f"{prefix}{key_label}: {formatted_value}")
+    
+    return "\n".join(lines)
+
+
 def _format_field_value(value: Any, symbol: str = "") -> str:
     """Format a field value for display based on its type."""
     if value is None:
@@ -319,10 +374,51 @@ def _format_field_value(value: Any, symbol: str = "") -> str:
         return f"{value:,.2f}"
     if isinstance(value, str):
         return value.strip()
-    if isinstance(value, (list, dict)):
+    if isinstance(value, dict):
+        # Format dict in readable way (single line for simple dicts, multi-line for complex)
+        if len(value) <= 3 and all(isinstance(v, (str, int, float)) for v in value.values()):
+            # Simple dict - format inline
+            parts = []
+            for k, v in sorted(value.items()):
+                k_label = k.replace("_", " ").strip().capitalize()
+                v_str = _format_field_value(v, symbol)
+                if v_str:
+                    parts.append(f"{k_label}: {v_str}")
+            return ", ".join(parts) if parts else ""
+        else:
+            # Complex dict - will be handled by caller with _format_dict_readable
+            return ""
+    if isinstance(value, list):
         if len(value) == 0:
             return ""
-        return str(value)
+        # Format list items
+        formatted_items = []
+        for item in value:
+            if isinstance(item, dict):
+                # Format dict items inline if simple
+                if len(item) <= 3 and all(isinstance(v, (str, int, float)) for v in item.values()):
+                    parts = []
+                    for k, v in sorted(item.items()):
+                        k_label = k.replace("_", " ").strip().capitalize()
+                        v_str = _format_field_value(v, symbol)
+                        if v_str:
+                            parts.append(f"{k_label}: {v_str}")
+                    formatted_items.append("; ".join(parts))
+                else:
+                    # Complex dict in list - format as readable text
+                    parts = []
+                    for k, v in sorted(item.items()):
+                        if _has_value(v):
+                            k_label = k.replace("_", " ").strip().capitalize()
+                            v_str = _format_field_value(v, symbol)
+                            if v_str:
+                                parts.append(f"{k_label}: {v_str}")
+                    formatted_items.append(", ".join(parts))
+            else:
+                formatted_item = _format_field_value(item, symbol)
+                if formatted_item:
+                    formatted_items.append(formatted_item)
+        return "; ".join(formatted_items) if formatted_items else ""
     return str(value)
 
 
@@ -346,7 +442,7 @@ def _render_dict_section(d: dict[str, Any], title: str, language: str, symbol: s
     lines = []
     if title:
         lines.append(title)
-        lines.append("-" * 30)
+        lines.append("-" * 50)
     
     # Display fields exactly as extracted - no keyword translation or fixed labels
     # Only format the display nicely (capitalize first letter, replace underscores)
@@ -359,15 +455,44 @@ def _render_dict_section(d: dict[str, Any], title: str, language: str, symbol: s
             continue
         
         # Format the label from the key name (just cosmetic, no translation)
-        # Keep the key as-is, just make it readable
         label = key.replace("_", " ").strip()
-        # Capitalize first letter of each word
         label = " ".join(word.capitalize() if word else "" for word in label.split())
         
-        # Format the value
-        formatted_value = _format_field_value(value, symbol)
-        if formatted_value:
-            lines.append(f"{label}: {formatted_value}")
+        # Format the value based on its type
+        if isinstance(value, dict):
+            # Complex dict - format with readable structure
+            formatted_dict = _format_dict_readable(value, symbol, indent=0)
+            if formatted_dict:
+                lines.append(f"{label}:")
+                # Indent each line of the formatted dict
+                for line in formatted_dict.split("\n"):
+                    if line.strip():
+                        lines.append(f"  {line}")
+        elif isinstance(value, list):
+            # List - format items
+            if value:
+                lines.append(f"{label}:")
+                for item in value:
+                    if isinstance(item, dict):
+                        # Format dict items in a readable way
+                        item_parts = []
+                        for k, v in sorted(item.items()):
+                            if _has_value(v):
+                                k_label = k.replace("_", " ").strip().capitalize()
+                                v_str = _format_field_value(v, symbol)
+                                if v_str:
+                                    item_parts.append(f"{k_label}: {v_str}")
+                        if item_parts:
+                            lines.append(f"  - {', '.join(item_parts)}")
+                    else:
+                        formatted_item = _format_field_value(item, symbol)
+                        if formatted_item:
+                            lines.append(f"  - {formatted_item}")
+        else:
+            # Simple value
+            formatted_value = _format_field_value(value, symbol)
+            if formatted_value:
+                lines.append(f"{label}: {formatted_value}")
     
     # Only add blank line if we have content (accounting for optional title)
     if len(lines) > (2 if title else 0):
@@ -378,27 +503,66 @@ def _render_dict_section(d: dict[str, Any], title: str, language: str, symbol: s
 
 
 def _detect_language(doc: _DocView) -> str:
-    """Detect document language based on currency, item names, and context.
+    """Detect document language based on document content, not just currency.
     
     Returns 'en' for English or 'pt' for Portuguese (defaults to 'pt').
     """
-    # Currency-based detection (strong indicator)
-    currency = (doc.currency or "").upper()
-    if currency in {"USD", "GBP", "EUR", "CAD", "AUD", "NZD"}:
-        return "en"
+    # Priority 1: Check document metadata and fields for language indicators
+    # Check vendor/buyer names and addresses for Portuguese indicators
+    portuguese_indicators = []
+    english_indicators = []
     
-    # Check item names for English keywords
-    english_keywords = {"order", "item", "quantity", "price", "total", "subtotal", "shipping", "tax"}
-    portuguese_keywords = {"pedido", "item", "quantidade", "preço", "total", "subtotal", "frete", "imposto"}
+    # Check vendor fields
+    if doc.vendor:
+        vendor_text = " ".join([str(v).lower() for v in doc.vendor.values() if v])
+        portuguese_indicators.extend([
+            "ltda", "cnpj", "cpf", "brasil", "brasileiro", "são paulo", "rio de janeiro",
+            "cep", "endereço", "telefone", "empresa", "fornecedor"
+        ])
+        english_indicators.extend([
+            "inc", "llc", "corp", "ltd", "company", "street", "avenue", "road",
+            "phone", "address", "zip code", "vendor", "supplier"
+        ])
+        pt_count = sum(1 for ind in portuguese_indicators if ind in vendor_text)
+        en_count = sum(1 for ind in english_indicators if ind in vendor_text)
+        if pt_count > en_count and pt_count > 0:
+            return "pt"
+        if en_count > pt_count and en_count > 0:
+            return "en"
     
-    item_text = " ".join([(it.name or "").lower() for it in doc.items[:5]])
+    # Check buyer fields
+    if doc.buyer:
+        buyer_text = " ".join([str(v).lower() for v in doc.buyer.values() if v])
+        pt_count = sum(1 for ind in portuguese_indicators if ind in buyer_text)
+        en_count = sum(1 for ind in english_indicators if ind in buyer_text)
+        if pt_count > en_count and pt_count > 0:
+            return "pt"
+        if en_count > pt_count and en_count > 0:
+            return "en"
+    
+    # Priority 2: Check item names and descriptions for language
+    english_keywords = {"order", "item", "quantity", "price", "total", "subtotal", "shipping", "tax", "unit", "amount"}
+    portuguese_keywords = {"pedido", "item", "quantidade", "preço", "total", "subtotal", "frete", "imposto", "unidade", "valor", "produto", "serviço"}
+    
+    item_text = " ".join([(it.name or "").lower() + " " + (it.description or "").lower() for it in doc.items[:10]])
     en_count = sum(1 for kw in english_keywords if kw in item_text)
     pt_count = sum(1 for kw in portuguese_keywords if kw in item_text)
     
+    if pt_count > en_count and pt_count > 0:
+        return "pt"
     if en_count > pt_count and en_count > 0:
         return "en"
     
-    # Default to Portuguese (pt-BR is the primary language)
+    # Priority 3: Currency is a weak indicator (documents can be in Portuguese with USD)
+    # Only use currency if we have no other indicators
+    currency = (doc.currency or "").upper()
+    if currency == "BRL" or currency in {"ARS", "CLP", "MXN"}:
+        return "pt"
+    if currency in {"USD", "GBP", "EUR", "CAD", "AUD", "NZD"} and not item_text.strip():
+        # Only use currency as indicator if we have no item text to analyze
+        return "en"
+    
+    # Default to Portuguese (pt-BR is the primary language for this system)
     return "pt"
 
 
@@ -439,28 +603,77 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
         linhas.extend(buyer_lines)
 
     # === DATAS ===
-    dates_lines = _render_dict_section(doc.dates_full, "DATAS" if _dict_has_any_value(doc.dates_full) else "", "pt", simbolo)
-    linhas.extend(dates_lines)
+    if _dict_has_any_value(doc.dates_full):
+        linhas.append("DATAS")
+        linhas.append("-" * 50)
+        for key, value in sorted(doc.dates_full.items()):
+            if not _has_value(value):
+                continue
+            # Skip internal/metadata fields
+            if key.startswith("_") or key in ("source_filename", "source_mime", "extracted_at", "extraction_method"):
+                continue
+            # Format the label
+            label = key.replace("_", " ").strip()
+            label = " ".join(word.capitalize() if word else "" for word in label.split())
+            linhas.append(f"{label}: {value}")
+        linhas.append("")
 
     # === TOTAIS ===
-    # Render totals dynamically, but format money values specially
-    totals_dict = dict(doc.totals)
-    # Format known money fields
-    if "subtotal" in totals_dict and _has_value(totals_dict["subtotal"]):
-        totals_dict["subtotal"] = _fmt_money(totals_dict["subtotal"], simbolo)
-    if "freight" in totals_dict and _has_value(totals_dict["freight"]):
-        totals_dict["freight"] = _fmt_money(totals_dict["freight"], simbolo)
-    if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
-        totals_dict["grand_total"] = total_txt
-    
-    totals_lines = _render_dict_section(totals_dict, "VALORES TOTAIS" if _dict_has_any_value(totals_dict) else "", "pt", "")
-    # Override label for grand_total
-    if totals_lines and "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
-        for i, line in enumerate(totals_lines):
-            if "Grand Total" in line or "grand_total" in line.lower():
-                totals_lines[i] = f"TOTAL GERAL: {total_txt}"
-                break
-    linhas.extend(totals_lines)
+    if _dict_has_any_value(doc.totals):
+        linhas.append("VALORES TOTAIS")
+        linhas.append("-" * 50)
+        totals_dict = dict(doc.totals)
+        
+        # Show grand_total first if available
+        if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+            linhas.append(f"TOTAL GERAL: {total_txt}")
+        
+        # Then show other totals (subtotal, freight, taxes, etc.)
+        for key, value in sorted(totals_dict.items()):
+            if key == "grand_total":
+                continue  # Already shown above
+            if not _has_value(value):
+                continue
+            
+            # Format the label
+            label = key.replace("_", " ").strip()
+            label = " ".join(word.capitalize() if word else "" for word in label.split())
+            
+            # Format money values
+            if isinstance(value, (int, float)):
+                formatted_value = _fmt_money(value, simbolo)
+            elif isinstance(value, list):
+                # Handle arrays (taxes, discounts, etc.) - format readably
+                if value:
+                    linhas.append(f"{label}:")
+                    for item in value:
+                        if isinstance(item, dict):
+                            # Format dict items in a readable way
+                            item_parts = []
+                            for k, v in sorted(item.items()):
+                                if _has_value(v):
+                                    k_label = k.replace("_", " ").strip().capitalize()
+                                    if isinstance(v, (int, float)):
+                                        v_str = _fmt_money(v, simbolo)
+                                    else:
+                                        v_str = str(v)
+                                    if v_str:
+                                        item_parts.append(f"{k_label}: {v_str}")
+                            if item_parts:
+                                linhas.append(f"  - {', '.join(item_parts)}")
+                        else:
+                            item_str = _format_field_value(item, simbolo)
+                            if item_str:
+                                linhas.append(f"  - {item_str}")
+                    continue  # Skip the normal append since we already added lines
+                else:
+                    formatted_value = ""
+            else:
+                formatted_value = _format_field_value(value, simbolo)
+            
+            if formatted_value:
+                linhas.append(f"{label}: {formatted_value}")
+        linhas.append("")
 
     # === ITENS PRINCIPAIS ===
     itens_ordenados = sorted(
@@ -470,15 +683,16 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
     )
     if itens_ordenados:
         linhas.append("ITENS PRINCIPAIS")
-        linhas.append("-" * 30)
+        linhas.append("-" * 50)
         
         # Mostrar TODOS os itens - sem limite para commerce agent
-        total_itens = len(itens_ordenados)
         for i, it in enumerate(itens_ordenados, 1):
             qtd = _fmt_float_ptbr(it.qty) if it.qty is not None else "?"
-            up = _fmt_money(it.unit_price, simbolo)
-            lt = _fmt_money(it.line_total, simbolo)
+            up = _fmt_money(it.unit_price, simbolo) if it.unit_price is not None else "(não informado)"
+            lt = _fmt_money(it.line_total, simbolo) if it.line_total is not None else "(não informado)"
             nome = it.name or "(sem descrição)"
+            
+            # Format item with proper spacing and line breaks
             linhas.append(f"{i}. {nome}")
             linhas.append(f"   Quantidade: {qtd}")
             linhas.append(f"   Preço unitário: {up}")
@@ -488,7 +702,7 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
     # === RISCOS E ALERTAS ===
     if doc.risks:
         linhas.append("RISCOS E ALERTAS")
-        linhas.append("-" * 30)
+        linhas.append("-" * 50)
         for r in doc.risks[:10]:
             # Verificar se é um erro de LLM
             if r.startswith("llm_error:"):
@@ -502,7 +716,7 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
 
     # === INTERAÇÃO ===
     linhas.append("INTERAÇÃO")
-    linhas.append("-" * 30)
+    linhas.append("-" * 50)
     if total_txt != "(não informado)":
         linhas.append("Gostaria de alguma análise específica sobre este pedido?")
         linhas.append("Posso ajudar com comparações, simulações ou análises detalhadas.")
@@ -543,28 +757,77 @@ def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_it
         lines.extend(buyer_lines)
 
     # === DATES ===
-    dates_lines = _render_dict_section(doc.dates_full, "DATES" if _dict_has_any_value(doc.dates_full) else "", "en", symbol)
-    lines.extend(dates_lines)
+    if _dict_has_any_value(doc.dates_full):
+        lines.append("DATES")
+        lines.append("-" * 50)
+        for key, value in sorted(doc.dates_full.items()):
+            if not _has_value(value):
+                continue
+            # Skip internal/metadata fields
+            if key.startswith("_") or key in ("source_filename", "source_mime", "extracted_at", "extraction_method"):
+                continue
+            # Format the label
+            label = key.replace("_", " ").strip()
+            label = " ".join(word.capitalize() if word else "" for word in label.split())
+            lines.append(f"{label}: {value}")
+        lines.append("")
 
     # === TOTALS ===
-    # Render totals dynamically, but format money values specially
-    totals_dict = dict(doc.totals)
-    # Format known money fields
-    if "subtotal" in totals_dict and _has_value(totals_dict["subtotal"]):
-        totals_dict["subtotal"] = _fmt_money_en(totals_dict["subtotal"], symbol)
-    if "freight" in totals_dict and _has_value(totals_dict["freight"]):
-        totals_dict["freight"] = _fmt_money_en(totals_dict["freight"], symbol)
-    if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
-        totals_dict["grand_total"] = total_txt
-    
-    totals_lines = _render_dict_section(totals_dict, "TOTAL VALUES" if _dict_has_any_value(totals_dict) else "", "en", "")
-    # Override label for grand_total
-    if totals_lines and "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
-        for i, line in enumerate(totals_lines):
-            if "Grand Total" in line or "grand_total" in line.lower():
-                totals_lines[i] = f"GRAND TOTAL: {total_txt}"
-                break
-    lines.extend(totals_lines)
+    if _dict_has_any_value(doc.totals):
+        lines.append("TOTAL VALUES")
+        lines.append("-" * 50)
+        totals_dict = dict(doc.totals)
+        
+        # Show grand_total first if available
+        if "grand_total" in totals_dict and _has_value(totals_dict["grand_total"]):
+            lines.append(f"GRAND TOTAL: {total_txt}")
+        
+        # Then show other totals (subtotal, freight, taxes, etc.)
+        for key, value in sorted(totals_dict.items()):
+            if key == "grand_total":
+                continue  # Already shown above
+            if not _has_value(value):
+                continue
+            
+            # Format the label
+            label = key.replace("_", " ").strip()
+            label = " ".join(word.capitalize() if word else "" for word in label.split())
+            
+            # Format money values
+            if isinstance(value, (int, float)):
+                formatted_value = _fmt_money_en(value, symbol)
+            elif isinstance(value, list):
+                # Handle arrays (taxes, discounts, etc.) - format readably
+                if value:
+                    lines.append(f"{label}:")
+                    for item in value:
+                        if isinstance(item, dict):
+                            # Format dict items in a readable way
+                            item_parts = []
+                            for k, v in sorted(item.items()):
+                                if _has_value(v):
+                                    k_label = k.replace("_", " ").strip().capitalize()
+                                    if isinstance(v, (int, float)):
+                                        v_str = _fmt_money_en(v, symbol)
+                                    else:
+                                        v_str = str(v)
+                                    if v_str:
+                                        item_parts.append(f"{k_label}: {v_str}")
+                            if item_parts:
+                                lines.append(f"  - {', '.join(item_parts)}")
+                        else:
+                            item_str = _format_field_value(item, symbol)
+                            if item_str:
+                                lines.append(f"  - {item_str}")
+                    continue  # Skip the normal append since we already added lines
+                else:
+                    formatted_value = ""
+            else:
+                formatted_value = _format_field_value(value, symbol)
+            
+            if formatted_value:
+                lines.append(f"{label}: {formatted_value}")
+        lines.append("")
 
     # === TOP ITEMS ===
     sorted_items = sorted(
@@ -574,15 +837,16 @@ def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_it
     )
     if sorted_items:
         lines.append("TOP ITEMS")
-        lines.append("-" * 30)
+        lines.append("-" * 50)
         
         # Show ALL items - no limit for commerce agent
-        total_items = len(sorted_items)
         for i, it in enumerate(sorted_items, 1):
             qty = _fmt_float_en(it.qty) if it.qty is not None else "?"
-            up = _fmt_money_en(it.unit_price, symbol)
-            lt = _fmt_money_en(it.line_total, symbol)
+            up = _fmt_money_en(it.unit_price, symbol) if it.unit_price is not None else "(not specified)"
+            lt = _fmt_money_en(it.line_total, symbol) if it.line_total is not None else "(not specified)"
             name = it.name or "(no description)"
+            
+            # Format item with proper spacing and line breaks
             lines.append(f"{i}. {name}")
             lines.append(f"   Quantity: {qty}")
             lines.append(f"   Unit Price: {up}")
@@ -592,7 +856,7 @@ def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_it
     # === RISKS AND ALERTS ===
     if doc.risks:
         lines.append("RISKS AND ALERTS")
-        lines.append("-" * 30)
+        lines.append("-" * 50)
         for r in doc.risks[:10]:
             # Check if it's an LLM error
             if r.startswith("llm_error:"):
@@ -606,7 +870,7 @@ def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_it
 
     # === INTERACTION ===
     lines.append("INTERACTION")
-    lines.append("-" * 30)
+    lines.append("-" * 50)
     if total_txt != "(not specified)":
         lines.append("Would you like any specific analysis on this order?")
         lines.append("I can help with comparisons, simulations, or detailed analyses.")
@@ -711,7 +975,9 @@ def _fmt_money(v: Any, sym: str) -> str:
         f = float(v)
     except Exception:
         return "(não informado)"
-    return f"{sym} {f:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    # Format with proper spacing: R$ 9.360,40
+    formatted = f"{f:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"{sym} {formatted}" if sym else formatted
 
 
 def _fmt_money_en(v: Any, sym: str) -> str:
@@ -721,7 +987,9 @@ def _fmt_money_en(v: Any, sym: str) -> str:
         f = float(v)
     except Exception:
         return "(not specified)"
-    return f"{sym} {f:,.2f}"
+    # Format with proper spacing: US$ 9,360.40
+    formatted = f"{f:,.2f}"
+    return f"{sym} {formatted}" if sym else formatted
 
 
 def _fmt_float_ptbr(v: float | None) -> str:

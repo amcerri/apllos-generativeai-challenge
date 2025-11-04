@@ -71,11 +71,19 @@ class _NoopSaver:
     # The real Postgres saver exposes methods used by LangGraph runtime. We
     # intentionally keep this stub permissive: attribute access will succeed
     # (returning callables that do nothing) to avoid crashes in early bootstrap.
+    # For async methods, we need to return coroutines, not regular functions.
     def __getattr__(self, name: str) -> Any:  # pragma: no cover - defensive
-        def _noop(*_args: Any, **_kwargs: Any) -> None:
-            return None
-
-        return _noop
+        # Check if method name suggests it's async (starts with 'a' like 'aget', 'aput', etc.)
+        if name.startswith("a") and name[1:2].isalpha():
+            # Return an async coroutine function
+            async def _async_noop(*_args: Any, **_kwargs: Any) -> None:
+                return None
+            return _async_noop
+        else:
+            # Return a regular function for sync methods
+            def _noop(*_args: Any, **_kwargs: Any) -> None:
+                return None
+            return _noop
 
 
 def _cleanup_old_checkpoints(saver: Any, *, max_age_hours: int = 168) -> tuple[bool, str]:
@@ -173,7 +181,9 @@ def get_checkpointer(
 
     backend = backend or os.getenv("CHECKPOINTER_BACKEND", "postgres").strip().lower()
     table = table or os.getenv("CHECKPOINTER_TABLE", "checkpoints").strip() or "checkpoints"
-    url = url or os.getenv("DATABASE_URL", "").strip()
+    # Try APLLOS_DATABASE_URL first (for Chainlit compatibility), then DATABASE_URL
+    url = url or os.getenv("APLLOS_DATABASE_URL") or os.getenv("DATABASE_URL", "")
+    url = url.strip() if url else ""
 
     if backend != "postgres":
         _log.warning("unknown checkpointer backend '%s'; using Noop", backend)

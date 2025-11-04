@@ -1,0 +1,65 @@
+# Chainlit configuration file
+# Documentation: https://docs.chainlit.io/api-reference/configuration
+
+[project]
+# Project name
+name = "Assistente Apllos"
+
+# Project description
+description = "Sistema multi-agente inteligente para análises, conhecimento e processamento de documentos"
+
+# Logo path (relative to project root)
+logo = "public/logo.png"
+
+# Favicon path (relative to project root)
+favicon = "public/favicon.png"
+
+# Large file upload configuration
+[project.upload]
+# Maximum file size in MB
+max_file_size = 50
+# Maximum number of files per upload
+max_files = 5
+# Accepted file types
+accept = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/msword", "text/plain", "image/png", "image/jpeg", "image/tiff", "image/bmp"]
+
+# UI configuration
+[UI]
+# Hide chainlit branding
+hide_cot = false
+# Show readme when starting the app
+show_readme_as_default = false
+# Show prompt playground
+show_plain_playground = false
+# Theme
+theme = "light"
+# Font size
+font_size = 14
+# Font family
+font_family = "Inter"
+# Custom CSS (optional)
+# custom_css = "path/to/custom.css"
+# Custom JS (optional)
+# custom_js = "path/to/custom.js"
+# Custom head HTML (optional)
+# custom_head = "path/to/custom.html"
+
+# Features
+[features]
+# Enable prompt playground
+prompt_playground = false
+# Enable agents
+agents = false
+# Enable speech to text
+speech_to_text = false
+# Enable text to speech
+text_to_speech = false
+# Enable file upload
+file_upload = true
+
+# Database configuration
+# Disable Chainlit's data layer since we use LangGraph Server for persistence
+[database]
+# Set to empty string or omit DATABASE_URL env var to disable data layer
+# The Chainlit data layer is optional and not needed for this application
+

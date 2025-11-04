@@ -147,24 +147,86 @@ class QueryAssistant:
             "input": input_data
         }
         
+        # Get the current state before starting a new run to detect old answers
+        previous_answer = None
+        try:
+            response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}/state")
+            if response.status_code == 200:
+                state = response.json()
+                values = state.get("values", {})
+                previous_answer = values.get("answer")
+        except Exception:
+            # If we can't get the state, that's fine - we'll just check for any answer
+            pass
+        
         response = await self.http_client.post(
             f"{self.base_url}/threads/{thread_id}/runs",
             json=run_data
         )
         response.raise_for_status()
-        run_data = response.json()
-        run_id = run_data["run_id"]
+        run_response = response.json()
+        run_id = run_response.get("run_id")
         
         # Poll for completion
+        # We need to wait for the new run to complete, not just for any answer
         max_attempts = self.polling_timeout // self.polling_interval
+        answer_updated = False
+        
         for attempt in range(max_attempts):
+            # Check run status if available
+            run_status = None
+            if run_id:
+                try:
+                    run_status_response = await self.http_client.get(
+                        f"{self.base_url}/threads/{thread_id}/runs/{run_id}"
+                    )
+                    if run_status_response.status_code == 200:
+                        run_status = run_status_response.json()
+                except Exception:
+                    # If run status endpoint is not available, that's fine
+                    pass
+            
             response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}/state")
             response.raise_for_status()
             state = response.json()
             
             values = state.get("values", {})
-            if values.get("answer"):
-                break
+            current_answer = values.get("answer")
+            
+            # Check if we have a new answer
+            # If we had a previous answer, we need to detect a change
+            # If we didn't have a previous answer, any answer is new
+            if current_answer:
+                if previous_answer is None:
+                    # No previous answer, this is new
+                    answer_updated = True
+                    break
+                elif previous_answer != current_answer:
+                    # Answer changed, this is the new one
+                    answer_updated = True
+                    break
+                # If answer is the same as previous, it's still the old one - keep polling
+                # But wait a bit to ensure the run has had time to start
+                if attempt >= 2:  # Wait at least 2 polling intervals before accepting same answer
+                    # This might be a case where the query legitimately returns the same answer
+                    # Check if the run status indicates completion
+                    if run_status:
+                        status = run_status.get("status", "").lower()
+                        if status in ("success", "completed", "end"):
+                            answer_updated = True
+                            break
+            
+            # Check run status for completion
+            if run_status:
+                status = run_status.get("status", "").lower()
+                if status in ("success", "completed", "end"):
+                    # Run completed, check if we have an answer
+                    if current_answer:
+                        answer_updated = True
+                        break
+                elif status in ("failed", "error", "cancelled"):
+                    print(f"❌ Run {status}")
+                    return {"error": f"run {status}"}
             
             # Debug progress every 5 seconds
             if attempt % 5 == 0:
@@ -178,6 +240,16 @@ class QueryAssistant:
         else:
             print("❌ Timeout: processing took too long")
             return {"error": "timeout"}
+        
+        if not answer_updated:
+            print("❌ No answer received")
+            return {"error": "no answer received"}
+        
+        # Get final state to extract answer
+        response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}/state")
+        response.raise_for_status()
+        state = response.json()
+        values = state.get("values", {})
         
         # Extrair resposta
         answer = values.get("answer", {})
