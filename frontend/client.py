@@ -217,10 +217,11 @@ class LangGraphClient:
                 agent = values.get("agent", "N/A")
                 elapsed = (attempt + 1) * polling_interval
                 # Call async callback if it's a coroutine function
+                message = f"Agente: {agent} | Tempo: {elapsed:.1f}s"
                 if asyncio.iscoroutinefunction(progress_callback):
-                    await progress_callback(f"🔍 Agente: {agent} | Tempo: {elapsed:.1f}s")
+                    await progress_callback(message)
                 else:
-                    progress_callback(f"🔍 Agente: {agent} | Tempo: {elapsed:.1f}s")
+                    progress_callback(message)
             
             await asyncio.sleep(polling_interval)
         else:

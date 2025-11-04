@@ -70,16 +70,16 @@ def format_metadata(meta: dict[str, Any]) -> str:
     if not meta:
         return ""
     
-    lines = ["**ℹ️ Informações:**\n"]
+    lines = ["**Informações:**\n"]
     
     # Agent information
     agent = meta.get("suggested_agent") or meta.get("agent")
     if agent:
         agent_names = {
-            "analytics": "📊 Analytics",
-            "knowledge": "📚 Knowledge",
-            "commerce": "📄 Commerce",
-            "triage": "❓ Triage",
+            "analytics": "Analytics",
+            "knowledge": "Knowledge",
+            "commerce": "Commerce",
+            "triage": "Triage",
         }
         agent_display = agent_names.get(agent, agent)
         lines.append(f"• Agente: {agent_display}")

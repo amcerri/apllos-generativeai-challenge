@@ -39,8 +39,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Final
+from typing import Any
 
 # Load environment variables
 try:

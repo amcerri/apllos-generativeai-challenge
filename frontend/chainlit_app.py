@@ -168,9 +168,9 @@ async def on_message(message: cl.Message) -> None:
                         "mime_type": mime_type,
                     }
                     
-                    # Show file info
+                    # Show file info (no emojis)
                     await cl.Message(
-                        content=f"📎 Arquivo anexado: **{file_path.name}** ({mime_type})",
+                        content=f"Arquivo anexado: **{file_path.name}** ({mime_type})",
                         author="System",
                     ).send()
                 except Exception as e:
