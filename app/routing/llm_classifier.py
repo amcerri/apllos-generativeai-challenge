@@ -1,37 +1,30 @@
 """
-Analytics SQL executor (read-only, bounded, timed).
+LLM routing classifier (context-first, allowlist-aware).
 
 Overview
---------
-Executes planner-generated SQL with strict safety guarantees: read-only
-transaction, server-side timeout, and client-side row cap. Converts DB rows to
-plain dictionaries for downstream normalization.
+  Classifies a user message into one of the target agents (analytics,
+  knowledge, commerce, triage) using an LLM with JSON Schema outputs and an
+  optional ensemble. Falls back to deterministic heuristics when the backend
+  is unavailable. Extracts allowlist tables/columns when present.
 
 Design
-------
-- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
-  transaction. No DDL/DML allowed.
-- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
-- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
-- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
-  if explicitly enabled via env flag.
-- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
-  If infra is absent at import time, it degrades gracefully.
+  - Backend-agnostic via a small JSONLLMBackend protocol; default OpenAI client
+    with JSON Schema formatting.
+  - Optional ensemble (variants + scorer) with conservative confidence
+    calibration. Strict decision validation to catch obvious misroutes.
+  - Heuristic fallback prioritizes structured cues (allowlist/SQL‑like), then
+    weak document phrasing signals, never relying solely on keywords.
 
 Integration
------------
-- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
-  `limit_applied`, `reason`).
-- Returns an `ExecutorResult` with timing and diagnostics.
-- Logging and tracing are optional but supported if infra is available.
+  - Exposed via the `LLMClassifier.classify(...)` method; returns a
+    `RouterDecision` (dataclass if available) or a plain mapping.
+  - System/Examples prompts are loaded from `app/prompts/routing/` when present.
 
 Usage
------
->>> from app.agents.analytics.executor import AnalyticsExecutor
->>> exe = AnalyticsExecutor()
->>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
->>> res.row_count, isinstance(res.rows, list)
-(1, True)
+  >>> from app.routing.llm_classifier import LLMClassifier
+  >>> dec = LLMClassifier().classify("quantos pedidos por mês?", allowlist={"orders": ["order_id"]})
+  >>> dec.get("agent") in {"analytics", "knowledge", "commerce", "triage"}
+  True
 """
 
 from __future__ import annotations

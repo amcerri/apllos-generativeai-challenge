@@ -56,6 +56,10 @@ dependencies = [
 api = [
   "fastapi>=0.111.0",
 ]
+frontend = [
+  "chainlit>=1.0.0",
+  "asyncpg>=0.29.0",  # Required by Chainlit's data layer even if not used
+]
 dev = [
   "ruff>=0.4.0",
   "black>=24.4.2",

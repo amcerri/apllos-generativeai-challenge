@@ -97,7 +97,14 @@ help: ## Show this help message
 	@echo "  studio-down   - Stop LangGraph Studio"
 	@echo "  api-up        - Start FastAPI server"
 	@echo "  api-down      - Stop FastAPI server"
+	@echo "  frontend-up   - Start Chainlit frontend (chat interface)"
 	@echo "  app-status    - Show application status"
+	@echo ""
+	@echo "TUNNELING (ngrok):"
+	@echo "  ngrok-backend   - Create ngrok tunnel for backend (port $(APP_PORT))"
+	@echo "  ngrok-frontend  - Create ngrok tunnel for frontend (port 8000)"
+	@echo "  ngrok-all       - Create tunnels for both backend and frontend"
+	@echo "  ngrok-status    - Show active ngrok tunnels"
 	@echo ""
 	@echo "TESTING & VALIDATION:"
 	@echo "  test          - Run all tests"
@@ -440,6 +447,151 @@ app-status: ## Show application status
 	@echo ""
 	@echo "Studio URL: https://smith.langchain.com/studio/?baseUrl=http://localhost:$(APP_PORT)"
 	@echo "API URL: http://localhost:8000/docs"
+	@echo "Chainlit Frontend: http://localhost:8000"
+
+.PHONY: frontend-up
+frontend-up: ## Start Chainlit frontend
+	@echo "Starting Chainlit frontend..."
+	@$(PY) -m pip install -e ".[frontend]" >/dev/null 2>&1 || $(PY) -m pip install chainlit httpx >/dev/null 2>&1 || true
+	@$(PY) -m chainlit run frontend/chainlit_app.py --port 8000 --host 0.0.0.0
+
+# =============================================================================
+# Ngrok Tunneling (for external access)
+# =============================================================================
+
+.PHONY: ngrok-check
+ngrok-check: ## Check if ngrok is installed
+	@if ! command -v ngrok >/dev/null 2>&1; then \
+		echo "Error: ngrok is not installed."; \
+		echo ""; \
+		echo "Install ngrok:"; \
+		echo "  macOS: brew install ngrok/ngrok/ngrok"; \
+		echo "  Linux: https://ngrok.com/download"; \
+		echo "  Or visit: https://ngrok.com/download"; \
+		echo ""; \
+		echo "After installation, authenticate with:"; \
+		echo "  ngrok config add-authtoken YOUR_TOKEN"; \
+		echo "  (Get your token from https://dashboard.ngrok.com/get-started/your-authtoken)"; \
+		exit 1; \
+	fi
+
+.PHONY: ngrok-backend
+ngrok-backend: ngrok-check ## Create ngrok tunnel for backend (LangGraph Server on port 2024)
+	@echo "Checking if backend is running on port $(APP_PORT)..."
+	@if ! lsof -ti:$(APP_PORT) >/dev/null 2>&1 && ! netstat -an 2>/dev/null | grep -q ":$(APP_PORT).*LISTEN" && ! ss -tln 2>/dev/null | grep -q ":$(APP_PORT)"; then \
+		echo "⚠️  WARNING: Nothing is listening on port $(APP_PORT)"; \
+		echo ""; \
+		echo "Please start the backend first:"; \
+		echo "  make studio-up"; \
+		echo ""; \
+		echo "Or start the API server:"; \
+		echo "  make api-up"; \
+		echo ""; \
+		read -p "Continue anyway? (y/N) " -n 1 -r; \
+		echo ""; \
+		if [[ ! $$REPLY =~ ^[Yy]$$ ]]; then \
+			exit 1; \
+		fi; \
+	else \
+		echo "✅ Backend appears to be running on port $(APP_PORT)"; \
+	fi
+	@echo ""
+	@echo "Creating ngrok tunnel for backend (port $(APP_PORT))..."
+	@echo "After starting, update LANGGRAPH_SERVER_URL in your frontend:"
+	@echo "  export LANGGRAPH_SERVER_URL=https://YOUR_NGROK_URL.ngrok.io"
+	@echo ""
+	@echo "Press Ctrl+C to stop the tunnel"
+	@echo ""
+	@ngrok http $(APP_PORT)
+
+.PHONY: ngrok-frontend
+ngrok-frontend: ngrok-check ## Create ngrok tunnel for frontend (Chainlit on port 8000)
+	@echo "Checking if frontend is running on port 8000..."
+	@if ! lsof -ti:8000 >/dev/null 2>&1 && ! netstat -an 2>/dev/null | grep -q ":8000.*LISTEN" && ! ss -tln 2>/dev/null | grep -q ":8000"; then \
+		echo "⚠️  WARNING: Nothing is listening on port 8000"; \
+		echo ""; \
+		echo "Please start the frontend first:"; \
+		echo "  make frontend-up"; \
+		echo ""; \
+		read -p "Continue anyway? (y/N) " -n 1 -r; \
+		echo ""; \
+		if [[ ! $$REPLY =~ ^[Yy]$$ ]]; then \
+			exit 1; \
+		fi; \
+	else \
+		echo "✅ Frontend appears to be running on port 8000"; \
+	fi
+	@echo ""
+	@echo "Creating ngrok tunnel for frontend (port 8000)..."
+	@echo "Share this URL with others to access the frontend"
+	@echo ""
+	@echo "Press Ctrl+C to stop the tunnel"
+	@echo ""
+	@ngrok http 8000
+
+.PHONY: ngrok-all
+ngrok-all: ngrok-check ## Create tunnels for both backend and frontend (requires ngrok config file)
+	@echo "Creating ngrok tunnels for backend and frontend..."
+	@echo "This requires a ngrok configuration file (ngrok.yml)"
+	@echo ""
+	@echo "Create ngrok.yml with the following content:"
+	@echo "  version: \"2\""
+	@echo "  tunnels:"
+	@echo "    backend:"
+	@echo "      addr: $(APP_PORT)"
+	@echo "      proto: http"
+	@echo "    frontend:"
+	@echo "      addr: 8000"
+	@echo "      proto: http"
+	@echo ""
+	@echo "Then run: ngrok start --all"
+	@echo ""
+	@if [ ! -f ngrok.yml ]; then \
+		echo "Creating ngrok.yml template..."; \
+		echo "version: \"2\"" > ngrok.yml; \
+		echo "tunnels:" >> ngrok.yml; \
+		echo "  backend:" >> ngrok.yml; \
+		echo "    addr: $(APP_PORT)" >> ngrok.yml; \
+		echo "    proto: http" >> ngrok.yml; \
+		echo "  frontend:" >> ngrok.yml; \
+		echo "    addr: 8000" >> ngrok.yml; \
+		echo "    proto: http" >> ngrok.yml; \
+		echo "Created ngrok.yml template. Review it and run: ngrok start --all"; \
+	else \
+		echo "Found ngrok.yml. Starting tunnels..."; \
+		echo "Press Ctrl+C to stop the tunnels"; \
+		ngrok start --all; \
+	fi
+
+.PHONY: ngrok-status
+ngrok-status: ## Show active ngrok tunnels
+	@echo "Checking ngrok status..."
+	@if curl -s http://localhost:4040/api/tunnels >/dev/null 2>&1; then \
+		echo "Active ngrok tunnels:"; \
+		echo ""; \
+		curl -s http://localhost:4040/api/tunnels | python3 -c "import sys, json; data = json.load(sys.stdin); [print(f\"  {t['name']}: {t['public_url']} -> {t['config']['addr']}\") for t in data.get('tunnels', [])]" 2>/dev/null || \
+		curl -s http://localhost:4040/api/tunnels | grep -o '"public_url":"[^"]*"' | cut -d'"' -f4 | sed 's/^/  /' || echo "  No active tunnels found"; \
+		echo ""; \
+		echo "Full dashboard: http://localhost:4040"; \
+		echo ""; \
+		echo "Checking if local services are accessible..."; \
+		if lsof -ti:2024 >/dev/null 2>&1 || netstat -an 2>/dev/null | grep -q ":2024.*LISTEN" || ss -tln 2>/dev/null | grep -q ":2024"; then \
+			echo "  ✅ Backend (port 2024): Running"; \
+		else \
+			echo "  ❌ Backend (port 2024): Not running (run: make studio-up)"; \
+		fi; \
+		if lsof -ti:8000 >/dev/null 2>&1 || netstat -an 2>/dev/null | grep -q ":8000.*LISTEN" || ss -tln 2>/dev/null | grep -q ":8000"; then \
+			echo "  ✅ Frontend (port 8000): Running"; \
+		else \
+			echo "  ❌ Frontend (port 8000): Not running (run: make frontend-up)"; \
+		fi; \
+	else \
+		echo "Ngrok is not running or the web interface is not available."; \
+		echo ""; \
+		echo "Start a tunnel with:"; \
+		echo "  make ngrok-backend   (for backend on port 2024)"; \
+		echo "  make ngrok-frontend  (for frontend on port 8000)"; \
+	fi
 
 # =============================================================================
 # Testing & Validation

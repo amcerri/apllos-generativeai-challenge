@@ -574,6 +574,18 @@ class CommerceExtractor:
 
 
 def _guess_doc_type(tl: str) -> str | None:
+    """Best-effort document type guess from lowercased text.
+
+    Parameters
+    ----------
+    tl : str
+        Lowercased full text.
+
+    Returns
+    -------
+    str | None
+        One of known doc types or None when no clear hint is present.
+    """
     if "invoice" in tl or "fatura" in tl or "nota fiscal" in tl:
         return "invoice"
     if "purchase order" in tl or re.search(r"\bpo\b", tl):
@@ -590,6 +602,10 @@ def _guess_doc_type(tl: str) -> str | None:
 
 
 def _find_doc_id(text: str, doc_type: str | None) -> str | None:
+    """Extract a plausible document identifier based on the doc_type.
+
+    Falls back to trying all known patterns when doc_type is unknown.
+    """
     if not doc_type:
         # try all patterns
         for rx in CommerceExtractor.RE_DOC_ID.values():
@@ -605,6 +621,7 @@ def _find_doc_id(text: str, doc_type: str | None) -> str | None:
 
 
 def _guess_currency(text: str) -> str | None:
+    """Guess currency code from symbol or explicit ISO-4217 codes in text."""
     m_code = CommerceExtractor.RE_CURRENCY_CODE.search(text)
     if m_code:
         return m_code.group(1).upper()
@@ -624,6 +641,10 @@ def _guess_currency(text: str) -> str | None:
 
 
 def _parse_amount(s: str, currency: str | None) -> float | None:
+    """Parse a localized numeric amount into float.
+
+    Handles common thousand/decimal separator conventions.
+    """
     # Normalize thousand/decimal separators for common locales
     s = s.strip()
     s = re.sub(r"^[^0-9\-]*", "", s)  # drop leading symbols/currency
@@ -644,6 +665,11 @@ def _parse_amount(s: str, currency: str | None) -> float | None:
 
 
 def _parse_items(lines: Sequence[str], currency: str | None, max_items: int) -> list[CommerceItem]:
+    """Parse line items from structured lines matching item regex.
+
+    Derives missing numeric fields when two of the three (qty, unit_price,
+    line_total) are present.
+    """
     items: list[CommerceItem] = []
     for ln in lines:
         m = CommerceExtractor.RE_ITEM_LINE.match(ln)
@@ -683,6 +709,7 @@ def _parse_items(lines: Sequence[str], currency: str | None, max_items: int) -> 
 
 
 def _parse_totals(text: str, currency: str | None) -> CommerceTotals:
+    """Parse subtotal, freight, discounts, and grand total from text."""
     subtotal = None
     grand = None
     freight = None
@@ -718,6 +745,7 @@ def _parse_totals(text: str, currency: str | None) -> CommerceTotals:
 
 
 def _extract_dates(lines: Sequence[str]) -> dict[str, Any]:
+    """Extract best-effort issue and due dates from the first two matches."""
     # Best-effort: pick first two dates as issue/due
     found: list[str] = []
     for ln in lines:
@@ -763,6 +791,7 @@ def _reconcile_totals(items: list[CommerceItem], totals: CommerceTotals) -> list
 
 
 def _normalize_date(s: str | None) -> str | None:
+    """Normalize a variety of date formats to YYYY-MM-DD when possible."""
     if not s:
         return None
     # Try ISO first
@@ -782,12 +811,14 @@ def _normalize_date(s: str | None) -> str | None:
 
 
 def _approx_equal(a: float, b: float, *, rel: float = 1e-3, abs_: float = 0.05) -> bool:
+    """Compare two floats using relative and absolute tolerances."""
     if math.isfinite(a) and math.isfinite(b):
         return abs(a - b) <= max(abs_, rel * max(abs(a), abs(b)))
     return False
 
 
 def _as_str(v: Any) -> str | None:
+    """Return stripped string or None when empty/None."""
     if v is None:
         return None
     s = str(v).strip()
@@ -795,6 +826,7 @@ def _as_str(v: Any) -> str | None:
 
 
 def _as_int(v: Any) -> int | None:
+    """Parse int or return None on failure."""
     try:
         return int(str(v).strip())
     except Exception:
@@ -802,6 +834,7 @@ def _as_int(v: Any) -> int | None:
 
 
 def _as_float(v: Any) -> float | None:
+    """Parse float or return None on failure."""
     try:
         return float(v)
     except Exception:

@@ -102,9 +102,11 @@ def get_engine(
         raise ImportError("SQLAlchemy is required to create database engine")
     
     if not url:
-        url = os.getenv("DATABASE_URL", "").strip()
+        # Try APLLOS_DATABASE_URL first (for Chainlit compatibility), then DATABASE_URL
+        url = os.getenv("APLLOS_DATABASE_URL") or os.getenv("DATABASE_URL", "")
+        url = url.strip() if url else ""
         if not url:
-            raise ValueError("database url must be provided or DATABASE_URL env var must be set")
+            raise ValueError("database url must be provided or APLLOS_DATABASE_URL/DATABASE_URL env var must be set")
         
         # Convert postgresql+psycopg:// to postgresql:// for SQLAlchemy
         if url.startswith("postgresql+psycopg://"):

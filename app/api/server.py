@@ -1,37 +1,27 @@
 """
-Analytics SQL executor (read-only, bounded, timed).
+HTTP API server (FastAPI façade over LangGraph server and infra endpoints).
 
 Overview
---------
-Executes planner-generated SQL with strict safety guarantees: read-only
-transaction, server-side timeout, and client-side row cap. Converts DB rows to
-plain dictionaries for downstream normalization.
+  Exposes a minimal FastAPI app with health/readiness, optional Prometheus
+  metrics, and mounts the LangGraph Server handlers at `/graph`. Designed to be
+  import-safe when dependencies are unavailable (falls back to a stub).
 
 Design
-------
-- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
-  transaction. No DDL/DML allowed.
-- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
-- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
-- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
-  if explicitly enabled via env flag.
-- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
-  If infra is absent at import time, it degrades gracefully.
+  - Dependency-light at import time; guards all optional deps.
+  - CORS configurable via env: `API_ENABLE_CORS`, `API_ALLOWED_ORIGINS`.
+  - Metrics (optional): mounts `/metrics` when metrics infra is available.
+  - Health endpoints: `/health`, `/ready`, and `/ok` (DB/checkpointer check).
+  - Local runner: `run()` uses Uvicorn when invoked as a script.
 
 Integration
------------
-- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
-  `limit_applied`, `reason`).
-- Returns an `ExecutorResult` with timing and diagnostics.
-- Logging and tracing are optional but supported if infra is available.
+  - `get_app(settings)` returns an ASGI app for embedding or serving.
+  - Mounts LangGraph handlers created from `app.graph.assistant.get_assistant`.
 
 Usage
------
->>> from app.agents.analytics.executor import AnalyticsExecutor
->>> exe = AnalyticsExecutor()
->>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
->>> res.row_count, isinstance(res.rows, list)
-(1, True)
+  >>> from app.api.server import get_app
+  >>> app = get_app()
+  >>> isinstance(app, dict) or hasattr(app, "router")
+  True
 """
 
 from __future__ import annotations
@@ -87,6 +77,11 @@ _TRUE_SET: Final[set[str]] = {"1", "true", "yes", "on"}
 
 
 def _as_bool(v: Any, default: bool) -> bool:
+    """Coerce arbitrary input to a boolean with a default fallback.
+
+    Accepts common string representations ("1", "true", "yes", "on") as true and
+    ("0", "false", "no", "off") as false; returns the provided default otherwise.
+    """
     if isinstance(v, bool):
         return v
     if v is None:
@@ -105,7 +100,11 @@ def _as_bool(v: Any, default: bool) -> bool:
 
 
 def get_app(settings: Mapping[str, Any] | None = None) -> Any:
-    """Return an ASGI application exposing the assistant endpoints."""
+    """Return an ASGI application exposing health, metrics and `/graph`.
+
+    When optional dependencies are missing, returns a lightweight assistant
+    stub so callers can still interact with the graph representation.
+    """
     log = get_logger("api.server")
 
     # Single guard: if dependencies are not available, return assistant stub
@@ -197,6 +196,7 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
 
 
 def run() -> None:  # pragma: no cover - manual use only
+    """Run the API server locally using Uvicorn with environment defaults."""
     if not _DEPS_AVAILABLE or uvicorn is None:
         return
     app = get_app()

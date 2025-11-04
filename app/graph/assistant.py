@@ -1,37 +1,25 @@
 """
-Analytics SQL executor (read-only, bounded, timed).
+LangGraph assistant entrypoint (graph factory and caching).
 
 Overview
---------
-Executes planner-generated SQL with strict safety guarantees: read-only
-transaction, server-side timeout, and client-side row cap. Converts DB rows to
-plain dictionaries for downstream normalization.
+  Builds or returns a cached compiled LangGraph application that wires routing
+  and agent pipelines (analytics, knowledge, commerce, triage). Degrades to a
+  stub when optional dependencies are unavailable.
 
 Design
-------
-- **Read-only**: `SET LOCAL default_transaction_read_only = on` within a
-  transaction. No DDL/DML allowed.
-- **Timeout**: `SET LOCAL statement_timeout` (milliseconds).
-- **Row cap**: stream rows and stop at `max_rows`, regardless of SQL LIMIT.
-- **Explain (optional)**: `EXPLAIN (FORMAT JSON)`; can upgrade to ANALYZE only
-  if explicitly enabled via env flag.
-- **Zero hard deps**: the module imports `app.infra.db.get_engine()` lazily.
-  If infra is absent at import time, it degrades gracefully.
+  - Import-safe: optional infra with graceful fallbacks (logging/tracing, DB).
+  - Global cache keyed by runtime switches (e.g., require_sql_approval).
+  - Loads analytics allowlist once and passes through state for planner nodes.
 
 Integration
------------
-- Consumes a plan compatible with `PlannerPlan` (fields: `sql`, `params`,
-  `limit_applied`, `reason`).
-- Returns an `ExecutorResult` with timing and diagnostics.
-- Logging and tracing are optional but supported if infra is available.
+  - Exported symbol `get_assistant(settings)` is mounted by the API server and
+    LangGraph Server/Studio.
 
 Usage
------
->>> from app.agents.analytics.executor import AnalyticsExecutor
->>> exe = AnalyticsExecutor()
->>> res = exe.execute({"sql": "SELECT 1 AS x", "params": {}}, max_rows=10)
->>> res.row_count, isinstance(res.rows, list)
-(1, True)
+  >>> from app.graph.assistant import get_assistant
+  >>> g = get_assistant({"require_sql_approval": False})
+  >>> isinstance(g, dict) or hasattr(g, "invoke")
+  True
 """
 
 from __future__ import annotations
@@ -262,7 +250,8 @@ def get_assistant(settings: Mapping[str, Any] | None = None) -> Any:
         try:
             import os
             
-            dsn = os.environ.get("DATABASE_URL")
+            # Try APLLOS_DATABASE_URL first (for Chainlit compatibility), then DATABASE_URL
+            dsn = os.environ.get("APLLOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
             if dsn:
                 # Convert postgresql+psycopg:// to postgresql:// for SQLAlchemy
                 if dsn.startswith("postgresql+psycopg://"):
