@@ -282,8 +282,30 @@ class LLMClassifier:
                                 scorer_dec = self._apply_confidence_calibration(scorer_dec)
                                 return self._return_final(scorer_dec)
                             except Exception as _se:
-                                self.log.info("scorer failed; using first vote", extra={"reason": str(_se)})
-                                first = self._apply_confidence_calibration(votes[0]["decision"])
+                                # Conservative fallback: if no majority and scorer failed,
+                                # drop to triage when confidence is low.
+                                self.log.info("scorer failed; evaluating conservative fallback", extra={"reason": str(_se)})
+                                # Read confidence_min from settings/env or use default
+                                conf_min = 0.65
+                                try:
+                                    from app.config.settings import get_settings as _get_settings  # local import
+                                    _cfg = _get_settings()
+                                    conf_min = float(getattr(getattr(_cfg, "routing"), "confidence_min", conf_min))
+                                except Exception:
+                                    pass
+                                # best observed confidence across votes (after calibration later as well)
+                                try:
+                                    best_conf = max(float(v["decision"].get("confidence", 0.0) or 0.0) for v in votes)
+                                except Exception:
+                                    best_conf = 0.0
+                                if best_conf < (conf_min + 0.05):
+                                    tri = {"agent": "triage", "confidence": max(best_conf, conf_min), "reason": "ensemble_tie_low_confidence", "tables": [], "columns": [], "signals": ["ensemble_tie", "low_confidence"], "thread_id": thread_id}
+                                    tri = self._apply_confidence_calibration(tri)
+                                    return self._return_final(tri)
+                                # otherwise, return first but mark tie
+                                first = dict(votes[0]["decision"])  # copy
+                                first.setdefault("signals", []).append("ensemble_tie")
+                                first = self._apply_confidence_calibration(first)
                                 return self._return_final(first)
 
                     # If ensemble produced nothing valid, fall back to single-shot below

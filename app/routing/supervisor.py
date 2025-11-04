@@ -196,12 +196,68 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
             # This prevents greetings and meta questions from being redirected
             pass
 
+        # Confidence-based guard: if classifier confidence is low and there are no strong cues,
+        # prefer triage to avoid false positives on ambiguous requests.
+        try:
+            # Load threshold from settings when available; else use a safe default
+            confidence_min = 0.65
+            try:
+                from app.config.settings import get_settings as _get_settings  # local import
+                _cfg = _get_settings()
+                confidence_min = float(getattr(getattr(_cfg, "routing"), "confidence_min", confidence_min))
+            except Exception:
+                pass
+
+            allowlist_cues_present = bool(
+                tables or columns or ("sql_like" in signals) or ("sql_intent" in signals)
+            )
+            doc_cues_present = bool(
+                ("doc_style" in signals) or ("doc_intent" in signals) or (ctx.rag_hits and ctx.rag_hits > 0)
+            )
+
+            # Ambiguity when both kinds of weak cues appear or none appear
+            ambiguous = (allowlist_cues_present and doc_cues_present) or (not allowlist_cues_present and not doc_cues_present)
+
+            if confidence < confidence_min and ambiguous and agent != "triage":
+                chosen = "triage"
+                fallback_applied = True
+                # Enrich signals so triage can explain indecisão ao usuário
+                signals.add("low_confidence")
+                signals.add("ambiguous_intent")
+                reason = _append_reason(reason, "fallback→triage(low_confidence)")
+        except Exception:
+            # Defensive: never fail supervision due to config issues
+            pass
+
         if fallback_applied:
             # Calibrate confidence conservatively upward but capped.
             target = 0.8 if chosen in {"analytics", "knowledge"} else 0.72
             confidence = max(confidence, target)
             signals.add("supervisor_fallback")
             reason = _append_reason(reason, f"fallback→{chosen}")
+
+        # Hard rule: Knowledge requires RAG evidence (hits above threshold)
+        try:
+            if chosen == "knowledge":
+                rag_hits = int(getattr(ctx, "rag_hits", 0) or 0)
+                rag_min = getattr(ctx, "rag_min_score", None)
+                # threshold from settings, with default
+                rag_min_threshold = 0.78
+                try:
+                    from app.config.settings import get_settings as _get_settings
+                    _cfg = _get_settings()
+                    rag_min_threshold = float(getattr(getattr(_cfg, "routing"), "rag_min_score_threshold", rag_min_threshold))
+                except Exception:
+                    pass
+                if rag_hits <= 0 or (rag_min is not None and float(rag_min) < rag_min_threshold):
+                    # Redirect to triage and explain
+                    chosen = "triage"
+                    signals.update({"no_rag_evidence"})
+                    reason = _append_reason(reason, "fallback→triage(no_rag_evidence)")
+                    # confidence: triage default
+                    confidence = max(confidence, 0.72)
+        except Exception:
+            pass
 
         final = _finalize(
             dec,

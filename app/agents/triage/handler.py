@@ -214,7 +214,7 @@ class TriageHandler:
         with start_span("agent.triage.handle"):
             agent, reasons = triage_suggested_agent(query, signals)
             sig_list = _signals_to_list(signals)
-            text = _compose_text_ptbr(query, agent)
+            text = _compose_text_ptbr(query, agent, signals=sig_list)
             payload = {
                 "text": text,
                 "meta": {
@@ -232,7 +232,7 @@ class TriageHandler:
 # ---------------------------------------------------------------------------
 
 
-def _compose_text_ptbr(query: str, agent: str) -> str:
+def _compose_text_ptbr(query: str, agent: str, *, signals: list[str] | None = None) -> str:
     q = (query or "").strip()
 
     # --- Detect greeting -----------------------------------------------------
@@ -242,16 +242,24 @@ def _compose_text_ptbr(query: str, agent: str) -> str:
     # --- Detect out-of-scope topics -----------------------------------------
     oos_topic = _detect_out_of_scope(q)
     if oos_topic:
-        return (
-            f"No momento não ofereço {oos_topic}. Sugiro usar um site ou aplicativo especializado.\n\n"
-            + _capabilities_block()
-        )
+        # Prefer a humanized LLM message; fallback to a concise fixed text
+        human = _human_oos_message(oos_topic)
+        fallback = f"No momento não ofereço {oos_topic}. Sugiro consultar um serviço especializado."
+        msg = human or fallback
+        return msg + "\n\n" + _capabilities_block() + "\n\nComo posso ajudar?"
 
     # --- Default contextual nudge based on suggested agent -------------------
     base = (
         "Ainda não tenho contexto suficiente para responder com precisão. "
         "Vou te direcionar para o melhor caminho."
     )
+    # Be explicit when router marked ambiguity/low confidence
+    sigs = set(signals or [])
+    if ("low_confidence" in sigs) or ("ambiguous_intent" in sigs):
+        base = (
+            "Fiquei em dúvida sobre a intenção (dados x documentos). "
+            "Com um detalhe rápido, eu acerto o melhor caminho."
+        )
     if agent == "analytics":
         hint = (
             "Parece uma análise sobre dados tabulares. Se puder, informe a tabela/colunas, "
@@ -259,8 +267,8 @@ def _compose_text_ptbr(query: str, agent: str) -> str:
         )
     elif agent == "knowledge":
         hint = (
-            "Parece uma pergunta respondível por documentos. Se tiver, anexe o PDF/TXT "
-            "ou indique o título do material."
+            "Parece uma pergunta respondível por conteúdo já documentado. "
+            "Se puder, informe o tema ou termos‑chave para eu buscar nas fontes disponíveis."
         )
     elif agent == "commerce":
         hint = (
@@ -273,7 +281,7 @@ def _compose_text_ptbr(query: str, agent: str) -> str:
             "ou análise de um arquivo comercial (invoice/PO)."
         )
     lead = f'Pedido: "{q}"\n' if q else ""
-    return lead + base + " " + hint + "\n\n" + _capabilities_block()
+    return lead + base + " " + hint + "\n\n" + _capabilities_block() + "\n\nComo posso ajudar?"
 
 
 def _followups_for(agent: str) -> list[str]:
@@ -345,6 +353,7 @@ def _detect_out_of_scope(text: str) -> str | None:
     news = ("notícias", "noticias", "news")
     markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
     code = ("programar em", "escreva um código", "write code")
+    sports = ("futebol", "jogo", "basquete", "vôlei", "volei", "nba", "fifa", "champions", "copa do mundo")
     if any(k in t for k in weather):
         return "previsão do tempo/meteorologia"
     if any(k in t for k in news):
@@ -353,17 +362,59 @@ def _detect_out_of_scope(text: str) -> str | None:
         return "cotações/mercado financeiro em tempo real"
     if any(k in t for k in code):
         return "geração de código fora do contexto do projeto"
+    if any(k in t for k in sports):
+        return "assuntos esportivos/entretenimento"
     return None
 
 
 def _capabilities_block() -> str:
     return (
-        "Posso ajudar com:\n"
-        "- Analytics: consultas em dados Olist (SQL seguro, séries temporais, top‑N, métricas).\n"
-        "- Knowledge (RAG): respostas com citações a partir de documentos.\n"
-        "- Commerce: processamento de documentos (PDF/DOCX/TXT) e extração estruturada.\n"
-        "- Triage: orientação e encaminhamento para o fluxo correto."
+        "Minhas funcionalidades incluem:\n"
+        "- Consultas analíticas sobre dados e vendas registradas em nossa base.\n"
+        "- Busca de informações em documentos e normativas.\n"
+        "- Análise de faturas e documentos comerciais em formato PDF, DOCX ou TXT.\n\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# LLM helpers for humanized out-of-scope messages
+# ---------------------------------------------------------------------------
+
+
+def _human_oos_message(topic: str) -> str | None:
+    """Return a brief, empathetic PT-BR message for out-of-scope requests using LLM.
+
+    Falls back to None if LLM is unavailable or errors, so callers can use a fixed string.
+    """
+    try:
+        from app.infra.llm_client import get_llm_client  # local import; optional
+        client = get_llm_client()
+        if not client.is_available():
+            return None
+
+        system = (
+            "Você é um assistente educado em pt-BR. Dê uma única resposta curta e humana,"
+            " reconhecendo gentilmente que o pedido está fora do escopo e sugerindo consultar"
+            " um site/app especializado. Sem listas, sem markdown, 1-2 frases, tom profissional."
+        )
+        user = (
+            f"Pedido fora de escopo detectado: '{topic}'.\n"
+            "Responda em pt-BR de forma breve, clara e empática."
+        )
+        resp = client.chat_completion(
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            model=getattr(client, "model", "gpt-4o-mini"),
+            temperature=0.2,
+            max_tokens=120,
+            max_retries=0,
+        )
+        text = (resp.text if resp else "").strip()
+        # Guard: trim overly long output
+        if len(text) > 320:
+            text = text[:319].rstrip() + "…"
+        return text or None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

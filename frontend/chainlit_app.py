@@ -75,18 +75,20 @@ async def on_chat_start() -> None:
         cl.user_session.set("thread_id", thread_id)
         
         # Send welcome message
-        welcome_msg = (
-            f"Olá! Sou o {UI_NAME}, um sistema multi-agente inteligente.\n\n"
-            "Posso ajudar com:\n"
-            "- Analytics: Consultas sobre dados e vendas\n"
-            "- Knowledge: Busca de informações em documentos\n"
-            "- Commerce: Análise de faturas e documentos comerciais\n"
-            "- Orientação: Direcionamento para o fluxo correto\n\n"
-            "Exemplos de perguntas:\n"
+        welcome_msg = welcome_msg = (
+            f"Olá! Sou o **{UI_NAME}**, seu assistente virtual para análises, conhecimento e processamento de documentos.\n\n"
+            
+            "**Minhas funcionalidades incluem:**\n"
+            "- Consultas analíticas sobre dados e vendas registradas em nossa base\n"
+            "- Busca de informações em documentos e normativas\n"
+            "- Análise de faturas e documentos comerciais\n\n"
+            
+            "**Exemplos de perguntas:**\n"
             "- Quantos pedidos temos no total?\n"
-            "- Quais são as melhores práticas de precificação?\n"
-            "- Analise esta fatura (anexe um arquivo)\n\n"
-            "Faça sua pergunta ou anexe um arquivo para começar."
+            "- O que significa _back office_ no e-commerce?\n"
+            "- Analise esta fatura _(anexe um arquivo DOCX, PDF ou TXT junto com a pergunta)_\n\n"
+            
+            "**Como posso ajudar hoje?** Envie sua pergunta ou anexe um arquivo para começar."
         )
         await cl.Message(content=welcome_msg, author="Assistant").send()
     except Exception as e:

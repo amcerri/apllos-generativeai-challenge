@@ -25,6 +25,7 @@ The Apllos Assistant is a multi-agent system built on LangGraph that provides as
 
 - **[Architecture and Graph Orchestration](core/architecture.md)** - System overview, graph structure, and orchestration patterns
 - **[API Server and Endpoints](core/api.md)** - FastAPI server, health checks, and LangGraph integration
+- **[Frontend (Chainlit)](core/frontend.md)** - Conversational UI, how to run locally and via ngrok
 - **[Infrastructure](core/infra.md)** - LLM client, database, logging, metrics, tracing, and checkpointer
 - **[Observability](core/observability.md)** - Monitoring, logging, metrics, and tracing
 - **[Data Architecture](core/data_architecture.md)** - Data management, processing, and storage systems

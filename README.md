@@ -59,6 +59,9 @@ make studio-up
 # Extended health check
 curl http://localhost:2024/ok
 # => {"status":"ok","db":"ok|down","checkpointer":"ok|noop"}
+
+# Optional: Chainlit frontend (chat UI)
+make frontend-up
 ```
 
 ### Local environment
@@ -268,6 +271,7 @@ Comprehensive documentation is available in the `docs/` directory:
 
 - **[Architecture](docs/core/architecture.md)** - System overview, graph structure, and orchestration patterns
 - **[API Server](docs/core/api.md)** - FastAPI server, health checks, and LangGraph integration
+- **[Frontend (Chainlit)](docs/core/frontend.md)** - Chat UI and how to run it
 - **[Infrastructure](docs/core/infra.md)** - LLM client, database, logging, metrics, and tracing
 - **[Observability](docs/core/observability.md)** - Comprehensive monitoring, logging, metrics, and tracing
 
