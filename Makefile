@@ -103,7 +103,6 @@ help: ## Show this help message
 	@echo "TUNNELING (ngrok):"
 	@echo "  ngrok-backend   - Create ngrok tunnel for backend (port $(APP_PORT))"
 	@echo "  ngrok-frontend  - Create ngrok tunnel for frontend (port 8000)"
-	@echo "  ngrok-all       - Create tunnels for both backend and frontend"
 	@echo "  ngrok-status    - Show active ngrok tunnels"
 	@echo ""
 	@echo "TESTING & VALIDATION:"
@@ -529,39 +528,7 @@ ngrok-frontend: ngrok-check ## Create ngrok tunnel for frontend (Chainlit on por
 	@echo ""
 	@ngrok http 8000
 
-.PHONY: ngrok-all
-ngrok-all: ngrok-check ## Create tunnels for both backend and frontend (requires ngrok config file)
-	@echo "Creating ngrok tunnels for backend and frontend..."
-	@echo "This requires a ngrok configuration file (ngrok.yml)"
-	@echo ""
-	@echo "Create ngrok.yml with the following content:"
-	@echo "  version: \"2\""
-	@echo "  tunnels:"
-	@echo "    backend:"
-	@echo "      addr: $(APP_PORT)"
-	@echo "      proto: http"
-	@echo "    frontend:"
-	@echo "      addr: 8000"
-	@echo "      proto: http"
-	@echo ""
-	@echo "Then run: ngrok start --all"
-	@echo ""
-	@if [ ! -f ngrok.yml ]; then \
-		echo "Creating ngrok.yml template..."; \
-		echo "version: \"2\"" > ngrok.yml; \
-		echo "tunnels:" >> ngrok.yml; \
-		echo "  backend:" >> ngrok.yml; \
-		echo "    addr: $(APP_PORT)" >> ngrok.yml; \
-		echo "    proto: http" >> ngrok.yml; \
-		echo "  frontend:" >> ngrok.yml; \
-		echo "    addr: 8000" >> ngrok.yml; \
-		echo "    proto: http" >> ngrok.yml; \
-		echo "Created ngrok.yml template. Review it and run: ngrok start --all"; \
-	else \
-		echo "Found ngrok.yml. Starting tunnels..."; \
-		echo "Press Ctrl+C to stop the tunnels"; \
-		ngrok start --all; \
-	fi
+
 
 .PHONY: ngrok-status
 ngrok-status: ## Show active ngrok tunnels

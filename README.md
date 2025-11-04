@@ -242,6 +242,41 @@ make batch-query     # INPUT=queries.yaml [OUTPUT=results.md]
 make logs logs-db shell shell-db clean install-deps
 ```
 
+### Tunneling (ngrok) - secure setup
+
+- Install ngrok and set your authtoken once on your machine (not in the repo):
+
+```bash
+ngrok config add-authtoken YOUR_TOKEN
+```
+
+- Start tunnels using the project config (token is read from your user profile or env):
+
+```bash
+make ngrok-backend    # backend on port 2024
+make ngrok-frontend   # frontend on port 8000
+```
+
+- Alternative without persisting token (safe for demos; not committed):
+
+```bash
+NGROK_AUTHTOKEN=YOUR_TOKEN ngrok start --all --config ngrok.yml
+```
+
+Notes
+- Do NOT commit tokens or personal ngrok configs. The repo never stores secrets.
+- If `ngrok.yml` is missing, `make ngrok-all` creates a local template (no token).
+
+If you need both tunnels, start them in two shells or background one:
+
+```bash
+# Terminal A
+ngrok http 2024
+
+# Terminal B
+ngrok http 8000
+```
+
 ### Scripts
 
 - [scripts/ingest_analytics.py](scripts/ingest_analytics.py): load Olist CSVs
