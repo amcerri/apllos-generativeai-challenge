@@ -595,6 +595,21 @@ _IDENTIFIER_RE = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
 
 
 def _normalize_allowlist(allowlist: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
+    """Return a normalized allowlist mapping.
+
+    Trims whitespace, deduplicates and sorts columns, and returns a
+    table→columns dict with tables sorted for deterministic behavior.
+
+    Parameters
+    ----------
+    allowlist : Mapping[str, Iterable[str]]
+        Raw allowlist mapping provided by the caller.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Normalized mapping with sorted table names and column lists.
+    """
     out: dict[str, list[str]] = {}
     for t, cols in allowlist.items():
         t2 = str(t).strip()
@@ -606,6 +621,11 @@ def _normalize_allowlist(allowlist: Mapping[str, Iterable[str]]) -> dict[str, li
 
 
 def _pick_table(text: str, tables_index: Mapping[str, list[str]]) -> str | None:
+    """Heuristically choose a table mentioned in the natural-language query.
+
+    Looks for exact token matches of table names; falls back to a preferred
+    ordering if none are found.
+    """
     tokens = {w.strip(".,:;()[]{}\"'`").lower() for w in text.split()}
     for t in tables_index.keys():
         if t.lower() in tokens:
@@ -618,14 +638,17 @@ def _pick_table(text: str, tables_index: Mapping[str, list[str]]) -> str | None:
 
 
 def _fallback_table(tables_index: Mapping[str, list[str]]) -> str | None:
+    """Return the first available table as a conservative default."""
     return next(iter(tables_index.keys()), None)
 
 
 def _is_aggregation_intent(lw: str) -> bool:
+    """Return True if the query likely requests an aggregation."""
     return any(k in lw for k in _AGG_KEYS)
 
 
 def _detect_timescale(lw: str) -> str | None:
+    """Detect a time bucket (day/week/month/year) requested by the query."""
     if any(k in lw for k in _MONTH_KEYS):
         return "month"
     if any(k in lw for k in _WEEK_KEYS):
@@ -652,6 +675,7 @@ def _extract_year(lw: str) -> int | None:
 
 
 def _find_time_column(columns: list[str]) -> str | None:
+    """Find a plausible timestamp/date column from a list of columns."""
     lwcols = [c.lower() for c in columns]
     # Extended hints include common business date fields
     extended_hints = list(_TIME_HINTS) + [
@@ -666,6 +690,11 @@ def _find_time_column(columns: list[str]) -> str | None:
 
 
 def _choose_preview_columns(columns: list[str], *, max_cols: int = 6) -> list[str]:
+    """Choose a compact set of columns for preview queries.
+
+    Prefers identifiers, status, and timestamp-like columns, then fills
+    the remainder deterministically from the input ordering.
+    """
     # Prefer id/status/timestamps first, then fill in with the next columns.
     priority = [
         *[c for c in columns if c.endswith("_id")],
@@ -683,6 +712,11 @@ def _choose_preview_columns(columns: list[str], *, max_cols: int = 6) -> list[st
 
 
 def _validate_identifiers(sql: str, allowlist: Mapping[str, Iterable[str]]) -> None:
+    """Best-effort validation of identifiers in a generated SQL string.
+
+    Ensures all ``table.column`` pairs appear in the provided allowlist,
+    all tables in FROM/JOIN clauses are allowlisted, and blocks DDL/DML.
+    """
     # Extract bare tokens and ensure all table.column references are allowed.
     tokens = set(_IDENTIFIER_RE.findall(sql))
     # Quick reject for DDL/DML verbs

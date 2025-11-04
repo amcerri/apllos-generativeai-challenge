@@ -108,7 +108,7 @@ batch_processing:
   sequential_processing: true  # Process queries one by one to avoid overload
   query_timeout_seconds: 60
   batch_id_timestamp: true     # Add unique timestamp to prevent caching
-  
+
 # ----------------------------------------------------------------------------
 # Query Client Configuration
 # ----------------------------------------------------------------------------

@@ -800,31 +800,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 document = processed.get("document")
                 
                 if not document:
-                    return {"answer": {"text": "Erro ao processar documento.", "meta": {"error": "no_document"}}}
-                
-                # Validate if document is actually commercial
-                # Check for explicit rejection risk, not just unknown type
-                # (documents with commercial structure but unknown type should still be processed)
-                risks = document.get("risks", [])
-                doc_type = document.get("doc", {}).get("doc_type", "unknown")
-                
-                # Only reject if explicitly marked as not commercial AND has no commercial structure
-                has_items = len(document.get("items", [])) > 0
-                has_totals = document.get("totals", {}) and any(v is not None for v in document.get("totals", {}).values() if not isinstance(v, list))
-                has_buyer_vendor = bool(document.get("buyer")) or bool(document.get("vendor"))
-                has_commercial_structure = has_items and (has_totals or has_buyer_vendor)
-                
-                if "not_commercial_document" in risks and not has_commercial_structure:
-                    return {
-                        "answer": {
-                            "text": "Este documento não é um documento comercial válido (fatura, pedido, ordem de compra, etc.). O sistema de commerce processa apenas documentos transacionais como faturas, pedidos de compra, cotações, contratos e recibos.",
-                            "meta": {
-                                "doc_type": doc_type,
-                                "risks": risks,
-                                "rejected": True
-                            }
-                        }
-                    }
+                    return {"answer": {"text": "❌ Erro ao processar documento.", "meta": {"error": "no_document"}}}
                 
                 # Generate summary
                 ans = summarizer.summarize(document)
@@ -833,7 +809,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 if isinstance(ans, dict) and "meta" in ans:
                     ans["meta"]["processing_method"] = processed.get("method", "unknown")
                     ans["meta"]["processing_warnings"] = processed.get("warnings", [])
-                
+
                 out = {"answer": ans}
             _inc_counter("requests_total", {"agent": "commerce", "node": "summarize"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "commerce.summarize"})

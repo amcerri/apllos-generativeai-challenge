@@ -40,10 +40,8 @@ True
 
 from __future__ import annotations
 
-import math
 import re
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -760,27 +758,27 @@ Responda APENAS com uma das opções: MOSTRAR_TODOS ou ANALISE_INTELIGENTE
         
         # Pattern 1: 1:1 ratio detection (clientes = compras)
         if self._detect_one_to_one_ratio(rows):
-            insights.append("🔍 **Insight**: Cada cliente fez exatamente uma compra (relação 1:1 entre clientes e compras)")
+            insights.append("Insight: Cada cliente fez exatamente uma compra (relação 1:1 entre clientes e compras)")
         
         # Pattern 2: Dominance detection (one state/category dominates)
         dominance_insight = self._detect_dominance_pattern(rows)
         if dominance_insight:
-            insights.append(f"📊 **Insight**: {dominance_insight}")
+            insights.append(f"Insight: {dominance_insight}")
         
         # Pattern 3: Geographic concentration
         geo_insight = self._detect_geographic_concentration(rows)
         if geo_insight:
-            insights.append(f"🗺️ **Insight**: {geo_insight}")
+            insights.append(f"Insight: {geo_insight}")
         
         # Pattern 4: Temporal patterns
         temporal_insight = self._detect_temporal_patterns(rows)
         if temporal_insight:
-            insights.append(f"📅 **Insight**: {temporal_insight}")
+            insights.append(f"Insight: {temporal_insight}")
         
         # Pattern 5: Category concentration
         category_insight = self._detect_category_concentration(rows)
         if category_insight:
-            insights.append(f"🏷️ **Insight**: {category_insight}")
+            insights.append(f"Insight: {category_insight}")
         
         if insights:
             return "\n\n" + "\n".join(insights)

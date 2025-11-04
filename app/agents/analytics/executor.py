@@ -122,6 +122,21 @@ _BREAKER_RESET_AFTER_S: Final[float] = 60.0
 
 
 def _sql_key(sql: str) -> str:
+    """Return a short, stable key for a SQL string.
+
+    Uses SHA-256 over the normalized SQL to produce a 16-hex digest prefix.
+    Intended for circuit-breaker bucketing and lightweight caching keys.
+
+    Parameters
+    ----------
+    sql : str
+        The SQL text to hash.
+
+    Returns
+    -------
+    str
+        A 16-character hexadecimal string.
+    """
     import hashlib
     return hashlib.sha256(sql.strip().encode("utf-8")).hexdigest()[:16]
 
@@ -281,12 +296,45 @@ class AnalyticsExecutor:
 
 
 def _get_attr(obj: Mapping[str, Any] | Any, name: str, *, default: Any) -> Any:
+    """Best-effort attribute getter for plan-like objects.
+
+    Supports both mapping access (``obj[name]``) and attribute access
+    (``getattr(obj, name)``) with a provided default fallback.
+
+    Parameters
+    ----------
+    obj : Mapping[str, Any] | Any
+        Object or mapping that may contain the requested attribute.
+    name : str
+        Attribute name to retrieve.
+    default : Any
+        Value to return when the attribute/key is missing.
+
+    Returns
+    -------
+    Any
+        The resolved value or the default when absent.
+    """
     if isinstance(obj, Mapping):
         return obj.get(name, default)
     return getattr(obj, name, default)
 
 
 def _assert_safe_select(sql: str) -> None:
+    """Validate that a SQL string is a safe, read-only SELECT/CTE.
+
+    Enforces the following:
+    - No stacked statements (``;``)
+    - Statement starts with ``SELECT`` or ``WITH``
+    - No DDL/DML tokens
+    - Function calls restricted to a conservative allowlist
+    - No access to ``pg_catalog`` or ``information_schema``
+
+    Raises
+    ------
+    ValueError
+        If any safety constraint is violated.
+    """
     sql_l = sql.lstrip().lower()
     # Disallow multiple statements via semicolons (stacked statements)
     if ";" in sql_l:
