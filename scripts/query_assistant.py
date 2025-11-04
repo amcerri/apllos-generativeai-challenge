@@ -27,7 +27,23 @@ class QueryAssistant:
     
     def __init__(self, base_url: str = "http://localhost:2024"):
         self.base_url = base_url
-        self.http_client = httpx.AsyncClient(timeout=60.0)
+        
+        # Load configuration
+        try:
+            from app.config.settings import get_settings
+            settings = get_settings()
+            http_timeout = float(settings.query_client.http_timeout_seconds)
+            polling_timeout = settings.query_client.polling_timeout_seconds
+            polling_interval = settings.query_client.polling_interval_seconds
+        except Exception:
+            # Fallback to defaults if config not available
+            http_timeout = 300.0
+            polling_timeout = 300
+            polling_interval = 1
+        
+        self.http_client = httpx.AsyncClient(timeout=http_timeout)
+        self.polling_timeout = polling_timeout
+        self.polling_interval = polling_interval
     
     async def query(
         self,
@@ -140,7 +156,7 @@ class QueryAssistant:
         run_id = run_data["run_id"]
         
         # Poll for completion
-        max_attempts = 30  # 30 tentativas de 1 segundo
+        max_attempts = self.polling_timeout // self.polling_interval
         for attempt in range(max_attempts):
             response = await self.http_client.get(f"{self.base_url}/threads/{thread_id}/state")
             response.raise_for_status()
@@ -152,12 +168,13 @@ class QueryAssistant:
             
             # Debug progress every 5 seconds
             if attempt % 5 == 0:
-                print(f"⏳ Waiting... ({attempt + 1}s)")
+                elapsed = (attempt + 1) * self.polling_interval
+                print(f"⏳ Waiting... ({elapsed}s)")
                 tasks = state.get("tasks", [])
                 agent = values.get("agent", "N/A")
                 print(f"🔍 Debug - Agent: {agent}, Tasks: {len(tasks)}")
             
-            await asyncio.sleep(1)
+            await asyncio.sleep(self.polling_interval)
         else:
             print("❌ Timeout: processing took too long")
             return {"error": "timeout"}

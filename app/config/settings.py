@@ -571,6 +571,24 @@ class BatchProcessingConfig(BaseModel):
     markdown: BatchProcessingMarkdownConfig = Field(default_factory=BatchProcessingMarkdownConfig)
 
 
+class QueryClientConfig(BaseModel):
+    """Query client configuration.
+    
+    Attributes
+    ----------
+    http_timeout_seconds : int
+        HTTP client timeout for requests to LangGraph server
+    polling_timeout_seconds : int
+        Polling timeout for waiting for query completion
+    polling_interval_seconds : int
+        Interval between polling attempts in seconds
+    """
+    
+    http_timeout_seconds: int = Field(default=300, ge=1, description="HTTP client timeout in seconds")
+    polling_timeout_seconds: int = Field(default=300, ge=1, description="Polling timeout in seconds")
+    polling_interval_seconds: int = Field(default=1, ge=1, description="Polling interval in seconds")
+
+
 class RoutingConfig(BaseModel):
     """Routing configuration.
     
@@ -759,6 +777,8 @@ class Settings(BaseSettings):
         Document processing configuration
     batch_processing : BatchProcessingConfig
         Batch processing configuration
+    query_client : QueryClientConfig
+        Query client configuration
     routing : RoutingConfig
         Routing configuration
     interruptions : InterruptsConfig
@@ -795,6 +815,7 @@ class Settings(BaseSettings):
     # Processing configurations
     document_processing: DocumentProcessingConfig = Field(default_factory=DocumentProcessingConfig)
     batch_processing: BatchProcessingConfig = Field(default_factory=BatchProcessingConfig)
+    query_client: QueryClientConfig = Field(default_factory=QueryClientConfig)
     
     # System configurations
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
