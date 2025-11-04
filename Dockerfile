@@ -41,7 +41,7 @@ COPY --chown=app:app app/prompts ./app/prompts
 # Frontend assets (Chainlit logo, favicon, avatars)
 COPY --chown=app:app frontend ./frontend
 COPY --chown=app:app public ./public
-COPY --chown=app:app .chainlit ./.chainlit
+COPY --chown=app:app chainlit.toml ./chainlit.toml
 COPY --chown=app:app chainlit.md ./chainlit.md
 # Samples (schema/seed) if they exist
 COPY --chown=app:app data/samples ./data/samples

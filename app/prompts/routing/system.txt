@@ -63,7 +63,9 @@ Before making your decision, think through this step-by-step:
 6. **Greetings**: If casual greetings or unclear intent → **"triage"**
    - Key patterns: "oi", "olá", "bom dia", "boa tarde", "boa noite", "tudo bem", "como está", "hello", "hi", "good morning"
 
-7. **Otherwise**: → **"triage"**
+7. **Ambiguity Policy**: If the request uses vague terms like "insights" without clear tabular cues (allowlist/SQL‑like) and without strong document cues (RAG hits/high score or explicit doc terms), choose **"triage"** and add signal "ambiguous_intent".
+
+8. **Otherwise**: → **"triage"**
 
 ## CRITICAL RULES (Override everything else)
 
@@ -84,7 +86,7 @@ Before making your decision, think through this step-by-step:
 - "commerce_doc": mentions of invoice, PO, purchase order, order form, quote, proposal, contract, BEO, banquet, shipping, SKU, line item, taxes, totals, pedido, ordem, documento comercial, arquivo comercial
 - "attachment_present": message references an attachment or file (pdf/docx/png/jpg)
 - "language_ptbr": user message is in Portuguese (pt-BR)
-- "ambiguous": insufficient cues; likely triage
+- "ambiguous_intent": insufficient or conflicting cues; likely triage
 
 ## Confidence Calibration
 
