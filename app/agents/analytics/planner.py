@@ -492,6 +492,9 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
         # Fix schema prefixes
         sql = self._fix_schema_prefixes(sql)
         
+        # Fix window function GROUP BY issues
+        sql = self._fix_window_function_groupby(sql, logger)
+        
         # Basic SQL safety checks
         sql_lower = sql.lower()
         
@@ -559,6 +562,124 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
             sql = re.sub(pattern, replacement, sql, flags=re.IGNORECASE)
         
         return sql
+
+    def _fix_window_function_groupby(self, sql: str, logger: Any) -> str:
+        """Fix window function GROUP BY issues.
+
+        When window functions use ORDER BY columns in OVER clause, those columns
+        must appear in the outer GROUP BY if the query has GROUP BY.
+        """
+        import re
+        
+        sql_lower = sql.lower()
+        
+        # Check if query has GROUP BY and window functions
+        if " group by " not in sql_lower or " over " not in sql_lower:
+            return sql
+        
+        # Find the outermost SELECT statement (may have CTEs)
+        # Split by WITH clauses to find the main SELECT
+        parts = re.split(r"\bWITH\s+", sql, flags=re.IGNORECASE)
+        main_query = parts[-1] if len(parts) > 1 else sql
+        
+        # Find window functions with ORDER BY in OVER clause in the main query
+        # Pattern: OVER (PARTITION BY ... ORDER BY column1, column2 ...)
+        window_pattern = re.compile(
+            r"OVER\s*\(\s*"
+            r"(?:PARTITION\s+BY\s+[^)]+)?"
+            r"(?:,\s*)?"
+            r"ORDER\s+BY\s+([^)]+)"
+            r"\s*\)",
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        # Extract columns used in ORDER BY of window functions
+        order_by_columns = set()
+        for match in window_pattern.finditer(main_query):
+            order_by_clause = match.group(1)
+            # Extract column names from ORDER BY (handle ASC/DESC and table aliases)
+            # Match: column_name or table.column_name
+            col_pattern = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)", re.IGNORECASE)
+            for col_match in col_pattern.finditer(order_by_clause):
+                col = col_match.group(1)
+                # Remove table alias prefix if present (e.g., "sales.month" -> "month")
+                # But keep the column name for GROUP BY
+                if "." in col:
+                    col = col.split(".")[-1]
+                order_by_columns.add(col.lower())
+        
+        if not order_by_columns:
+            return sql
+        
+        # Find the outermost GROUP BY clause in the main query
+        group_by_match = re.search(
+            r"GROUP\s+BY\s+([^)]+?)(?:\s+ORDER\s+BY|\s+HAVING|\s+LIMIT|$)",
+            main_query,
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        if not group_by_match:
+            return sql
+        
+        group_by_clause = group_by_match.group(1).strip()
+        group_by_columns = set()
+        
+        # Extract columns from GROUP BY (handle table aliases)
+        col_pattern = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)", re.IGNORECASE)
+        for col_match in col_pattern.finditer(group_by_clause):
+            col = col_match.group(1).strip()
+            if "." in col:
+                col = col.split(".")[-1]
+            group_by_columns.add(col.lower())
+        
+        # Find columns that need to be added to GROUP BY
+        missing_columns = order_by_columns - group_by_columns
+        
+        if not missing_columns:
+            return sql
+        
+        # Find original column names from the window function ORDER BY
+        # This preserves the exact column reference used in the window function
+        original_cols = []
+        for match in window_pattern.finditer(main_query):
+            order_by_clause = match.group(1)
+            col_pattern = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)", re.IGNORECASE)
+            for col_match in col_pattern.finditer(order_by_clause):
+                full_col = col_match.group(1)
+                col_lower = full_col.lower()
+                if "." in col_lower:
+                    col_lower = col_lower.split(".")[-1]
+                if col_lower in missing_columns:
+                    # Use the column name without table prefix for GROUP BY
+                    col_name = full_col.split(".")[-1] if "." in full_col else full_col
+                    if col_name not in original_cols:
+                        original_cols.append(col_name)
+        
+        if not original_cols:
+            return sql
+        
+        # Add missing columns to GROUP BY clause
+        # Find the position in the original SQL
+        main_query_start = sql.lower().rfind(main_query.lower())
+        if main_query_start == -1:
+            main_query_start = 0
+        
+        group_by_start_in_main = group_by_match.start(1)
+        group_by_start_in_sql = main_query_start + group_by_match.start(1)
+        group_by_end_in_sql = main_query_start + group_by_match.end(1)
+        
+        new_group_by = group_by_clause + ", " + ", ".join(original_cols)
+        fixed_sql = sql[:group_by_start_in_sql] + new_group_by + sql[group_by_end_in_sql:]
+        
+        logger.warning(
+            "Fixed window function GROUP BY",
+            extra={
+                "missing_columns": list(missing_columns),
+                "added_columns": original_cols
+            }
+        )
+        
+        return fixed_sql
 
 
 # ---------------------------------------------------------------------------
