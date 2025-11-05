@@ -236,26 +236,35 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
             signals.add("supervisor_fallback")
             reason = _append_reason(reason, f"fallback→{chosen}")
 
-        # Hard rule: Knowledge requires RAG evidence (hits above threshold)
+        # Soft rule: Knowledge prefers RAG evidence, but allow if question is clearly conceptual
+        # The Knowledge agent itself will handle gracefully when no documents are found
         try:
             if chosen == "knowledge":
                 rag_hits = int(getattr(ctx, "rag_hits", 0) or 0)
                 rag_min = getattr(ctx, "rag_min_score", None)
-                # threshold from settings, with default
-                rag_min_threshold = 0.78
+                # threshold from settings, with default (lower for routing probe)
+                rag_min_threshold = 0.65  # Lower threshold for routing decisions
                 try:
                     from app.config.settings import get_settings as _get_settings
                     _cfg = _get_settings()
-                    rag_min_threshold = float(getattr(getattr(_cfg, "routing"), "rag_min_score_threshold", rag_min_threshold))
+                    # Use a lower threshold for routing (actual Knowledge agent uses stricter)
+                    rag_min_threshold = 0.65  # Keep routing threshold lower
                 except Exception:
                     pass
-                if rag_hits <= 0 or (rag_min is not None and float(rag_min) < rag_min_threshold):
-                    # Redirect to triage and explain
+                
+                # Only redirect to triage if confidence is low AND no RAG evidence
+                # If LLM confidently routed to Knowledge (high confidence), trust it
+                # The Knowledge agent will handle missing documents gracefully
+                if rag_hits <= 0 and confidence < 0.75:
+                    # Low confidence + no RAG evidence → redirect to triage
                     chosen = "triage"
                     signals.update({"no_rag_evidence"})
-                    reason = _append_reason(reason, "fallback→triage(no_rag_evidence)")
-                    # confidence: triage default
+                    reason = _append_reason(reason, "fallback→triage(no_rag_evidence_low_confidence)")
                     confidence = max(confidence, 0.72)
+                elif rag_hits > 0 and rag_min is not None and float(rag_min) < rag_min_threshold:
+                    # RAG hits exist but below threshold - still allow, but lower confidence
+                    confidence = min(confidence, 0.75)
+                    signals.update({"weak_rag_evidence"})
         except Exception:
             pass
 

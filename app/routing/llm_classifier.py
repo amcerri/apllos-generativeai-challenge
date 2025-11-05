@@ -196,6 +196,9 @@ class LLMClassifier:
         *,
         thread_id: str | None = None,
         locale: str = "pt-BR",
+        rag_hits: int = 0,
+        rag_min_score: float | None = None,
+        has_attachment: bool = False,
     ) -> Any:
         """Return a RouterDecision (dataclass or plain dict) for *message*.
 
@@ -205,7 +208,12 @@ class LLMClassifier:
 
         with start_span("routing.classify"):
             try:
-                system = self._load_system_prompt(allowlist or {})
+                system = self._load_system_prompt(
+                    allowlist or {},
+                    rag_hits=rag_hits,
+                    rag_min_score=rag_min_score,
+                    has_attachment=has_attachment
+                )
                 schema = _routerdecision_json_schema()
                 if self._backend is None:
                     raise RuntimeError("no backend configured")
@@ -218,28 +226,15 @@ class LLMClassifier:
                 scorer_enabled = str(_os.getenv("ROUTER_SCORER_ENABLED", "true")).strip().lower() in {"1","true","yes","on"}
 
                 if ensemble_enabled:
-                    # Build three message variants using diverse example subsets
+                    # Simplified ensemble: use evidence-based reasoning, not keyword filtering
+                    # Load minimal examples for diversity, but rely primarily on evidence
                     ex_all = self._load_examples()
-
-                    def _filter_examples(kind: str) -> list[dict[str, str]]:
-                        if not ex_all:
-                            return []
-                        out: list[dict[str, str]] = []
-                        for row in ex_all:
-                            c = (row.get("content", "") or "").lower()
-                            if kind == "analytics" and any(k in c for k in ("quantos", "média", "soma", "select", "orders")):
-                                out.append(row)
-                            elif kind == "commerce" and any(k in c for k in ("fatura", "nota fiscal", "invoice", "contrato", "pedido")):
-                                out.append(row)
-                            elif kind == "knowledge" and any(k in c for k in ("o que é", "como", "estratégias", "definição")):
-                                out.append(row)
-                        # keep it short to reduce latency
-                        return out[:6]
-
+                    # Use only 1-2 examples per variant to reduce keyword dependency
+                    minimal_neutral = ex_all[:2] if ex_all else []
+                    
                     variants = [
-                        ("neutral", ex_all[:6] if ex_all else []),
-                        ("analytics", _filter_examples("analytics")),
-                        ("commerce", _filter_examples("commerce")),
+                        ("neutral", minimal_neutral),
+                        ("evidence_focused", minimal_neutral),  # Same examples, but system prompt emphasizes evidence
                     ]
                     votes: list[dict[str, Any]] = []
                     for tag, exs in variants:
@@ -312,8 +307,13 @@ class LLMClassifier:
 
                 # -------------------------------------------------------------
                 # Single-shot LLM route (fallback)
+                # Use minimal examples, focus on evidence-based reasoning
                 # -------------------------------------------------------------
-                messages = [*self._load_examples(), {"role": "user", "content": message}]
+                # Load only 2-3 diverse examples for few-shot, not all
+                examples = self._load_examples()
+                # Use only 2 examples to avoid over-reliance on patterns
+                minimal_examples = examples[:2] if examples else []
+                messages = [*minimal_examples, {"role": "user", "content": message}]
                 try:
                     raw = self._backend.generate_json(
                         system=system,
@@ -441,18 +441,12 @@ class LLMClassifier:
         agent = decision.get("agent", "")
         message_lower = message.lower()
         
-        # CRITICAL RULES: Override obvious misclassifications
+        # CRITICAL RULES: Validate question type matches agent capability
         
-        # 1. Conceptual questions MUST go to knowledge
-        conceptual_patterns = [
-            "como começar", "como funciona", "como fazer", "como escolher",
-            "estratégias", "melhores práticas", "o que é", "o que significa"
-        ]
-        is_conceptual = any(pattern in message_lower for pattern in conceptual_patterns)
-        if is_conceptual and agent != "knowledge":
-            self.log.warning("LLM misclassified conceptual question", 
-                           extra={"message": message, "agent": agent, "should_be": "knowledge"})
-            return False
+        # Note: We don't do keyword-based validation here anymore.
+        # The LLM should determine if the question is conceptual or data-driven.
+        # This validation only checks for obvious contradictions that the LLM
+        # should have caught (greetings, meta questions, etc.)
             
         # 2. Document processing MUST go to commerce
         doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair"]
@@ -487,6 +481,10 @@ class LLMClassifier:
             self.log.warning("LLM misclassified data query", 
                            extra={"message": message, "agent": agent, "should_be": "analytics"})
             return False
+        
+        # 6. Correlation/relationship analysis: Only route to analytics if explicitly asking for data
+        # Questions about "relação" can be conceptual (knowledge) or data-driven (analytics)
+        # Let LLM decide based on question type, don't force analytics
             
         # Check for meta questions (should go to triage)
         meta_patterns = ["o que você sabe", "o que você pode", "como você funciona", "o que você faz"]
@@ -499,7 +497,13 @@ class LLMClassifier:
         return True
 
     # Internals --------------------------------------------------------------
-    def _load_system_prompt(self, allowlist: Mapping[str, Iterable[str]]) -> str:
+    def _load_system_prompt(
+        self, 
+        allowlist: Mapping[str, Iterable[str]], 
+        rag_hits: int = 0,
+        rag_min_score: float | None = None,
+        has_attachment: bool = False
+    ) -> str:
         # Try to load from prompts file; fallback to embedded minimal prompt
         try:
             base_dir = self.base_dir.parent / "prompts" / "routing"
@@ -516,7 +520,32 @@ class LLMClassifier:
                 "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
                 "Also extract any tables/columns present in the message according to the provided allowlist."
             )
-        injected = content + "\nALLOWLIST_JSON=" + _allowlist_to_json(allowlist)
+        
+        # Inject evidence-based context
+        allowlist_json = _allowlist_to_json(allowlist)
+        has_allowlist = bool(allowlist and any(allowlist.values()))
+        
+        evidence_context = f"""
+## CURRENT EVIDENCE (Use this to decide routing)
+
+ALLOWLIST: {allowlist_json}
+- Has allowlist: {has_allowlist}
+- Available tables: {len(allowlist) if allowlist else 0}
+
+RAG EVIDENCE:
+- RAG hits: {rag_hits} (0 = no relevant documents found)
+- RAG min score: {rag_min_score if rag_min_score is not None else 'N/A'}
+
+ATTACHMENT EVIDENCE:
+- Has attachment: {has_attachment}
+
+**IMPORTANT**: Only route to an agent if the required evidence is available.
+- Analytics requires allowlist tables/columns
+- Knowledge requires RAG hits > 0
+- Commerce requires file attachment
+"""
+        
+        injected = content + "\nALLOWLIST_JSON=" + allowlist_json + evidence_context
         return injected
 
     def _load_examples(self) -> list[dict[str, str]]:
@@ -614,6 +643,16 @@ class LLMClassifier:
         data_query_patterns = ["quantos", "qual", "média", "soma", "total", "count", "average", "sum", "faturamento", "receita", "temos"]
         is_data_query = any(pattern in norm for pattern in data_query_patterns)
         
+        # Check for explicit data request signals (must have these to be data-driven)
+        explicit_data_signals = ["nos nossos dados", "no banco", "calcular", "calcule", "média", "quantos", "qual o valor", "nos pedidos", "em nossos dados"]
+        has_explicit_data_request = any(signal in norm for signal in explicit_data_signals)
+        
+        # Check for correlation/relationship WITHOUT explicit data request → conceptual
+        correlation_patterns = ["relação entre", "correlação", "como afeta", "impacto de", "impacto sobre", "efeito de", "relação com"]
+        has_correlation_phrase = any(pattern in norm for pattern in correlation_patterns)
+        # If has correlation phrase but NO explicit data request → treat as conceptual
+        is_correlation_conceptual = has_correlation_phrase and not has_explicit_data_request
+        
         # Check for commerce document processing (REACT: Reasoning + Acting)
         doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair", "review", "process", "analyze", "extract"]
         is_doc_processing = any(verb in norm for verb in doc_processing_verbs)
@@ -642,12 +681,20 @@ class LLMClassifier:
                 "knowledge": 0.95, # High score for definitions
                 "triage": 0.0,     # CONSTRAINT: No triage for definitions
             }
-        elif is_data_query:
-            # CONSTRAINT SATISFACTION: Data queries MUST go to analytics
+        elif is_correlation_conceptual:
+            # Questions about relationships WITHOUT explicit data request → Conceptual → Knowledge
             scores = {
-                "analytics": 0.98, # CONSTRAINT: Very high score for data queries
+                "analytics": 0.0,  # NOT analytics if conceptual
+                "commerce": 0.0,   # CONSTRAINT: No commerce
+                "knowledge": 0.95, # High score for conceptual relationship questions
+                "triage": 0.0,     # CONSTRAINT: No triage
+            }
+        elif is_data_query or (has_correlation_phrase and has_explicit_data_request):
+            # Only route to analytics if explicit data request signals present
+            scores = {
+                "analytics": 0.98, # High score for explicit data queries
                 "commerce": 0.0,   # CONSTRAINT: No commerce for data queries
-                "knowledge": 0.0,  # CONSTRAINT: No knowledge for data queries
+                "knowledge": 0.0,  # CONSTRAINT: No knowledge for explicit data queries
                 "triage": 0.0,     # CONSTRAINT: No triage for data queries
             }
         elif is_greeting or is_meta:
