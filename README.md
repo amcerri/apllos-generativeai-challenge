@@ -20,6 +20,8 @@
 
 The Apllos Generative AI Challenge Assistant is a multi-agent system designed for e-commerce analytics, knowledge retrieval, and document processing. Built with LangGraph and powered by LLMs, it provides context-aware responses in Brazilian Portuguese.
 
+<img src="public/frontend.png" alt="Frontend Interface" width="75%">
+
 ### Key Features
 
 - **Multi-Agent Orchestration**: LLM-based routing with supervisor guardrails
