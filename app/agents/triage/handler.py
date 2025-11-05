@@ -370,9 +370,9 @@ def _detect_out_of_scope(text: str) -> str | None:
 def _capabilities_block() -> str:
     return (
         "Minhas funcionalidades incluem:\n"
-        "- Consultas analíticas sobre dados e vendas registradas em nossa base.\n"
-        "- Busca de informações em documentos e normativas.\n"
-        "- Análise de faturas e documentos comerciais em formato PDF, DOCX ou TXT.\n\n"
+        "- Consultar informações em **bancos de dados**\n"
+        "- Buscar respostas em **bases de conhecimento**\n"
+        "- Extrair e analisar dados de arquivos PDF, DOCX, ou TXT\n\n"
     )
 
 

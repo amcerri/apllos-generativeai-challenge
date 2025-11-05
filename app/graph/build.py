@@ -431,11 +431,14 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             except Exception:
                 pass
 
-            # Shallow RAG probe (very cheap): top_k=2 with high threshold
+            # Shallow RAG probe for routing: use lower threshold for routing decisions
+            # This is just to check if relevant documents exist, not for final retrieval
             rag_hits = 0
             rag_min_score = None
             try:
-                _res = retriever.retrieve(query=q, top_k=2, min_score=0.82) if retriever is not None else None
+                # Use lower threshold (0.65) and more candidates (top_k=5) for routing probe
+                # The actual Knowledge agent will use stricter thresholds for final retrieval
+                _res = retriever.retrieve(query=q, top_k=5, min_score=0.65) if retriever is not None else None
                 if _res and getattr(_res, "hits", None):
                     rag_hits = len(_res.hits)
                     if rag_hits > 0:
@@ -450,7 +453,14 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     routing_probes=probe_signals)
             
             with start_span("node.route"):
-                dec = classifier.classify(q)
+                # Pass evidence to classifier (RAG hits, attachment presence)
+                dec = classifier.classify(
+                    q,
+                    allowlist=allowlist,
+                    rag_hits=rag_hits,
+                    rag_min_score=rag_min_score,
+                    has_attachment=bool(attachment)
+                )
                 # Convert RouterDecision to dict if it's a dataclass
                 if hasattr(dec, '__dict__'):
                     dec_dict = dec.__dict__

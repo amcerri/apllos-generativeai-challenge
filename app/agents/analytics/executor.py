@@ -368,7 +368,7 @@ def _assert_safe_select(sql: str) -> None:
         "select", "with", "as", "from", "where", "group", "order", "having", "limit", "offset",
         "join", "inner", "left", "right", "outer", "on", "union", "intersect", "except",
         "all", "distinct", "and", "or", "not", "in", "exists", "between", "like", "ilike",
-        "is", "null", "true", "false", "asc", "desc", "nulls", "first", "last"
+        "is", "null", "true", "false", "asc", "desc", "nulls", "first", "last", "filter"
     }
     import re as _re
     for m in _re.finditer(r"\b([a-z_][a-z0-9_]*)\s*\(", sql_l):
