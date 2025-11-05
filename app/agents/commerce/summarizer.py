@@ -503,12 +503,7 @@ def _render_ptbr(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_
     # === INTERAÇÃO ===
     linhas.append("INTERAÇÃO")
     linhas.append("-" * 30)
-    if total_txt != "(não informado)":
-        linhas.append("Gostaria de alguma análise específica sobre este pedido?")
-        linhas.append("Posso ajudar com comparações, simulações ou análises detalhadas.")
-    else:
-        linhas.append("Este documento apresenta algumas inconsistências nos valores.")
-        linhas.append("Posso ajudar a investigar ou analisar os dados disponíveis.")
+    linhas.append("Gostaria de integrar os dados extraídos deste documento no sistema?")
 
     return "\n".join(linhas)
 
@@ -607,12 +602,7 @@ def _render_en(doc: _DocView, *, top_k: int, top_items_display: int = 10, max_it
     # === INTERACTION ===
     lines.append("INTERACTION")
     lines.append("-" * 30)
-    if total_txt != "(not specified)":
-        lines.append("Would you like any specific analysis on this order?")
-        lines.append("I can help with comparisons, simulations, or detailed analyses.")
-    else:
-        lines.append("This document presents some inconsistencies in the values.")
-        lines.append("I can help investigate or analyze the available data.")
+    lines.append("Would you like to integrate the extracted data from this document into the system?")
 
     return "\n".join(lines)
 
