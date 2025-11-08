@@ -245,11 +245,36 @@ def _compose_text_ptbr(query: str, agent: str, *, signals: list[str] | None = No
         return _greeting_with_capabilities()
 
     # --- Detect out-of-scope topics -----------------------------------------
-    oos_topic = _detect_out_of_scope(q)
+    # Check signals first (from router), then detect from query
+    sigs = set(signals or [])
+    oos_topic = None
+    if "out_of_scope" in sigs:
+        # Router already detected out-of-scope, find the topic type
+        for sig in sigs:
+            if sig in ("weather", "news", "financial_markets", "code_generation", "sports_entertainment"):
+                oos_topic = sig
+                break
+        # If no specific topic found, try to detect from query
+        if not oos_topic:
+            oos_topic = _detect_out_of_scope(q)
+    else:
+        # No signal from router, detect from query
+        oos_topic = _detect_out_of_scope(q)
+    
     if oos_topic:
+        # Map signal names to human-readable topic names
+        topic_map = {
+            "weather": "previsão do tempo/meteorologia",
+            "news": "notícias em tempo real",
+            "financial_markets": "cotações/mercado financeiro em tempo real",
+            "code_generation": "geração de código fora do contexto do projeto",
+            "sports_entertainment": "assuntos esportivos/entretenimento",
+        }
+        topic_display = topic_map.get(oos_topic, oos_topic)
+        
         # Prefer a humanized LLM message; fallback to a concise fixed text
-        human = _human_oos_message(oos_topic)
-        fallback = f"No momento não ofereço {oos_topic}. Sugiro consultar um serviço especializado."
+        human = _human_oos_message(topic_display)
+        fallback = f"No momento não ofereço {topic_display}. Sugiro consultar um serviço especializado."
         msg = human or fallback
         return msg + "\n\n" + _capabilities_block() + "\n\nComo posso ajudar?"
 

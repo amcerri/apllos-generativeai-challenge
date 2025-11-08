@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -299,6 +299,9 @@ class LLMClassifier:
         rag_hits: int = 0,
         rag_min_score: float | None = None,
         has_attachment: bool = False,
+        conversation_history: Sequence[dict[str, Any]] | None = None,
+        last_answer: Mapping[str, Any] | None = None,
+        relevant_context: Mapping[str, Any] | None = None,
     ) -> Any:
         """Return a RouterDecision (dataclass or plain dict) for *message*.
 
@@ -331,12 +334,30 @@ class LLMClassifier:
                 if self._cache:
                     self._cache.set(message, allowlist or {}, decision)
                 return self._return_final(decision)
+            
+            # Detect out-of-scope topics before LLM classification
+            oos_topic = self._detect_out_of_scope(message)
+            if oos_topic:
+                decision = {
+                    "agent": "triage",
+                    "confidence": 1.0,
+                    "reason": f"out_of_scope_{oos_topic}",
+                    "tables": [],
+                    "columns": [],
+                    "signals": ["out_of_scope", oos_topic],
+                    "thread_id": thread_id,
+                }
+                decision = self._apply_confidence_calibration(decision)
+                if self._cache:
+                    self._cache.set(message, allowlist or {}, decision)
+                return self._return_final(decision)
             try:
                 system = self._load_system_prompt(
                     allowlist or {},
                     rag_hits=rag_hits,
                     rag_min_score=rag_min_score,
-                    has_attachment=has_attachment
+                    has_attachment=has_attachment,
+                    relevant_context=relevant_context
                 )
                 schema = _routerdecision_json_schema()
                 if self._backend is None:
@@ -606,6 +627,42 @@ class LLMClassifier:
 
         return None
 
+    def _detect_out_of_scope(self, query: str) -> str | None:
+        """Detect if query is about topics outside system capabilities.
+        
+        Parameters
+        ----------
+        query:
+            User query text.
+            
+        Returns
+        -------
+        str | None
+            Out-of-scope topic type or None if query is in scope.
+        """
+        q = (query or "").lower().strip()
+        if not q:
+            return None
+        
+        weather = ("previsão do tempo", "previsao do tempo", "meteorologia", "clima", "tempo em ", "temperatura")
+        news = ("notícias", "noticias", "news")
+        markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
+        code = ("programar em", "escreva um código", "write code")
+        sports = ("futebol", "jogo", "basquete", "vôlei", "volei", "nba", "fifa", "champions", "copa do mundo")
+        
+        if any(k in q for k in weather):
+            return "weather"
+        if any(k in q for k in news):
+            return "news"
+        if any(k in q for k in markets):
+            return "financial_markets"
+        if any(k in q for k in code):
+            return "code_generation"
+        if any(k in q for k in sports):
+            return "sports_entertainment"
+        
+        return None
+
     def _return_final(self, decision: dict[str, Any]) -> Any:
         """Record metrics and coerce the RouterDecision for return."""
         try:
@@ -681,7 +738,8 @@ class LLMClassifier:
         allowlist: Mapping[str, Iterable[str]], 
         rag_hits: int = 0,
         rag_min_score: float | None = None,
-        has_attachment: bool = False
+        has_attachment: bool = False,
+        relevant_context: Mapping[str, Any] | None = None
     ) -> str:
         # Try to load from prompts file; fallback to embedded minimal prompt
         try:
@@ -724,7 +782,31 @@ ATTACHMENT EVIDENCE:
 - Commerce requires file attachment
 """
         
-        injected = content + "\nALLOWLIST_JSON=" + allowlist_json + evidence_context
+        # Add conversation context if available and relevant
+        context_section = ""
+        if relevant_context and relevant_context.get("is_relevant", False):
+            context_summary = relevant_context.get("context_summary", "")
+            context_section = f"""
+
+## CONVERSATION CONTEXT (Validated as Relevant)
+
+{context_summary}
+
+**IMPORTANTE**: Este contexto foi validado como relevante para a query atual.
+Use este contexto para entender referências a mensagens anteriores e manter continuidade.
+Se a query claramente inicia um novo tópico, ignore este contexto e route normalmente.
+"""
+        elif relevant_context and not relevant_context.get("is_relevant", False):
+            context_section = """
+
+## CONVERSATION CONTEXT (Not Relevant - New Topic Detected)
+
+**IMPORTANTE**: A query atual representa uma mudança de tópico ou não está
+relacionada ao histórico recente. Processe esta query isoladamente, sem
+considerar contexto anterior. Route baseado apenas na query atual.
+"""
+        
+        injected = content + "\nALLOWLIST_JSON=" + allowlist_json + evidence_context + context_section
         return injected
 
     def _load_examples(self) -> list[dict[str, str]]:
