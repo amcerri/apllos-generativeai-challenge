@@ -160,7 +160,7 @@ flowchart TB
 
 - **Planner**: NL → safe SQL (allowlist, no DDL/DML, prefix fix) with Chain-of-Thought reasoning
 - **Executor**: read‑only, timeout, row cap (with GROUP BY heuristic) and window functions support
-- **Normalizer**: LLM-first intelligent data balancing (complete data vs. analytical insights) with configurable thresholds
+- **Normalizer**: Expert-like multi-stage analysis (descriptive, interpretative, actionable insights) with semantic query analysis for intelligent data display decisions and advanced pattern detection (statistical, business, anomalies)
 
 ### Knowledge (RAG)
 

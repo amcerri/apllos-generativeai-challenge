@@ -685,8 +685,14 @@ class LLMClassifier:
         # should have caught (greetings, meta questions, etc.)
             
         # 2. Document processing MUST go to commerce
+        # Only detect as document processing if verb is used WITH document-related context
         doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair"]
-        is_doc_processing = any(verb in message_lower for verb in doc_processing_verbs)
+        doc_context_keywords = ["documento", "fatura", "nota fiscal", "pedido", "invoice", "contract", "anexo", "arquivo", "pdf", "docx"]
+        has_doc_verb = any(verb in message_lower for verb in doc_processing_verbs)
+        has_doc_context = any(keyword in message_lower for keyword in doc_context_keywords)
+        # Only consider as document processing if verb AND document context are present
+        # OR if there's an explicit attachment mention
+        is_doc_processing = has_doc_verb and (has_doc_context or "anex" in message_lower or "attach" in message_lower)
         if is_doc_processing and agent != "commerce":
             self.log.warning("LLM misclassified document processing", 
                            extra={"message": message, "agent": agent, "should_be": "commerce"})

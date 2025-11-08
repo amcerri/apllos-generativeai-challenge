@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import base64
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,14 +69,14 @@ async def on_chat_start() -> None:
     # Initialize client
     client = LangGraphClient(base_url=LANGGRAPH_SERVER_URL)
     cl.user_session.set("client", client)
-    
+
     # Create thread
     try:
         thread_id = await client.create_thread()
         cl.user_session.set("thread_id", thread_id)
-        
+
         # Send welcome message
-        welcome_msg = welcome_msg = (
+        welcome_msg = (
             f"Olá! 👋 Sou o **{UI_NAME}**, seu assistente virtual para **análises, consultas e processamento de documentos**.\n\n"
             
             "Posso:\n"
@@ -86,7 +87,7 @@ async def on_chat_start() -> None:
             "Exemplos:\n"
             "- Quantos pedidos temos hoje?\n"
             "- O que significa _back office_ no e-commerce?\n"
-            "- Extraia informações desse pedido ou fatura (anexe um PDF ou DOCX)\n\n"
+            "- Extraia informações desse pedido ou fatura (anexe um documento)\n\n"
             
             "Como posso ajudar hoje?"
         )
@@ -113,6 +114,15 @@ async def on_message(message: cl.Message) -> None:
             ),
             author="Assistant",
         ).send()
+        return
+    
+    # Check for export command
+    user_query = message.content.strip().lower() if message.content else ""
+    export_commands = ["exportar pdf", "exportar", "/export-pdf", "export pdf", "gerar pdf"]
+    
+    if any(cmd in user_query for cmd in export_commands):
+        # Handle export
+        await on_export_pdf(None)
         return
     
     # Prepare input
@@ -234,6 +244,28 @@ async def on_message(message: cl.Message) -> None:
         
         # Replace processing message with answer only (no metadata, citations, or followups)
         msg.content = answer_text
+        
+        # Add export button if there's conversation history
+        try:
+            state = await client.get_thread_state(thread_id)
+            values = state.get("values", {})
+            conversation_history = values.get("conversation_history", [])
+            
+            # Only add export button if there's actual conversation history (more than welcome message)
+            if len(conversation_history) > 0:
+                msg.actions = [
+                    cl.Action(
+                        name="export_pdf",
+                        value="export",
+                        label="📄 Exportar conversa para PDF",
+                        description="Exporta o histórico da conversa para PDF",
+                        payload={"action": "export_pdf"},
+                    ),
+                ]
+        except Exception:
+            # If we can't check history, don't add button
+            pass
+        
         await msg.update()
             
     except httpx.TimeoutException:
@@ -257,6 +289,85 @@ async def on_message(message: cl.Message) -> None:
         )
         msg.content = error_content
         await msg.update()
+
+
+@cl.action_callback("export_pdf")
+async def on_export_pdf(action: cl.Action | None) -> None:
+    """Export conversation history to PDF.
+    
+    Can be called from action callback or directly from message handler.
+    """
+    client: LangGraphClient = cl.user_session.get("client")
+    thread_id: str = cl.user_session.get("thread_id")
+
+    if not client or not thread_id:
+        await cl.Message(
+            content=format_error(
+                "Erro de exportação",
+                "Sessão não inicializada. Por favor, recarregue a página.",
+            ),
+            author="System",
+        ).send()
+        return
+
+    try:
+        from frontend.pdf_exporter import export_conversation_to_pdf
+
+        # Show processing message
+        processing_msg = await cl.Message(
+            content="Gerando PDF do histórico da conversa...",
+            author="System",
+        ).send()
+
+        # Generate PDF (without metadata)
+        pdf_bytes = await export_conversation_to_pdf(thread_id, client, include_metadata=False)
+
+        if not pdf_bytes:
+            processing_msg.content = format_error(
+                "Erro ao exportar",
+                "Não foi possível gerar o PDF. Verifique se há histórico de conversa disponível.",
+            )
+            await processing_msg.update()
+            return
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"conversa_{timestamp}.pdf"
+
+        # Provide download via Chainlit File
+        await cl.Message(
+            content=f"PDF gerado com sucesso! Clique no botão abaixo para baixar.",
+            author="System",
+            elements=[
+                cl.File(
+                    name=filename,
+                    content=pdf_bytes,
+                    display="inline",
+                )
+            ],
+        ).send()
+
+        # Remove processing message
+        await processing_msg.remove()
+
+    except ImportError:
+        await cl.Message(
+            content=format_error(
+                "Funcionalidade não disponível",
+                "A biblioteca reportlab não está instalada. Instale com: pip install reportlab",
+            ),
+            author="System",
+        ).send()
+    except Exception as e:
+        await cl.Message(
+            content=format_error(
+                "Erro ao exportar",
+                f"Ocorreu um erro ao gerar o PDF: {str(e)}",
+            ),
+            author="System",
+        ).send()
+
+
 
 
 @cl.on_stop
