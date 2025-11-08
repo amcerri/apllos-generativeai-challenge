@@ -9,7 +9,8 @@ Covers the planner, executor, and normalizer modules.
   - Prompt engineering with Chain-of-Thought reasoning.
   - Heuristics for preview/aggregate/time series queries.
   - Allowlist validation of identifiers; join validation; schema prefix fixing; alias dot fixes.
-  - Optional OpenAI JSON Schema backend using `llm_client` and prompts.
+  - OpenAI tool calling backend (preferred) with JSON Schema fallback using `llm_client` and prompts.
+  - Tool calling reduces token usage compared to JSON Schema mode.
   - Config-driven limits: `default_limit`, `max_limit`, examples count.
 - Output: `PlannerPlan` with `sql`, `params`, `reason`, `limit_applied`, `warnings`.
 
@@ -34,6 +35,10 @@ Covers the planner, executor, and normalizer modules.
 - Paths:
   - LLM-based: system prompt + examples; produces JSON (`text`, optional structured payload).
   - Fallback: deterministic formatting with insights for small/medium/large datasets.
+- Caching:
+  - Response cache for similar queries with same SQL and result context.
+  - Cache key includes user query, agent name, SQL plan, and result metadata.
+  - Reduces redundant LLM calls for repeated or similar analytics queries.
 - Extras:
   - Pattern detection (temporal trends, dominance, geographic concentration, category concentration, 1:1 ratios).
   - For large outputs, sampling for LLM then full data appended in response.

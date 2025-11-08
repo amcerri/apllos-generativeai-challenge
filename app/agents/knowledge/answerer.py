@@ -245,7 +245,27 @@ def _answer_no_context_ptbr(query: str) -> dict[str, Any]:
 
 
 def _compose_summary_ptbr(query: str, hits: Sequence[_HitView], cap_chars: int) -> str:
-    """Generate a conversational answer using LLM based on retrieved documents."""
+    """Generate a conversational answer using LLM based on retrieved documents with response caching."""
+    
+    # Check response cache first
+    try:
+        from app.infra.cache import ResponseCache
+        
+        # Use singleton response cache instance
+        if not hasattr(_compose_summary_ptbr, "_response_cache"):
+            _compose_summary_ptbr._response_cache = ResponseCache(ttl_seconds=3600, max_size=1000)  # type: ignore[attr-defined]
+        
+        cache = _compose_summary_ptbr._response_cache  # type: ignore[attr-defined]
+        # Create context hash from hits (doc_ids and chunk_ids)
+        context = {
+            "hits": [{"doc_id": h.doc_id, "chunk_id": h.chunk_id} for h in hits[:3]],
+            "cap_chars": cap_chars,
+        }
+        cached = cache.get(query, "knowledge", context=context)
+        if cached is not None and isinstance(cached, dict) and "text" in cached:
+            return cached["text"]
+    except Exception:
+        pass
     
     # Prepare compact, relevant context from hits (salience-based, capped)
     # 1) Take up to 3 hits
@@ -364,6 +384,18 @@ Entregue apenas o texto final, pronto para leitura em console (sem marcação)."
         # Final guard: sentence-aware trimming
         if len(answer) > cap_chars:
             answer = _smart_shorten(answer, cap_chars)
+
+        # Cache the response
+        try:
+            if hasattr(_compose_summary_ptbr, "_response_cache"):
+                cache = _compose_summary_ptbr._response_cache  # type: ignore[attr-defined]
+                context = {
+                    "hits": [{"doc_id": h.doc_id, "chunk_id": h.chunk_id} for h in hits[:3]],
+                    "cap_chars": cap_chars,
+                }
+                cache.set(query, "knowledge", {"text": answer}, context=context)
+        except Exception:
+            pass
 
         log.info("KnowledgeAnswerer: LLM answer produced", extra={"chars": len(answer)})
         return answer

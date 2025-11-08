@@ -23,7 +23,9 @@ The routing system consists of two main components working in tandem:
 - Falls back to deterministic heuristics when LLM unavailable
 
 **Key Features**:
-- JSON Schema structured output for consistent decision format
+- Tool calling (preferred) or JSON Schema structured output for consistent decision format
+- Semantic caching for routing decisions to improve performance
+- Meta question detection for system capability and usage questions
 - Enhanced validation with critical override rules
 - Context-first routing prioritizing structural evidence
 - Self-consistency checks and confidence calibration
@@ -49,6 +51,7 @@ The routing system consists of two main components working in tandem:
 - Provides final routing decision with safety guarantees
 
 **Key Features**:
+- Semantic validation of routing decisions against available evidence
 - Commerce document dominance detection
 - Analytics vs Knowledge fallback logic
 - Confidence recalibration for fallback decisions
@@ -71,14 +74,19 @@ Input   Analysis       Structured      Guardrails   Validated      Specialized
 
 ## Improvements
 
+- **Semantic Caching**: Routing decisions are cached using semantic query normalization to improve performance and reduce LLM calls.
+- **Asynchronous RAG Probe**: RAG probe executes in parallel with LLM classification using background threads, reducing routing latency.
+- **Semantic Validation**: Enhanced validation checks routing decisions against available evidence (allowlist for analytics, attachments for commerce, RAG hits for knowledge).
+- **Meta Question Detection**: Automatic detection of questions about system capabilities or usage, routing them directly to Triage agent.
 - Evidence-augmented probes in `route` node:
   - Attachment probe → signals: `attachment_present`, `attachment_mime:<mime>`
   - SQL probe → signal: `sql_probe_true`
-  - Shallow RAG probe (top_k=2, min_score=0.82) → signals: `rag_probe_hit`, plus `routing_ctx.rag_hits`, `routing_ctx.rag_min_score`
-- Supervisor consumes `RoutingContext` to apply safer, context-first fallbacks.
+  - Asynchronous RAG probe (top_k=5, min_score=0.65) → signals: `rag_probe_hit`, plus `routing_ctx.rag_hits`, `routing_ctx.rag_min_score`
+- Supervisor consumes `RoutingContext` to apply safer, context-first fallbacks with semantic validation.
 - Ensemble router (feature-flagged) with scorer tie-breaker:
   - Variants: neutral, analytics-focused, commerce-focused examples
   - Majority vote; on tie, scorer picks the best candidate
+- Tool calling (preferred) with JSON Schema fallback for efficient structured outputs.
 
 ## Environment Flags
 
@@ -95,6 +103,8 @@ Classifier output signals are augmented by route probes; supervisor logs and kee
 - `attachment_present`, `attachment_mime:<mime>`
 - `sql_probe_true`
 - `rag_probe_hit`
+- `meta_question`, `meta_question_capabilities`, `meta_question_usage`
+- `semantic_validation_corrected`
 - `supervisor_fallback`
 
 ## Tests
@@ -109,10 +119,13 @@ This section explains how messages are routed to agents using an LLM-based class
 
 ### Classifier ([app/routing/llm_classifier.py](../app/routing/llm_classifier.py))
 
-- Primary path: OpenAI JSON Schema via centralized `llm_client` with state-of-the-art prompt engineering.
+- Primary path: OpenAI tool calling (preferred) or JSON Schema via centralized `llm_client` with state-of-the-art prompt engineering.
+  - Tool calling reduces token usage compared to JSON Schema mode.
   - System prompt injects allowlist JSON (tables → columns) to improve table/column extraction.
   - Chain-of-Thought reasoning, self-consistency checks, and confidence calibration.
   - Enhanced validation with critical override rules for conceptual questions, document processing, data queries, and greetings.
+  - Meta question detection: automatically detects questions about system capabilities or usage and routes to Triage.
+- Semantic caching: routing decisions are cached using normalized query text to improve performance.
 - Fallback: deterministic heuristic routing when LLM is unavailable or errors.
   - Signals considered (ordered by weight):
     - Allowlist overlap (strong signal) → analytics
@@ -120,6 +133,7 @@ This section explains how messages are routed to agents using an LLM-based class
     - Commerce cues (currency + totals terms) → commerce
     - Document-style phrasing without tabular cues → knowledge
     - Greeting patterns → triage
+    - Meta question patterns → triage
     - Farewell patterns → triage
 - Output: normalized to `RouterDecision` (dataclass if available), including `agent`, `confidence`, `reason`, `tables`, `columns`, `signals`, `thread_id`.
 
@@ -127,6 +141,11 @@ This section explains how messages are routed to agents using an LLM-based class
 
 - Purpose: apply simplified guardrails on top of classifier output with LLM-first approach; single-pass fallback, no loops.
 - Inputs: `RouterDecision` and optional `RoutingContext` (RAG hits, allowlist hints).
+- Semantic validation: validates routing decisions against available evidence before applying fallbacks.
+  - Analytics requires allowlist evidence (tables, columns, or SQL-like signals).
+  - Commerce requires attachment evidence.
+  - Knowledge benefits from RAG evidence but can work without it for conceptual questions.
+  - High confidence decisions (≥0.85) are generally trusted.
 - Rules:
   - Commerce guard: if `commerce_doc` in signals → force `commerce` with high confidence.
   - Simplified fallbacks (removed problematic redirections):

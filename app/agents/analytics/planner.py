@@ -132,15 +132,16 @@ class JSONLLMBackend(Protocol):
 
 
 class OpenAIJSONBackend:
-    """Backend using centralized LLM client with JSON Schema outputs."""
+    """Backend using centralized LLM client with tool calling (preferred) or JSON Schema fallback."""
 
-    def __init__(self, *, model: str) -> None:
+    def __init__(self, *, model: str, use_tool_calling: bool = True) -> None:
         from app.infra.llm_client import get_llm_client
 
         self._client = get_llm_client()
         if not self._client.is_available():
             raise RuntimeError("LLM client not available")
         self._default_model = model
+        self._use_tool_calling = use_tool_calling
 
     def generate_json(
         self,
@@ -152,12 +153,93 @@ class OpenAIJSONBackend:
         temperature: float = 0.0,
         max_output_tokens: int | None = None,
     ) -> Mapping[str, Any]:
-        """Generate JSON response using centralized LLM client."""
-        resp = self._client.chat_completion(
-            messages=[{"role": "system", "content": system}, *messages],
-            model=model or self._default_model,
+        """Generate JSON response using tool calling (preferred) or JSON Schema fallback."""
+        model_name = model or self._default_model
+
+        # Prefer tool calling for token efficiency
+        if self._use_tool_calling:
+            try:
+                return self._generate_with_tools(
+                    system=system,
+                    messages=messages,
+                    json_schema=json_schema,
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_output_tokens,
+                )
+            except Exception as exc:
+                # Fallback to JSON Schema if tool calling fails
+                try:
+                    from app.infra.logging import get_logger
+                    log = get_logger(__name__)
+                    log.warning("Tool calling failed, falling back to JSON Schema", extra={"error": str(exc)})
+                except Exception:
+                    pass
+
+        # Fallback to JSON Schema
+        return self._generate_with_json_schema(
+            system=system,
+            messages=messages,
+            json_schema=json_schema,
+            model=model_name,
             temperature=temperature,
             max_tokens=max_output_tokens,
+        )
+
+    def _generate_with_tools(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using tool calling (more token-efficient)."""
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "analytics_plan",
+                "description": json_schema.get("description", "Generate SQL plan for analytics query"),
+                "parameters": json_schema,
+            },
+        }
+
+        resp = self._client.chat_completion_with_tools(
+            messages=[{"role": "system", "content": system}, *messages],
+            tools=[tool],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tool_choice="required",
+            max_retries=0,
+        )
+
+        if resp is None or not resp.text:
+            raise ValueError("Tool calling returned empty response")
+
+        data = self._client.extract_json(resp.text, schema=dict(json_schema))
+        if data is None:
+            raise ValueError("Failed to parse JSON from tool calling response")
+        return data
+
+    def _generate_with_json_schema(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using JSON Schema (fallback)."""
+        resp = self._client.chat_completion(
+            messages=[{"role": "system", "content": system}, *messages],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {"name": "analytics_plan", "schema": dict(json_schema), "strict": True},

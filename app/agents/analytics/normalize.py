@@ -211,7 +211,28 @@ class AnalyticsNormalizer:
         plan: _PlanView, 
         result: _ResultView
     ) -> dict[str, Any] | None:
-        """Use LLM to normalize the results."""
+        """Use LLM to normalize the results with response caching."""
+        
+        # Check response cache first
+        try:
+            from app.infra.cache import ResponseCache
+            
+            # Use singleton response cache instance
+            if not hasattr(self, "_response_cache"):
+                self._response_cache = ResponseCache(ttl_seconds=3600, max_size=1000)
+            
+            cache = self._response_cache
+            cache_key_context = {
+                "sql": plan.sql,
+                "row_count": result.row_count,
+                "limit_applied": result.limit_applied,
+            }
+            cached = cache.get(user_query, "analytics", context=cache_key_context)
+            if cached is not None:
+                self.log.debug("Using cached analytics response")
+                return cached
+        except Exception:
+            pass
         
         # Use centralized LLM client (with retries/timeouts handled there)
         try:
@@ -329,6 +350,19 @@ class AnalyticsNormalizer:
         if response_data is None:
             self.log.warning("LLM response could not be parsed as JSON")
             return None
+        
+        # Cache the response
+        try:
+            if hasattr(self, "_response_cache"):
+                cache = self._response_cache
+                cache_key_context = {
+                    "sql": plan.sql,
+                    "row_count": result.row_count,
+                    "limit_applied": result.limit_applied,
+                }
+                cache.set(user_query, "analytics", response_data, context=cache_key_context)
+        except Exception:
+            pass
         
         # For large datasets, let the LLM handle the formatting completely
         # Don't append additional data as the LLM should handle everything
