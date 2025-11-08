@@ -164,6 +164,7 @@ class LLMClassifier:
         temperature: float = 0.0,
         max_output_tokens: int | None = 512,
         base_dir: Path | None = None,
+        enable_cache: bool = True,
     ) -> None:
         self.log = get_logger(__name__)
         self.temperature = float(temperature)
@@ -187,6 +188,16 @@ class LLMClassifier:
                     "LLM backend unavailable; falling back to heuristics", exc_info=exc
                 )
                 self._backend = None
+        
+        # Initialize routing cache
+        self._cache = None
+        if enable_cache:
+            try:
+                from app.infra.cache import RoutingCache
+                self._cache = RoutingCache(ttl_seconds=3600, max_size=1000)
+            except Exception as exc:
+                self.log.warning("Routing cache unavailable", exc_info=exc)
+                self._cache = None
 
     # Public API -------------------------------------------------------------
     def classify(
@@ -207,6 +218,30 @@ class LLMClassifier:
         """
 
         with start_span("routing.classify"):
+            # Check cache first
+            if self._cache:
+                cached = self._cache.get(message, allowlist or {})
+                if cached:
+                    self.log.debug("Using cached routing decision")
+                    cached["thread_id"] = thread_id
+                    return self._return_final(cached)
+            
+            # Detect meta questions before LLM classification
+            meta_type = self._detect_meta_question(message)
+            if meta_type:
+                decision = {
+                    "agent": "triage",
+                    "confidence": 1.0,
+                    "reason": f"meta_question_{meta_type}",
+                    "tables": [],
+                    "columns": [],
+                    "signals": ["meta_question", meta_type],
+                    "thread_id": thread_id,
+                }
+                decision = self._apply_confidence_calibration(decision)
+                if self._cache:
+                    self._cache.set(message, allowlist or {}, decision)
+                return self._return_final(decision)
             try:
                 system = self._load_system_prompt(
                     allowlist or {},
@@ -267,6 +302,8 @@ class LLMClassifier:
                             chosen["signals"] = list({*chosen.get("signals", []), "ensemble_majority"})
                             # Apply optional confidence calibration
                             chosen = self._apply_confidence_calibration(chosen)
+                            if self._cache:
+                                self._cache.set(message, allowlist or {}, chosen)
                             return self._return_final(chosen)
 
                         # Tie-breaker using scorer
@@ -275,6 +312,8 @@ class LLMClassifier:
                                 scorer_dec = self._score_agents(message, candidates=[d["decision"] for d in votes])
                                 scorer_dec["signals"] = list({*scorer_dec.get("signals", []), "ensemble_scorer"})
                                 scorer_dec = self._apply_confidence_calibration(scorer_dec)
+                                if self._cache:
+                                    self._cache.set(message, allowlist or {}, scorer_dec)
                                 return self._return_final(scorer_dec)
                             except Exception as _se:
                                 # Conservative fallback: if no majority and scorer failed,
@@ -296,11 +335,15 @@ class LLMClassifier:
                                 if best_conf < (conf_min + 0.05):
                                     tri = {"agent": "triage", "confidence": max(best_conf, conf_min), "reason": "ensemble_tie_low_confidence", "tables": [], "columns": [], "signals": ["ensemble_tie", "low_confidence"], "thread_id": thread_id}
                                     tri = self._apply_confidence_calibration(tri)
+                                    if self._cache:
+                                        self._cache.set(message, allowlist or {}, tri)
                                     return self._return_final(tri)
                                 # otherwise, return first but mark tie
                                 first = dict(votes[0]["decision"])  # copy
                                 first.setdefault("signals", []).append("ensemble_tie")
                                 first = self._apply_confidence_calibration(first)
+                                if self._cache:
+                                    self._cache.set(message, allowlist or {}, first)
                                 return self._return_final(first)
 
                     # If ensemble produced nothing valid, fall back to single-shot below
@@ -326,6 +369,8 @@ class LLMClassifier:
                     decision = _normalize_router_decision(raw, thread_id=thread_id)
                     if self._validate_decision(decision, message):
                         decision = self._apply_confidence_calibration(decision)
+                        if self._cache:
+                            self._cache.set(message, allowlist or {}, decision)
                         return self._return_final(decision)
                     else:
                         self.log.info("LLM decision invalid, using heuristic", extra={"llm_decision": decision})
@@ -336,6 +381,8 @@ class LLMClassifier:
                     self.log.info("LLM failed, using heuristic", extra={"reason": str(llm_exc)})
                     decision = self._heuristic_decide(message, allowlist or {}, thread_id=thread_id, locale=locale)
                     decision = self._apply_confidence_calibration(decision)
+                    if self._cache:
+                        self._cache.set(message, allowlist or {}, decision)
                     return self._return_final(decision)
             except Exception as exc:
                 self.log.info("classifier fallback engaged", extra={"reason": str(exc)})
@@ -343,6 +390,8 @@ class LLMClassifier:
                     message, allowlist or {}, thread_id=thread_id, locale=locale
                 )
             decision = self._apply_confidence_calibration(decision)
+            if self._cache:
+                self._cache.set(message, allowlist or {}, decision)
             return self._return_final(decision)
 
     # ---------------------------------------------------------------------
@@ -426,6 +475,47 @@ class LLMClassifier:
         out = dict(decision)
         out["confidence"] = calibrated
         return out
+
+    def _detect_meta_question(self, query: str) -> str | None:
+        """Detect if query is a meta question about system capabilities or usage.
+
+        Parameters
+        ----------
+        query:
+            User query text.
+
+        Returns
+        -------
+        str | None
+            Meta question type ("capabilities" or "usage") or None if not a meta question.
+        """
+        q = (query or "").lower().strip()
+        if not q:
+            return None
+
+        capabilities_patterns = [
+            r'^(quais|o que|what)\s+(são|sao|sua|suas|você|voce|voces|vocês)\s+(funcionalidade|capacidade|pode|consegue|faz)',
+            r'^(quais|o que|what)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+            r'^(como|how)\s+(você|voce|voces|vocês|eu)\s+(pode|consegue|faço|fazer|uso|usar)',
+            r'^(me\s+)?(mostre|mostra|explique|explica|diga|diz)\s+(o\s+)?(que|quais)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+            r'^(help|ajuda|ajude|socorro)',
+        ]
+
+        for pattern in capabilities_patterns:
+            if re.search(pattern, q, re.IGNORECASE):
+                return "capabilities"
+
+        usage_patterns = [
+            r'^(como|how)\s+(faço|fazer|uso|usar|consulto|consultar|busco|buscar)\s+(pedido|dados|informação|informacao|documento)',
+            r'^(como|how)\s+(faço|fazer|uso|usar)\s+(para|pra)\s+(consultar|buscar|analisar|extrair)',
+            r'^(como|how)\s+(consultar|buscar|analisar|extrair)\s+(pedido|dados|informação|informacao|documento)',
+        ]
+
+        for pattern in usage_patterns:
+            if re.search(pattern, q, re.IGNORECASE):
+                return "usage"
+
+        return None
 
     def _return_final(self, decision: dict[str, Any]) -> Any:
         """Record metrics and coerce the RouterDecision for return."""

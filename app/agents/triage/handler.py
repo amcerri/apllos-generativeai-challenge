@@ -235,6 +235,11 @@ class TriageHandler:
 def _compose_text_ptbr(query: str, agent: str, *, signals: list[str] | None = None) -> str:
     q = (query or "").strip()
 
+    # --- Detect meta questions FIRST -----------------------------------------
+    meta_type = _detect_meta_question(q)
+    if meta_type:
+        return _compose_detailed_capabilities_response(q, meta_type)
+
     # --- Detect greeting -----------------------------------------------------
     if _looks_like_greeting(q):
         return _greeting_with_capabilities()
@@ -374,6 +379,202 @@ def _capabilities_block() -> str:
         "- Buscar respostas em **bases de conhecimento**\n"
         "- Extrair e analisar dados de arquivos PDF, DOCX, ou TXT\n\n"
     )
+
+
+def _detect_meta_question(query: str) -> str | None:
+    """Detect if query is a meta question about system capabilities or usage.
+
+    Parameters
+    ----------
+    query:
+        User query text.
+
+    Returns
+    -------
+    str | None
+        Meta question type ("capabilities" or "usage") or None if not a meta question.
+    """
+    q = (query or "").lower().strip()
+    if not q:
+        return None
+
+    import re
+
+    capabilities_patterns = [
+        r'^(quais|o que|what)\s+(são|sao|sua|suas|você|voce|voces|vocês)\s+(funcionalidade|capacidade|pode|consegue|faz)',
+        r'^(quais|o que|what)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+        r'^(como|how)\s+(você|voce|voces|vocês|eu)\s+(pode|consegue|faço|fazer|uso|usar)',
+        r'^(me\s+)?(mostre|mostra|explique|explica|diga|diz)\s+(o\s+)?(que|quais)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+        r'^(help|ajuda|ajude|socorro)',
+    ]
+
+    for pattern in capabilities_patterns:
+        if re.search(pattern, q, re.IGNORECASE):
+            return "capabilities"
+
+    usage_patterns = [
+        r'^(como|how)\s+(faço|fazer|uso|usar|consulto|consultar|busco|buscar)\s+(pedido|dados|informação|informacao|documento)',
+        r'^(como|how)\s+(faço|fazer|uso|usar)\s+(para|pra)\s+(consultar|buscar|analisar|extrair)',
+        r'^(como|how)\s+(consultar|buscar|analisar|extrair)\s+(pedido|dados|informação|informacao|documento)',
+    ]
+
+    for pattern in usage_patterns:
+        if re.search(pattern, q, re.IGNORECASE):
+            return "usage"
+
+    return None
+
+
+def _compose_detailed_capabilities_response(query: str, meta_type: str) -> str:
+    """Generate detailed response about system capabilities or usage guidance.
+
+    This function is only called when a meta question is explicitly detected.
+    It provides detailed information about system capabilities or usage guidance
+    based on the type of meta question asked.
+
+    Parameters
+    ----------
+    query:
+        User query text.
+    meta_type:
+        Type of meta question ("capabilities" or "usage").
+
+    Returns
+    -------
+    str
+        Detailed response text in Portuguese.
+    """
+    if meta_type == "capabilities":
+        return _detailed_capabilities_text()
+    elif meta_type == "usage":
+        return _detailed_usage_guidance(query)
+    else:
+        # Fallback to capabilities if meta type is unknown
+        return _detailed_capabilities_text()
+
+
+def _detailed_capabilities_text() -> str:
+    """Generate detailed text about system capabilities.
+
+    This detailed description is only shown when explicitly requested
+    by the user (meta questions about system capabilities).
+    """
+    return """Sou um assistente multi-agente especializado em e-commerce. Minhas funcionalidades incluem:
+
+**Analytics Agent** - Análise de Dados
+- Consultar dados do banco de dados usando linguagem natural
+- Gerar consultas SQL seguras e otimizadas
+- Calcular métricas, agregações e análises estatísticas
+- Análises temporais (por mês, dia, trimestre)
+- Correlações e análises de tendências
+- Exemplos: "Quantos pedidos temos este mês?", "Qual a média de tempo de entrega por estado?"
+
+**Knowledge Agent** - Base de Conhecimento (RAG)
+- Buscar informações em documentos e guias
+- Responder perguntas conceituais sobre e-commerce
+- Explicar políticas, procedimentos e melhores práticas
+- Fornecer respostas baseadas em documentação disponível
+- Exemplos: "O que é taxa de recompra?", "Como funciona o processo de embalagem?"
+
+**Commerce Agent** - Processamento de Documentos
+- Extrair dados estruturados de documentos comerciais
+- Processar invoices, notas fiscais, purchase orders, BEOs
+- Analisar documentos PDF, DOCX, TXT e imagens (com OCR)
+- Identificar totais, itens, datas e informações relevantes
+- Exemplos: Envie um PDF de invoice e eu extraio os dados estruturados
+
+**Como usar:**
+- Para dados: Pergunte diretamente (ex: "Quantos pedidos temos?")
+- Para conhecimento: Faça perguntas conceituais (ex: "O que é taxa de conversão?")
+- Para documentos: Anexe o arquivo e descreva o que precisa
+
+Como posso ajudar você hoje?"""
+
+
+def _detailed_usage_guidance(query: str) -> str:
+    """Generate usage guidance based on query content.
+
+    Parameters
+    ----------
+    query:
+        User query text.
+
+    Returns
+    -------
+    str
+        Detailed usage guidance text in Portuguese.
+    """
+    q = (query or "").lower()
+
+    if any(term in q for term in ["pedido", "order", "dados", "data", "banco", "database", "sql"]):
+        return """**Como consultar pedidos e dados no banco:**
+
+1. **Faça perguntas em linguagem natural** sobre os dados que deseja:
+   - "Quantos pedidos temos este mês?"
+   - "Qual a média de tempo de entrega por estado?"
+   - "Mostre as vendas por categoria nos últimos 3 meses"
+
+2. **Seja específico sobre:**
+   - **Tabela/Coluna**: Se souber, mencione (ex: "na tabela orders")
+   - **Período**: Especifique o período (ex: "este mês", "último trimestre")
+   - **Agrupamento**: Se quiser agrupar (ex: "por estado", "por categoria")
+   - **Métricas**: O que quer calcular (ex: "média", "soma", "contagem")
+
+3. **O sistema irá:**
+   - Gerar SQL seguro automaticamente
+   - Executar a consulta no banco de dados
+   - Retornar os dados formatados e com análise interpretativa
+
+**Exemplos práticos:**
+- "Quantos pedidos temos?" → Contagem total de pedidos
+- "Tempo médio de entrega por transportadora" → Análise agrupada
+- "Vendas por estado nos últimos 6 meses" → Análise temporal e geográfica
+
+Precisa de ajuda com alguma consulta específica?"""
+
+    elif any(term in q for term in ["documento", "document", "pdf", "invoice", "nota", "fatura"]):
+        return """**Como processar documentos comerciais:**
+
+1. **Anexe o arquivo** (PDF, DOCX, TXT ou imagem)
+2. **Descreva o tipo de documento** (opcional, mas ajuda):
+   - Invoice/Nota Fiscal
+   - Purchase Order (PO)
+   - Banquet Event Order (BEO)
+   - Recibo ou Cotação
+
+3. **O sistema irá:**
+   - Extrair texto do documento (com OCR se necessário)
+   - Identificar campos estruturados (totais, itens, datas)
+   - Fornecer resumo estruturado dos dados
+   - Oferecer opção de integrar no sistema (futuro)
+
+**Exemplos:**
+- Anexe um PDF de invoice → Extração automática de dados
+- Anexe uma nota fiscal → Identificação de itens e totais
+
+Tem algum documento para processar?"""
+
+    elif any(term in q for term in ["conhecimento", "knowledge", "documentação", "documentation", "guia", "manual"]):
+        return """**Como buscar informações na base de conhecimento:**
+
+1. **Faça perguntas conceituais** sobre e-commerce:
+   - "O que é taxa de recompra?"
+   - "Como funciona o processo de embalagem?"
+   - "Qual a melhor estratégia para frete?"
+
+2. **O sistema irá:**
+   - Buscar documentos relevantes na base de conhecimento
+   - Sintetizar resposta baseada na documentação
+   - Fornecer citações das fontes
+
+**Exemplos:**
+- "O que é taxa de conversão?" → Explicação conceitual
+- "Como melhorar o tempo de entrega?" → Guia baseado em documentação
+
+Tem alguma pergunta conceitual sobre e-commerce?"""
+
+    else:
+        return _detailed_capabilities_text()
 
 
 # ---------------------------------------------------------------------------

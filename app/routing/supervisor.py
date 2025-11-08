@@ -161,6 +161,26 @@ def supervise(decision: Mapping[str, Any] | Any, ctx: RoutingContext | None = No
             )
             return _coerce_router_decision(final)
 
+        # Enhanced semantic validation: validate decision using evidence
+        semantic_validation = _validate_semantic_decision(
+            agent=agent,
+            confidence=confidence,
+            ctx=ctx,
+            tables=tables,
+            columns=columns,
+            signals=signals
+        )
+        if not semantic_validation["is_valid"]:
+            log.info("Supervisor applying semantic validation correction",
+                    original_agent=agent,
+                    reason=semantic_validation["reason"],
+                    corrected_agent=semantic_validation.get("corrected_agent"))
+            if semantic_validation.get("corrected_agent"):
+                agent = semantic_validation["corrected_agent"]
+                confidence = max(confidence, 0.75)
+                reason = _append_reason(reason, f"semantic_validation:{semantic_validation['reason']}")
+                signals.add("semantic_validation_corrected")
+
         # LLM-FIRST GUARDRAILS: Only apply when LLM decision is clearly wrong
         # Note: Most validation is now handled by the LLM classifier itself
         # The supervisor only applies minimal guardrails to avoid over-correction
@@ -328,6 +348,75 @@ def _finalize(
         "signals": sorted({str(s) for s in signals if str(s).strip()}),
         "thread_id": original.get("thread_id", thread_id),
     }
+
+
+def _validate_semantic_decision(
+    agent: str,
+    confidence: float,
+    ctx: RoutingContext,
+    tables: list[str],
+    columns: list[str],
+    signals: set[str],
+) -> dict[str, Any]:
+    """Validate routing decision using semantic evidence.
+
+    Checks if the decision makes semantic sense given available evidence.
+    Returns validation result with correction if needed.
+
+    Parameters
+    ----------
+    agent:
+        Proposed agent from router.
+    confidence:
+        Confidence score from router.
+    ctx:
+        Routing context with RAG and allowlist hints.
+    tables:
+        Detected tables from allowlist.
+    columns:
+        Detected columns from allowlist.
+    signals:
+        Routing signals.
+
+    Returns
+    -------
+    dict[str, Any]
+        Validation result with 'is_valid', 'reason', and optional 'corrected_agent'.
+    """
+    # Analytics requires allowlist evidence
+    if agent == "analytics":
+        has_allowlist_evidence = bool(tables or columns or "sql_like" in signals or "sql_intent" in signals)
+        if not has_allowlist_evidence and confidence < 0.8:
+            return {
+                "is_valid": False,
+                "reason": "analytics_without_allowlist",
+                "corrected_agent": "triage",
+            }
+
+    # Knowledge benefits from RAG evidence but can work without it for conceptual questions
+    if agent == "knowledge":
+        has_rag_evidence = bool(ctx.rag_hits > 0)
+        # Low confidence + no RAG evidence suggests misrouting
+        if not has_rag_evidence and confidence < 0.7:
+            # Could be conceptual question without documents, but low confidence suggests uncertainty
+            # Let it pass but supervisor will handle it later
+            pass
+
+    # Commerce requires attachment
+    if agent == "commerce":
+        has_attachment = "attachment_present" in signals or "commerce_doc" in signals
+        if not has_attachment and confidence < 0.8:
+            return {
+                "is_valid": False,
+                "reason": "commerce_without_attachment",
+                "corrected_agent": "triage",
+            }
+
+    # High confidence decisions are generally trusted
+    if confidence >= 0.85:
+        return {"is_valid": True, "reason": "high_confidence"}
+
+    return {"is_valid": True, "reason": "passed_validation"}
 
 
 def _coerce_router_decision(dec: Mapping[str, Any]) -> Any:

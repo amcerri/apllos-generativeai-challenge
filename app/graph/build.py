@@ -431,21 +431,37 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             except Exception:
                 pass
 
-            # Shallow RAG probe for routing: use lower threshold for routing decisions
-            # This is just to check if relevant documents exist, not for final retrieval
+            # Async RAG probe: execute in parallel with LLM classification
+            # Use threading to run RAG probe concurrently with classifier
             rag_hits = 0
             rag_min_score = None
-            try:
-                # Use lower threshold (0.65) and more candidates (top_k=5) for routing probe
-                # The actual Knowledge agent will use stricter thresholds for final retrieval
-                _res = retriever.retrieve(query=q, top_k=5, min_score=0.65) if retriever is not None else None
-                if _res and getattr(_res, "hits", None):
-                    rag_hits = len(_res.hits)
-                    if rag_hits > 0:
-                        rag_min_score = min(float(h.get("score", 0.0) if isinstance(h, dict) else getattr(h, "score", 0.0)) for h in (_res.hits if isinstance(_res.hits, list) else []))
-                        probe_signals.append("rag_probe_hit")
-            except Exception:
-                pass
+            rag_probe_result = {"hits": 0, "min_score": None, "completed": False}
+            
+            def _rag_probe_task():
+                """Execute RAG probe in background thread."""
+                try:
+                    if retriever is not None:
+                        _res = retriever.retrieve(query=q, top_k=5, min_score=0.65)
+                        if _res and getattr(_res, "hits", None):
+                            hits_list = _res.hits if isinstance(_res.hits, list) else []
+                            rag_probe_result["hits"] = len(hits_list)
+                            if rag_probe_result["hits"] > 0:
+                                scores = [
+                                    float(h.get("score", 0.0) if isinstance(h, dict) else getattr(h, "score", 0.0))
+                                    for h in hits_list
+                                ]
+                                rag_probe_result["min_score"] = min(scores) if scores else None
+                except Exception as e:
+                    log.debug("RAG probe failed", extra={"error": str(e)})
+                finally:
+                    rag_probe_result["completed"] = True
+
+            # Start RAG probe in background thread
+            import threading
+            rag_thread = None
+            if retriever is not None:
+                rag_thread = threading.Thread(target=_rag_probe_task, daemon=True)
+                rag_thread.start()
 
             log.info("Route node debug",
                     original_query=q,
@@ -453,14 +469,38 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     routing_probes=probe_signals)
             
             with start_span("node.route"):
-                # Pass evidence to classifier (RAG hits, attachment presence)
+                # Classify while RAG probe runs in parallel
                 dec = classifier.classify(
                     q,
                     allowlist=allowlist,
-                    rag_hits=rag_hits,
-                    rag_min_score=rag_min_score,
+                    rag_hits=0,  # Will update after RAG probe completes
+                    rag_min_score=None,
                     has_attachment=bool(attachment)
                 )
+                
+                # Wait for RAG probe to complete (with timeout)
+                if rag_thread is not None:
+                    rag_thread.join(timeout=2.0)  # Max 2 seconds wait
+                    if rag_probe_result["completed"]:
+                        rag_hits = rag_probe_result["hits"]
+                        rag_min_score = rag_probe_result["min_score"]
+                        if rag_hits > 0:
+                            probe_signals.append("rag_probe_hit")
+                            # Re-classify with RAG evidence if we got hits and initial decision was triage
+                            # This avoids unnecessary re-classification for high-confidence decisions
+                            try:
+                                dec_dict = dec if isinstance(dec, dict) else (dec.__dict__ if hasattr(dec, '__dict__') else {})
+                                if dec_dict.get("agent") == "triage" and rag_hits > 0:
+                                    # Re-classify with RAG evidence to potentially route to knowledge
+                                    dec = classifier.classify(
+                                        q,
+                                        allowlist=allowlist,
+                                        rag_hits=rag_hits,
+                                        rag_min_score=rag_min_score,
+                                        has_attachment=bool(attachment)
+                                    )
+                            except Exception:
+                                pass  # Use original decision if re-classification fails
                 # Convert RouterDecision to dict if it's a dataclass
                 if hasattr(dec, '__dict__'):
                     dec_dict = dec.__dict__
