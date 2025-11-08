@@ -279,17 +279,29 @@ class AnalyticsNormalizer:
             else:
                 return obj
         
-        # For large datasets, use a sample for LLM processing but show all data in response
-        sample_size = min(50, len(result.rows)) if result.rows else 0
-        sample_rows = result.rows[:sample_size] if result.rows else []
+        # Check if we should show complete data - if so, pass all rows to LLM for natural formatting
+        should_show_complete = self._should_show_complete_data(user_query, result)
+        
+        # For queries that need complete data, pass all rows to LLM for natural formatting
+        # Otherwise, use a sample for efficiency
+        if should_show_complete and result.rows:
+            # Pass all rows to LLM - it will format them naturally
+            rows_for_llm = convert_for_json(result.rows)
+            has_more_data = False
+        else:
+            # Use sample for efficiency when complete data not needed
+            sample_size = min(50, len(result.rows)) if result.rows else 0
+            rows_for_llm = convert_for_json(result.rows[:sample_size]) if result.rows else []
+            has_more_data = len(result.rows) > sample_size if result.rows else False
         
         input_data = {
             "user_query": user_query,
             "sql": plan.sql,
-            "rows": convert_for_json(sample_rows),  # Convert non-serializable types - use sample for LLM
+            "rows": rows_for_llm,
             "row_count": result.row_count,
             "limit_applied": result.limit_applied,
-            "has_more_data": len(result.rows) > sample_size
+            "has_more_data": has_more_data,
+            "show_complete_data": should_show_complete  # Hint for LLM
         }
         
         # Build compact messages
@@ -430,45 +442,42 @@ class AnalyticsNormalizer:
     
     def _format_small_dataset_data(self, rows: list[Mapping[str, Any]], user_query: str = "") -> str:
         """Format small datasets with all data shown."""
-        if not rows:
-            return ""
-        
-        # Detect patterns and add intelligent insights for small datasets too
-        pattern_insights = self._detect_patterns_and_insights(rows, user_query)
-        
-        text_parts = ["\n\nDados completos:"]
-        for i, row in enumerate(rows, 1):
-            values = []
-            for k, v in row.items():
-                if v is not None:
-                    if isinstance(v, (int, float)) and v > 1000:
-                        values.append(f"{k}: {v:,.0f}")
-                    else:
-                        values.append(f"{k}: {v}")
-            if values:
-                text_parts.append(f"{i}. {', '.join(values)}")
-        
-        return pattern_insights + "\n".join(text_parts)
+        # Use the same formatting as _format_complete_data for consistency
+        return self._format_complete_data(rows, user_query)
     
     def _format_complete_data(self, rows: list[Mapping[str, Any]], user_query: str = "") -> str:
-        """Format complete data for queries that need all results."""
+        """Format complete data for queries that need all results.
+        
+        This function is only used in fallback mode when LLM is unavailable.
+        For normal operation, the LLM handles all formatting naturally.
+        """
         if not rows:
             return ""
         
         # Detect patterns and add intelligent insights
         pattern_insights = self._detect_patterns_and_insights(rows, user_query)
         
+        # Simple fallback formatting - let LLM handle natural formatting when available
+        # This is just a basic fallback that should rarely be used
         text_parts = ["\n\nDados completos:"]
-        for i, row in enumerate(rows, 1):
-            values = []
+        for row in rows:
+            # Simple formatting: just show key-value pairs in a readable way
+            parts = []
             for k, v in row.items():
                 if v is not None:
-                    if isinstance(v, (int, float)) and v > 1000:
-                        values.append(f"{k}: {v:,.0f}")
+                    # Use human-readable column name
+                    label = k.replace("_", " ").title()
+                    # Basic number formatting
+                    if isinstance(v, (int, float)):
+                        if v >= 1000:
+                            formatted_v = f"{v:,.0f}".replace(",", ".")
+                        else:
+                            formatted_v = str(int(v)) if isinstance(v, float) and v.is_integer() else str(v)
                     else:
-                        values.append(f"{k}: {v}")
-            if values:
-                text_parts.append(f"{i}. {', '.join(values)}")
+                        formatted_v = str(v)
+                    parts.append(f"{label}: {formatted_v}")
+            if parts:
+                text_parts.append(" - ".join(parts))
         
         return pattern_insights + "\n".join(text_parts)
     
@@ -519,51 +528,51 @@ class AnalyticsNormalizer:
                     self.log.info(f"Found obvious complete data pattern '{pattern}' in query (small dataset: {result_view.row_count} records)")
                     return True
             
-            # Use LLM for most cases (80% LLM decision)
-            decision_prompt = f"""
-Analise a consulta do usuário e determine se deve mostrar TODOS os dados ou usar análise inteligente.
+            # Use semantic analysis for intelligent decision
+            from app.utils.semantic_analysis import SemanticQueryAnalyzer
 
-CONSULTA: "{user_query}"
-NÚMERO DE REGISTROS: {result_view.row_count}
+            analyzer = SemanticQueryAnalyzer()
+            analysis = analyzer.analyze_query(user_query, result_view.row_count, None)
 
-REGRAS CLARAS:
-- MOSTRAR TODOS: Quando o usuário pede métricas específicas por grupo (ex: "tempo médio por transportadora", "vendas por categoria")
-- ANÁLISE INTELIGENTE: Quando o usuário pede insights, padrões, tendências (ex: "identifique padrões", "tendências de crescimento")
+            query_type = analysis.get("query_type", "unknown")
+            intent = analysis.get("intent", "unknown")
+            display_strategy = analysis.get("display_strategy", "intelligent_summary")
+            should_show_complete = analysis.get("should_show_complete", False)
 
-DECISÃO:
-- Se a consulta pede "tempo médio por X", "vendas por X", "penetração por X" → MOSTRAR TODOS
-- Se a consulta pede "identifique padrões", "tendências", "insights" → ANÁLISE INTELIGENTE
-- Se a consulta pede métricas específicas por grupo → MOSTRAR TODOS
-- Se a consulta pede análise de padrões/tendências → ANÁLISE INTELIGENTE
-
-EXEMPLOS ESPECÍFICOS:
-- "tempo médio por transportadora" → MOSTRAR TODOS (métricas específicas)
-- "identifique padrões sazonais" → ANÁLISE INTELIGENTE (insights)
-- "penetração por estado" → MOSTRAR TODOS (métricas específicas)
-- "crescimento trimestre a trimestre" → ANÁLISE INTELIGENTE (tendências)
-
-Responda APENAS com uma das opções: MOSTRAR_TODOS ou ANALISE_INTELIGENTE
-"""
-            
-            from app.infra.llm_client import get_llm_client
-            llm = get_llm_client()
-            
-            response = llm.extract_json(
-                prompt=decision_prompt,
-                response_format={"type": "json_object", "schema": {
-                    "type": "object",
-                    "properties": {
-                        "decision": {"type": "string", "enum": ["MOSTRAR_TODOS", "ANALISE_INTELIGENTE"]}
-                    },
-                    "required": ["decision"]
-                }}
+            self.log.info(
+                f"Semantic analysis for query '{user_query}': "
+                f"type={query_type}, intent={intent}, strategy={display_strategy}, "
+                f"should_show_complete={should_show_complete}"
             )
-            
-            decision = response.get("decision", "ANALISE_INTELIGENTE")
-            self.log.info(f"LLM decision for query '{user_query}': {decision}")
-            self.log.info(f"LLM response: {response}")
-            return decision == "MOSTRAR_TODOS"
-            
+
+            # Apply rules by query type
+            if query_type == "distribution":
+                # For distributions (states, categories), show all if:
+                # - User explicitly asks for "all" AND dataset <= 100 items
+                # - Dataset is small/médio (<= 50 items) even without explicit request
+                if intent == "explicit_all" and result_view.row_count <= 100:
+                    return True
+                if result_view.row_count <= 50:
+                    return True
+                return False
+
+            elif query_type == "top_n":
+                # For top-N, always show all requested items
+                return True
+
+            elif query_type == "temporal":
+                # For temporal, show all if <= 24 periods (2 years monthly)
+                if result_view.row_count <= 24:
+                    return True
+                return False
+
+            elif query_type == "correlation" or intent == "analysis":
+                # For correlation/analysis queries, use intelligent analysis
+                return False
+
+            # Use semantic analysis decision as fallback
+            return should_show_complete
+
         except Exception as e:
             self.log.warning(f"Decision logic failed: {e}, using intelligent analysis")
             return False
@@ -813,10 +822,20 @@ Responda APENAS com uma das opções: MOSTRAR_TODOS ou ANALISE_INTELIGENTE
         category_insight = self._detect_category_concentration(rows)
         if category_insight:
             insights.append(f"Insight: {category_insight}")
-        
+
+        # Pattern 6: Anomaly detection
+        anomaly_insight = self._detect_anomalies(rows)
+        if anomaly_insight:
+            insights.append(f"Insight: {anomaly_insight}")
+
+        # Pattern 7: Statistical patterns
+        statistical_insight = self._detect_statistical_patterns(rows)
+        if statistical_insight:
+            insights.append(f"Insight: {statistical_insight}")
+
         if insights:
             return "\n\n" + "\n".join(insights)
-        
+
         return ""
     
     def _detect_one_to_one_ratio(self, rows: list[Mapping[str, Any]]) -> bool:
@@ -1060,9 +1079,131 @@ Responda APENAS com uma das opções: MOSTRAR_TODOS ou ANALISE_INTELIGENTE
         if top_percentage > 50:  # High category concentration
             category_name = top_category.get(category_col, 'Unknown')
             return f"Alta concentração em {category_name} ({top_percentage:.1f}% do total)"
-        
+
         return ""
-    
+
+    def _detect_anomalies(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect statistical anomalies and outliers in the dataset.
+
+        Uses interquartile range (IQR) method to identify outliers that are
+        significantly above or below the normal distribution.
+
+        Args:
+            rows: List of data rows to analyze for anomalies.
+
+        Returns:
+            String describing detected anomalies, or empty string if none found.
+        """
+        if len(rows) < 5:
+            return ""
+
+        # Find the main metric column
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k not in ['period', 'month', 'year']:
+                main_metric = k
+                break
+
+        if not main_metric:
+            return ""
+
+        # Extract values
+        values = [row.get(main_metric, 0) for row in rows if isinstance(row.get(main_metric), (int, float))]
+        if len(values) < 5:
+            return ""
+
+        # Calculate quartiles
+        sorted_values = sorted(values)
+        q1_idx = len(sorted_values) // 4
+        q3_idx = (3 * len(sorted_values)) // 4
+        q1 = sorted_values[q1_idx]
+        q3 = sorted_values[q3_idx]
+        iqr = q3 - q1
+
+        if iqr == 0:
+            return ""
+
+        # Detect outliers (values beyond 1.5 * IQR from quartiles)
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+
+        outliers = [v for v in values if v < lower_bound or v > upper_bound]
+        if not outliers:
+            return ""
+
+        # Find which items are outliers
+        outlier_items = []
+        for row in rows:
+            val = row.get(main_metric, 0)
+            if val in outliers:
+                # Try to find identifier column
+                identifier = None
+                for k, v in row.items():
+                    if k != main_metric and not isinstance(v, (int, float)):
+                        identifier = v
+                        break
+                if identifier:
+                    outlier_items.append((identifier, val))
+
+        if outlier_items:
+            outlier_desc = ", ".join([f"{item[0]} ({item[1]:,.0f})" for item in outlier_items[:3]])
+            if len(outlier_items) > 3:
+                outlier_desc += f" e mais {len(outlier_items) - 3}"
+            return f"Anomalias detectadas: {outlier_desc}"
+
+        return ""
+
+    def _detect_statistical_patterns(self, rows: list[Mapping[str, Any]]) -> str:
+        """Detect statistical patterns in the dataset.
+
+        Analyzes variance, distribution shape, and statistical properties
+        to identify interesting patterns.
+
+        Args:
+            rows: List of data rows to analyze for statistical patterns.
+
+        Returns:
+            String describing detected statistical patterns, or empty string if none found.
+        """
+        if len(rows) < 5:
+            return ""
+
+        # Find the main metric column
+        main_metric = None
+        for k, v in rows[0].items():
+            if isinstance(v, (int, float)) and k not in ['period', 'month', 'year']:
+                main_metric = k
+                break
+
+        if not main_metric:
+            return ""
+
+        # Extract values
+        values = [row.get(main_metric, 0) for row in rows if isinstance(row.get(main_metric), (int, float))]
+        if len(values) < 5:
+            return ""
+
+        # Calculate statistics
+        mean = sum(values) / len(values)
+        variance = sum((v - mean) ** 2 for v in values) / len(values)
+        std_dev = variance ** 0.5
+
+        if mean == 0:
+            return ""
+
+        # Coefficient of variation (CV) - measures relative variability
+        cv = (std_dev / mean) * 100 if mean != 0 else 0
+
+        # Detect high variability
+        if cv > 50:
+            return f"Alta variabilidade nos dados (coeficiente de variação: {cv:.1f}%)"
+
+        # Detect low variability (very consistent data)
+        if cv < 10 and len(values) >= 10:
+            return f"Dados muito consistentes (baixa variabilidade: {cv:.1f}%)"
+
+        return ""
+
     def _format_penetration_data(self, rows: list[Mapping[str, Any]]) -> str:
         """Format penetration data by state and category."""
         from collections import defaultdict

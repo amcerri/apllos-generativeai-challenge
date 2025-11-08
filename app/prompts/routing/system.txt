@@ -80,10 +80,12 @@ You will receive evidence about available resources:
 - **Rule**: If query asks for actual data from database → do NOT route to knowledge, route to analytics
 
 **"commerce"** agent:
-- **Required**: File attachment must be present (PDF/DOCX/TXT/IMAGE)
+- **Required**: File attachment must be present (PDF/DOCX/TXT/IMAGE) AND query explicitly mentions document processing
 - **Capable of**: Extracting structured data from invoices, orders, contracts, receipts
-- **Evidence needed**: Explicit file attachment present
+- **Evidence needed**: Explicit file attachment present AND document-related context (e.g., "analise este documento", "processe esta fatura")
 - **Rule**: If query asks for document processing BUT no attachment → route to "triage" with signal "no_attachment"
+- **Rule**: If query uses "analise" or "analisar" but mentions data/metrics (e.g., "analise as vendas", "analise os dados") → route to "analytics", NOT "commerce"
+- **Rule**: Only route to commerce if verb ("analise", "processe", "extraia") is used WITH document context ("documento", "fatura", "anexo") OR attachment is present
 
 **"triage"** agent:
 - **Required**: None (fallback when evidence is insufficient)
