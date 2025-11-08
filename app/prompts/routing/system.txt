@@ -207,3 +207,22 @@ ALLOWLIST_JSON:
 - "Como usar o sistema?" → triage (meta_question: usage)
 
 **These questions should be routed to triage immediately, without checking evidence.**
+
+## OUT-OF-SCOPE TOPICS (Critical - Route to Triage)
+
+**Before routing, check if the question is about topics OUTSIDE the system's capabilities. If so, route to "triage" with high confidence:**
+
+**Out-of-scope topics include:**
+- **Weather/Meteorology**: "Qual a temperatura?", "previsão do tempo", "clima", "meteorologia"
+- **News**: "notícias", "news", "últimas notícias"
+- **Financial Markets**: "bolsa de valores", "ações", "dólar", "euro", "stock", "forex"
+- **Code Generation**: "programar em", "escreva um código", "write code" (outside project context)
+- **Sports/Entertainment**: "futebol", "jogo", "basquete", "NBA", "FIFA", "champions", "copa do mundo"
+
+**Examples:**
+- "Qual a temperatura hoje?" → **triage** (out_of_scope: weather)
+- "Qual a previsão do tempo?" → **triage** (out_of_scope: weather)
+- "Quais as notícias de hoje?" → **triage** (out_of_scope: news)
+- "Qual a cotação do dólar?" → **triage** (out_of_scope: financial_markets)
+
+**These questions should be routed to triage immediately, without checking evidence. The triage agent will politely explain that the system cannot handle these topics.**

@@ -29,15 +29,17 @@ See project [README.md](../README.md) for a detailed mermaid diagram.
 ## Graph Overview ([app/graph/build.py](../app/graph/build.py))
 
 - Typed `GraphState` with per-key channels for safe fan-out in Studio.
+- **Conversation Memory**: `GraphState` includes `conversation_history`, `last_agent`, and `last_answer` for context-aware routing and natural follow-up conversations.
 - Nodes:
-  - `route`: LLM classifier (or heuristic fallback) + allowlist injection.
+  - `route`: LLM classifier (or heuristic fallback) + allowlist injection + conversation context integration.
   - `supervisor`: deterministic guardrails; single-pass fallback between analytics/knowledge/triage; commerce guard.
   - Analytics: `analytics.plan` → `analytics.exec` → `analytics.normalize`.
   - Knowledge: `knowledge.retrieve` → `knowledge.rank` → `knowledge.answer`.
   - Commerce: `commerce.process_doc` → `commerce.extract_llm` → `commerce.summarize`.
   - Triage: `triage.handle`.
+  - `update_history`: Updates conversation history after each agent response.
 - Human-in-the-loop: optional SQL approval gate emitted before execution (`make_sql_gate`).
-- Checkpointer: compiled graph optionally uses PostgresSaver; falls back to no-op.
+- Checkpointer: compiled graph optionally uses PostgresSaver; falls back to no-op. Automatically persists conversation history.
 
 ### Routing
 

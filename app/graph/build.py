@@ -284,6 +284,11 @@ class GraphState(TypedDict, total=False):
     columns: Annotated[list[str], _pick_last]
     k: Annotated[int | None, _pick_last]
 
+    # Conversation memory
+    conversation_history: Annotated[list[dict[str, Any]], _concat_list]
+    last_agent: Annotated[str | None, _pick_last]
+    last_answer: Annotated[Mapping[str, Any] | None, _pick_last]
+
     # Observability / multi-writers
     signals: Annotated[list[str], _concat_list]
     interrupts: Annotated[list[dict[str, Any]], _concat_list]
@@ -404,6 +409,56 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             q = str(state.get("query", "")).strip()
             attachment = state.get("attachment")
             
+            # Get conversation history and last answer for context
+            # LangGraph automatically restores state from checkpointer when using thread_id
+            conversation_history = state.get("conversation_history") or []
+            last_answer = state.get("last_answer")
+            
+            # If we have last_answer but no history, try to reconstruct from last_answer
+            # This handles cases where history wasn't restored but we have the last answer
+            if not conversation_history and last_answer:
+                # Reconstruct minimal history from last_answer
+                last_answer_text = last_answer.get("text", "") if isinstance(last_answer, dict) else str(last_answer)
+                if last_answer_text:
+                    # Try to extract the previous query from last_answer metadata if available
+                    # Otherwise, we'll rely on last_answer alone
+                    pass
+            
+            # Log conversation history for debugging
+            log.info("Route node - conversation context",
+                    has_history=len(conversation_history) > 0,
+                    history_length=len(conversation_history),
+                    has_last_answer=last_answer is not None,
+                    query=q[:100])
+            
+            # Resolve anaphora in query using conversation history and last_answer
+            original_query = q
+            try:
+                from app.utils.anaphora import resolve_anaphora
+                q = resolve_anaphora(q, conversation_history, last_answer)
+                if q != original_query:
+                    log.info("Anaphora/follow-up resolved", extra={"original": original_query[:50], "resolved": q[:50]})
+            except Exception as e:
+                log.debug("Anaphora resolution failed", extra={"error": str(e)})
+            
+            # Get relevant context from conversation history
+            relevant_context = None
+            try:
+                from app.utils.conversation_search import ConversationHistorySearcher
+                history_searcher = ConversationHistorySearcher()
+                relevant_context = history_searcher.get_relevant_context(
+                    current_query=q,
+                    conversation_history=conversation_history,
+                    last_answer=last_answer
+                )
+                if relevant_context:
+                    log.info("Context retrieved", 
+                            is_relevant=relevant_context.get("is_relevant", False),
+                            reason=relevant_context.get("reason", ""),
+                            has_summary=bool(relevant_context.get("context_summary")))
+            except Exception as e:
+                log.warning("Context search failed", extra={"error": str(e)})
+            
             # If there's an attachment, modify the query to include attachment context
             if attachment:
                 filename = attachment.get("filename", "arquivo")
@@ -470,12 +525,16 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             
             with start_span("node.route"):
                 # Classify while RAG probe runs in parallel
+                # Pass conversation context to classifier
                 dec = classifier.classify(
                     q,
                     allowlist=allowlist,
                     rag_hits=0,  # Will update after RAG probe completes
                     rag_min_score=None,
-                    has_attachment=bool(attachment)
+                    has_attachment=bool(attachment),
+                    conversation_history=conversation_history,
+                    last_answer=last_answer,
+                    relevant_context=relevant_context
                 )
                 
                 # Wait for RAG probe to complete (with timeout)
@@ -497,7 +556,10 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                                         allowlist=allowlist,
                                         rag_hits=rag_hits,
                                         rag_min_score=rag_min_score,
-                                        has_attachment=bool(attachment)
+                                        has_attachment=bool(attachment),
+                                        conversation_history=conversation_history,
+                                        last_answer=last_answer,
+                                        relevant_context=relevant_context
                                     )
                             except Exception:
                                 pass  # Use original decision if re-classification fails
@@ -866,6 +928,64 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "triage.handle"})
             return out
 
+        # Conversation history update
+        def node_update_history(state: GraphState) -> dict[str, Any]:
+            """Update conversation history with current query and answer.
+            
+            Adds the current user query and assistant answer to the conversation
+            history. Limits history to last 20 messages to prevent unbounded growth.
+            The history is automatically persisted by LangGraph checkpointer.
+            """
+            import time as _t
+            _t0 = _t.perf_counter()
+            with start_span("node.update_history"):
+                query = str(state.get("query", "")).strip()
+                answer = state.get("answer") or {}
+                agent = state.get("agent") or "unknown"
+                conversation_history = list(state.get("conversation_history") or [])
+                
+                # Limit history to last 20 messages to prevent unbounded growth
+                max_history = 20
+                if len(conversation_history) > max_history:
+                    conversation_history = conversation_history[-max_history:]
+                
+                # Check if query was already added (avoid duplicates)
+                last_user_msg = conversation_history[-1] if conversation_history else None
+                if not (last_user_msg and last_user_msg.get("role") == "user" and last_user_msg.get("content") == query):
+                    # Add user message
+                    conversation_history.append(
+                        {
+                            "role": "user",
+                            "content": query,
+                            "timestamp": _t.time(),
+                        }
+                    )
+                
+                # Add assistant answer
+                answer_text = answer.get("text", "") if isinstance(answer, dict) else str(answer)
+                if answer_text:
+                    # Check if answer was already added (avoid duplicates)
+                    last_assistant_msg = conversation_history[-1] if conversation_history else None
+                    if not (last_assistant_msg and last_assistant_msg.get("role") == "assistant" and last_assistant_msg.get("content") == answer_text):
+                        conversation_history.append(
+                            {
+                                "role": "assistant",
+                                "content": answer_text,
+                                "agent": agent,
+                                "timestamp": _t.time(),
+                            }
+                        )
+                
+                # Update last_agent and last_answer
+                out = {
+                    "conversation_history": conversation_history,
+                    "last_agent": agent,
+                    "last_answer": answer if isinstance(answer, dict) else {"text": str(answer)},
+                }
+            _inc_counter("requests_total", {"agent": "system", "node": "update_history"})
+            _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "update_history"})
+            return out
+
         # -- Graph wiring ----------------------------------------------------
         sg.add_node("route", node_route)
         sg.add_node("supervisor", node_supervisor)
@@ -883,6 +1003,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
         sg.add_node("commerce.summarize", node_co_summarize)
 
         sg.add_node("triage.handle", node_tr_handle)
+        
+        sg.add_node("update_history", node_update_history)
 
         sg.set_entry_point("route")
         sg.add_edge("route", "supervisor")
@@ -905,16 +1027,17 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
         # Pipelines
         sg.add_edge("analytics.plan", "analytics.exec")
         sg.add_edge("analytics.exec", "analytics.normalize")
-        sg.add_edge("analytics.normalize", END)
+        sg.add_edge("analytics.normalize", "update_history")
+        sg.add_edge("update_history", END)
 
         sg.add_edge("knowledge.retrieve", "knowledge.rank")
         sg.add_edge("knowledge.rank", "knowledge.answer")
-        sg.add_edge("knowledge.answer", END)
+        sg.add_edge("knowledge.answer", "update_history")
 
         sg.add_edge("commerce.extract_llm", "commerce.summarize")
-        sg.add_edge("commerce.summarize", END)
+        sg.add_edge("commerce.summarize", "update_history")
 
-        sg.add_edge("triage.handle", END)
+        sg.add_edge("triage.handle", "update_history")
 
         # Compile with optional checkpointer
         compiled = (

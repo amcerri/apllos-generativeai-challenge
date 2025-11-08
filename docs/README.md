@@ -12,6 +12,7 @@ The Apllos Assistant is a multi-agent system built on LangGraph that provides as
 - **LLM-First Design**: Prompt engineering with Chain-of-Thought reasoning, self-consistency checks, and confidence calibration
 - **Performance Optimization**: Semantic caching for routing, embeddings, and responses; tool calling for efficient structured outputs
 - **Cost Tracking**: Automatic LLM cost calculation and monitoring with Prometheus metrics
+- **Conversation Context**: Natural follow-up conversations with semantic history search, topic shift detection, and anaphora resolution
 - **Fallbacks**: Deterministic heuristics when LLMs are unavailable
 - **Safety**: Multiple layers of protection including allowlists, read-only transactions, and human approval gates
 - **Observability**: Logging, metrics, and tracing

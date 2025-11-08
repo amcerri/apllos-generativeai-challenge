@@ -78,6 +78,7 @@ Input   Analysis       Structured      Guardrails   Validated      Specialized
 - **Asynchronous RAG Probe**: RAG probe executes in parallel with LLM classification using background threads, reducing routing latency.
 - **Semantic Validation**: Enhanced validation checks routing decisions against available evidence (allowlist for analytics, attachments for commerce, RAG hits for knowledge).
 - **Meta Question Detection**: Automatic detection of questions about system capabilities or usage, routing them directly to Triage agent.
+- **Conversation Context**: Context-aware routing using conversation history with semantic search, topic shift detection, and anaphora resolution for natural follow-up conversations.
 - Evidence-augmented probes in `route` node:
   - Attachment probe → signals: `attachment_present`, `attachment_mime:<mime>`
   - SQL probe → signal: `sql_probe_true`
@@ -94,6 +95,37 @@ Input   Analysis       Structured      Guardrails   Validated      Specialized
 - `ROUTER_SCORER_ENABLED` (default: true) — enables scorer tie-breaker
 - `ROUTER_CALIBRATION` (JSON) — piecewise confidence calibration mapping
 - `ROUTER_SECONDARY_HINTS` (default: true) — emits secondary intent hints in `signals`
+
+## Conversation Context and Follow-up Support
+
+The routing system supports natural conversational follow-ups through conversation history management and semantic context retrieval.
+
+### Conversation History
+
+- **GraphState Integration**: Conversation history is stored in `GraphState.conversation_history` and automatically persisted by LangGraph checkpointer
+- **History Management**: Limited to last 20 messages to prevent unbounded growth
+- **Automatic Updates**: History is updated after each agent response via `node_update_history`
+
+### Context-Aware Routing
+
+- **Semantic Search**: `ConversationHistorySearcher` finds relevant previous messages using embeddings and cosine similarity
+- **Topic Shift Detection**: Detects when a new query represents a topic change to avoid using irrelevant context
+- **Relevance Validation**: Validates that historical context is actually relevant before using it for routing
+- **Anaphora Resolution**: Resolves references like "isso", "aquilo", "o mesmo" using conversation history
+
+### Features
+
+- **Follow-up Detection**: Automatically detects follow-up questions and maintains conversation continuity
+- **Reference Resolution**: Resolves anaphoric references to previous messages
+- **Context Injection**: Injects validated relevant context into routing prompts
+- **Protection Against False Positives**: Topic shift detection prevents using irrelevant context for new questions
+
+### Implementation
+
+- **Modules**: 
+  - `app/utils/conversation_search.py` - Semantic search and topic shift detection
+  - `app/utils/anaphora.py` - Anaphora resolution
+- **Integration**: Used in `node_route` before LLM classification to enhance routing decisions
 
 ## Signals
 
