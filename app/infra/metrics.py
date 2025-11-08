@@ -140,6 +140,25 @@ def configure_metrics(namespace: str = "apllos", subsystem: str | None = None) -
             registry=_REGISTRY,
         ),
     )
+    _COUNTERS.setdefault(
+        "llm_cost_usd_total",
+        _PROM["Counter"](
+            _name("llm_cost_usd_total"),
+            "Total LLM API cost in USD",
+            ["model"],
+            registry=_REGISTRY,
+        ),
+    )
+    _HISTOGRAMS.setdefault(
+        "llm_tokens_total",
+        _PROM["Histogram"](
+            _name("llm_tokens_total"),
+            "Total LLM tokens used",
+            ["model", "type"],
+            buckets=(100, 500, 1000, 2500, 5000, 10000, 25000, 50000),
+            registry=_REGISTRY,
+        ),
+    )
 
 
 def inc_counter(name: str, labels: Mapping[str, str] | None = None, amount: float = 1.0) -> None:

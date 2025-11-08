@@ -103,15 +103,16 @@ class JSONLLMBackend(Protocol):
 
 
 class OpenAIJSONBackend:
-    """Backend using centralized LLM client with JSON Schema response formatting."""
+    """Backend using centralized LLM client with tool calling (preferred) or JSON Schema fallback."""
 
-    def __init__(self, *, model: str) -> None:
+    def __init__(self, *, model: str, use_tool_calling: bool = True) -> None:
         from app.infra.llm_client import get_llm_client
 
         self._client = get_llm_client()
         if not self._client.is_available():
             raise RuntimeError("LLM client not available")
         self._default_model = model
+        self._use_tool_calling = use_tool_calling
 
     def generate_json(
         self,
@@ -124,11 +125,89 @@ class OpenAIJSONBackend:
         max_output_tokens: int | None = None,
     ) -> Mapping[str, Any]:
         model_name = model or self._default_model
-        resp = self._client.chat_completion(
-            messages=[{"role": "system", "content": system}, *messages],
+
+        # Prefer tool calling for token efficiency
+        if self._use_tool_calling:
+            try:
+                return self._generate_with_tools(
+                    system=system,
+                    messages=messages,
+                    json_schema=json_schema,
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_output_tokens,
+                )
+            except Exception as exc:
+                # Fallback to JSON Schema if tool calling fails
+                self._log.warning("Tool calling failed, falling back to JSON Schema", extra={"error": str(exc)})
+
+        # Fallback to JSON Schema
+        return self._generate_with_json_schema(
+            system=system,
+            messages=messages,
+            json_schema=json_schema,
             model=model_name,
             temperature=temperature,
             max_tokens=max_output_tokens,
+        )
+
+    def _generate_with_tools(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using tool calling (more token-efficient)."""
+        # Convert JSON schema to tool definition
+        schema_name = str(json_schema.get("title", "RouterDecision"))[:32] or "RouterDecision"
+        tool = {
+            "type": "function",
+            "function": {
+                "name": schema_name,
+                "description": json_schema.get("description", "Generate structured output"),
+                "parameters": json_schema,
+            },
+        }
+
+        resp = self._client.chat_completion_with_tools(
+            messages=[{"role": "system", "content": system}, *messages],
+            tools=[tool],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tool_choice="required",
+            max_retries=0,
+        )
+
+        if not resp or not resp.text:
+            raise RuntimeError("tool calling returned empty response")
+
+        # Parse tool call arguments as JSON
+        data = self._client.extract_json(resp.text, schema=dict(json_schema))
+        if data is None:
+            raise RuntimeError("tool calling returned non-JSON content")
+        return data
+
+    def _generate_with_json_schema(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using JSON Schema (fallback)."""
+        resp = self._client.chat_completion(
+            messages=[{"role": "system", "content": system}, *messages],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -144,6 +223,16 @@ class OpenAIJSONBackend:
         if data is None:
             raise RuntimeError("backend returned non-JSON content")
         return data
+
+    @property
+    def _log(self):
+        """Get logger for this backend."""
+        try:
+            from app.infra.logging import get_logger
+            return get_logger(__name__)
+        except Exception:
+            import logging
+            return logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------

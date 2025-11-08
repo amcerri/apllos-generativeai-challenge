@@ -10,6 +10,8 @@ The Apllos Assistant is a multi-agent system built on LangGraph that provides as
 
 - **Multi-Agent Architecture**: Four specialized agents (Analytics, Knowledge, Commerce, Triage) with routing
 - **LLM-First Design**: Prompt engineering with Chain-of-Thought reasoning, self-consistency checks, and confidence calibration
+- **Performance Optimization**: Semantic caching for routing, embeddings, and responses; tool calling for efficient structured outputs
+- **Cost Tracking**: Automatic LLM cost calculation and monitoring with Prometheus metrics
 - **Fallbacks**: Deterministic heuristics when LLMs are unavailable
 - **Safety**: Multiple layers of protection including allowlists, read-only transactions, and human approval gates
 - **Observability**: Logging, metrics, and tracing
@@ -61,11 +63,13 @@ The Apllos Assistant is a multi-agent system built on LangGraph that provides as
 
 ### Router vs Supervisor
 
-- **Router (LLM Classifier)**: Primary decision maker using LLM with JSON Schema structured output
+- **Router (LLM Classifier)**: Primary decision maker using LLM with tool calling (preferred) or JSON Schema structured output
   - Analyzes query intent, context, and signals
   - Uses prompt engineering with Chain-of-Thought reasoning
+  - Tool calling reduces token usage compared to JSON Schema mode
   - Produces structured RouterDecision with confidence scores
   - Falls back to deterministic heuristics when LLM unavailable
+  - Semantic caching for routing decisions to improve performance
 
 - **Supervisor**: Deterministic guardrails and fallback logic
   - Applies business rules and safety constraints
@@ -76,14 +80,14 @@ The Apllos Assistant is a multi-agent system built on LangGraph that provides as
 ### Agent Specializations
 
 1. **Analytics Agent**: Converts natural language to safe SQL
-   - Planner: NL → SQL with allowlist validation
+   - Planner: NL → SQL with allowlist validation (uses tool calling for efficiency)
    - Executor: Read-only SQL execution with safety guards
-   - Normalizer: Data balancing and PT-BR responses
+   - Normalizer: Data balancing and PT-BR responses (with response caching)
 
 2. **Knowledge Agent (RAG)**: Retrieves and synthesizes information
-   - Retriever: Vector search with pgvector embeddings
+   - Retriever: Vector search with pgvector embeddings (with embedding caching)
    - Ranker: Heuristic + optional LLM reranking
-   - Answerer: Cross-validated responses with citations
+   - Answerer: Cross-validated responses with citations (with response caching)
 
 3. **Commerce Agent**: Processes commercial documents
    - Processor: Multi-format document extraction (PDF/DOCX/TXT/OCR)

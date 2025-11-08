@@ -277,17 +277,43 @@ def _execute(engine: Engine, sql: str, params: Mapping[str, Any]) -> list[dict[s
 
 
 def _embed_query(text: str, *, model: str) -> Sequence[float]:
+    # Check embedding cache first
+    try:
+        from app.infra.cache import EmbeddingCache
+        
+        # Use singleton embedding cache instance
+        if not hasattr(_embed_query, "_embedding_cache"):
+            _embed_query._embedding_cache = EmbeddingCache(ttl_seconds=86400, max_size=5000)  # type: ignore[attr-defined]
+        
+        cache = _embed_query._embedding_cache  # type: ignore[attr-defined]
+        cached = cache.get(text, model)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+    
     # Prefer centralized client if available; fallback to local hashing
+    vec: list[float] | None = None
     try:
         from app.infra.llm_client import get_llm_client
         client = get_llm_client()
-        vec = client.get_embeddings(text=text, model=model) if client else None
-        # client.get_embeddings returns list[list[float]]; we need the first vector
-        if vec and isinstance(vec, list):
-            first = vec[0] if (len(vec) > 0 and isinstance(vec[0], list)) else vec
-            return first  # type: ignore[return-value]
+        vec_result = client.get_embeddings(text=text, model=model) if client else None
+        # client.get_embeddings returns list[float]
+        if vec_result and isinstance(vec_result, list):
+            vec = vec_result[0] if (len(vec_result) > 0 and isinstance(vec_result[0], list)) else vec_result  # type: ignore[assignment]
     except Exception:
         pass
+    
+    # Cache and return embedding if available
+    if vec is not None:
+        try:
+            if hasattr(_embed_query, "_embedding_cache"):
+                cache = _embed_query._embedding_cache  # type: ignore[attr-defined]
+                cache.set(text, model, vec)
+        except Exception:
+            pass
+        return vec
+    
     # Deterministic local fallback (bag-of-words hash)
     return _hash_embed(text)
 
