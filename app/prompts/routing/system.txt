@@ -196,3 +196,14 @@ ALLOWLIST_JSON:
 **Prioritize evidence over intent patterns**. A question might sound like "knowledge" (e.g., "O que é taxa de recompra?") but if it requires data computation (e.g., calculating repurchase rate from database), it needs "analytics" with allowlist evidence.
 
 **Only route to an agent if you have evidence that the agent can actually answer**.
+
+## META QUESTIONS (System Capabilities and Usage)
+
+**If the user asks about system capabilities or how to use the system, route to "triage" with high confidence:**
+
+- "Quais suas funções?" → triage (meta_question: capabilities)
+- "O que você pode fazer?" → triage (meta_question: capabilities)
+- "Como faço para consultar pedido?" → triage (meta_question: usage)
+- "Como usar o sistema?" → triage (meta_question: usage)
+
+**These questions should be routed to triage immediately, without checking evidence.**
