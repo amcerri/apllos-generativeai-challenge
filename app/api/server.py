@@ -26,6 +26,7 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping
 from typing import Any, Final
@@ -141,32 +142,48 @@ def get_app(settings: Mapping[str, Any] | None = None) -> Any:
             )
 
         @app.get("/health", tags=["infra"])  # lightweight liveness
-        def health() -> dict[str, str]:
+        async def health() -> dict[str, str]:
+            """Liveness probe (cheap, non-blocking)."""
             return {"status": "ok"}
 
         @app.get("/ready", tags=["infra"])  # readiness check
-        def ready() -> dict[str, str]:
+        async def ready() -> dict[str, str]:
+            """Readiness probe (does not hit external dependencies)."""
             return {"status": "ready"}
 
         @app.get("/ok", tags=["infra"], include_in_schema=False)
-        def ok() -> dict[str, str]:
-            """Extended health: checks DB and checkpointer availability."""
-            db_ok = False
-            cp_ok = False
-            try:
-                from app.infra.db import open_connection
-                with open_connection() as conn:
-                    conn.exec_driver_sql("SELECT 1")
-                    db_ok = True
-            except Exception:
-                db_ok = False
-            try:
-                from app.infra.checkpointer import get_checkpointer, is_noop
-                cp = get_checkpointer()
-                cp_ok = not is_noop(cp)
-            except Exception:
-                cp_ok = False
-            return {"status": "ok", "db": "ok" if db_ok else "down", "checkpointer": "ok" if cp_ok else "noop"}
+        async def ok() -> dict[str, str]:
+            """Extended health: checks DB and checkpointer availability asynchronously."""
+
+            def _check_db_sync() -> bool:
+                try:
+                    from app.infra.db import open_connection
+
+                    with open_connection() as conn:
+                        conn.exec_driver_sql("SELECT 1")
+                        return True
+                except Exception:
+                    return False
+
+            def _check_cp_sync() -> bool:
+                try:
+                    from app.infra.checkpointer import get_checkpointer, is_noop
+
+                    cp = get_checkpointer()
+                    return not is_noop(cp)
+                except Exception:
+                    return False
+
+            db_ok, cp_ok = await asyncio.gather(
+                asyncio.to_thread(_check_db_sync),
+                asyncio.to_thread(_check_cp_sync),
+            )
+
+            return {
+                "status": "ok",
+                "db": "ok" if db_ok else "down",
+                "checkpointer": "ok" if cp_ok else "noop",
+            }
 
         # Metrics endpoint (optional)
         try:

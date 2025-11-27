@@ -39,6 +39,7 @@ falls back to a deterministic local hasher (sufficient for tests, not for prod).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -243,6 +244,29 @@ class KnowledgeRetriever:
                 used_filters=dict(filters or {}),
                 no_context=(len(hits2) == 0),
             )
+
+    async def retrieve_async(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        min_score: float | None = None,
+        filters: Mapping[str, Any] | None = None,
+    ) -> RetrievalResult:
+        """Asynchronous wrapper for :meth:`retrieve`.
+
+        Executes the synchronous retrieval logic in a worker thread via
+        :func:`asyncio.to_thread`, so that async LangGraph nodes can call the
+        retriever without blocking the event loop.
+        """
+
+        return await asyncio.to_thread(
+            self.retrieve,
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            filters=filters,
+        )
 
 
 # ---------------------------------------------------------------------------

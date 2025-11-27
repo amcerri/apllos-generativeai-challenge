@@ -37,7 +37,7 @@ import functools
 import logging
 import os
 from collections.abc import Mapping
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, TYPE_CHECKING, Iterator
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import
@@ -46,13 +46,19 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only import
     except Exception:  # SQLAlchemy may be absent at type-check time
         _SAConnection = Any  # type: ignore
 
-# Optional SQLAlchemy import
+# Optional SQLAlchemy imports (sync and async)
 _sa: Any | None = None
+_sa_async: Any | None = None
 try:  # pragma: no cover - exercised only when SQLAlchemy is installed
     import sqlalchemy as _imported_sa
+    from sqlalchemy.ext.asyncio import async_engine_from_config as _async_engine_from_config
+    from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
 except Exception:  # pragma: no cover - keep optional
     _imported_sa = None
+    _async_engine_from_config = None  # type: ignore[assignment]
+    _create_async_engine = None  # type: ignore[assignment]
 _sa = _imported_sa
+_sa_async = _create_async_engine
 
 _log = logging.getLogger(__name__)
 
@@ -60,6 +66,8 @@ __all__ = [
     "get_engine",
     "open_connection",
     "ensure_db",
+    "get_async_engine",
+    "async_open_connection",
 ]
 
 
@@ -152,6 +160,102 @@ def get_engine(
     return eng
 
 
+@functools.lru_cache(maxsize=1)
+def get_async_engine(
+    *,
+    url: str | None = None,
+    pool_size: int | None = None,
+    pool_timeout_sec: int | None = None,
+    echo: bool | None = None,
+    readonly_default: bool = False,
+) -> Any:
+    """Get a cached async SQLAlchemy engine with the specified parameters.
+    
+    Parameters
+    ----------
+    url: Optional[str]
+        SQLAlchemy async connection string. If None, uses DATABASE_URL env var,
+        converting common sync prefixes to async ones when needed.
+    pool_size: Optional[int]
+        Optional pool size hint for the underlying async engine.
+    pool_timeout_sec: Optional[int]
+        Optional pool checkout timeout in seconds.
+    echo: Optional[bool]
+        Enable SQL echoing (debug). If None, read from env `SQL_ECHO`.
+    readonly_default: bool
+        When True and using Postgres, encourages read-only sessions by passing
+        default transaction options via connection arguments where supported.
+    
+    Returns
+    -------
+    Any
+        Async SQLAlchemy Engine instance.
+    
+    Raises
+    ------
+    ImportError
+        If SQLAlchemy async engine factory is not available.
+    ValueError
+        If no database URL is provided and DATABASE_URL is not set.
+    """
+
+    if _sa_async is None:
+        raise ImportError("SQLAlchemy async engine is required to create async database engine")
+
+    if not url:
+        # Try APLLOS_DATABASE_URL first (for Chainlit compatibility), then DATABASE_URL
+        url = os.getenv("APLLOS_DATABASE_URL") or os.getenv("DATABASE_URL", "")
+        url = url.strip() if url else ""
+        if not url:
+            raise ValueError("database url must be provided or APLLOS_DATABASE_URL/DATABASE_URL env var must be set")
+
+        # Normalize common sync URLs to asyncpg driver for SQLAlchemy async engine
+        if url.startswith("postgresql+psycopg://"):
+            url = url.replace("postgresql+psycopg://", "postgresql+asyncpg://")
+        elif url.startswith("postgresql://"):
+            url = url.replace("postgresql://", "postgresql+asyncpg://")
+
+        # Convert Docker internal hostname for external access
+        if "@db:" in url:
+            url = url.replace("@db:", "@host.docker.internal:")
+
+    resolved_echo = (
+        (str(echo).lower() in {"1", "true", "yes", "on"})
+        if echo is not None
+        else _env_bool("SQL_ECHO")
+    )
+
+    connect_args: dict[str, Any] = {}
+    if readonly_default and url.startswith("postgresql"):
+        # For async engines, read-only is typically enforced at session level;
+        # we still pass default transaction options when driver supports it.
+        opts = "-c default_transaction_read_only=on"
+        connect_args["server_settings"] = {"options": opts}
+
+    create_kwargs: dict[str, Any] = {
+        "echo": resolved_echo,
+        "pool_pre_ping": True,
+        "connect_args": connect_args,
+    }
+    if pool_size is not None:
+        create_kwargs["pool_size"] = int(pool_size)
+    if pool_timeout_sec is not None:
+        create_kwargs["pool_timeout"] = int(pool_timeout_sec)
+
+    eng = _sa_async(url, **create_kwargs)
+    _log.info(
+        "async database engine created",
+        extra={
+            "url_dialect": url.split(":", 1)[0],
+            "pool_size": pool_size,
+            "pool_timeout_sec": pool_timeout_sec,
+            "readonly_default": readonly_default,
+            "echo": resolved_echo,
+        },
+    )
+    return eng
+
+
 def ensure_db() -> None:
     """Ensure database connection is available.
     
@@ -202,6 +306,41 @@ def open_connection(*, readonly: bool = True) -> Iterator["_SAConnection"]:
     finally:
         try:
             conn.close()
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+
+@asynccontextmanager
+async def async_open_connection(*, readonly: bool = True) -> Any:
+    """Yield an async DB-API connection from the cached async engine.
+
+    For Postgres, `readonly=True` attempts to enforce read-only semantics at the
+    session level by issuing `SET LOCAL default_transaction_read_only = on`
+    where supported by the driver.
+    
+    Parameters
+    ----------
+    readonly: bool, default True
+        Whether to enforce read-only mode for the connection.
+        
+    Yields
+    ------
+    Any
+        Async SQLAlchemy connection object.
+    """
+
+    eng = get_async_engine()
+    conn = await eng.connect()
+    try:
+        if readonly:
+            try:
+                await conn.exec_driver_sql("SET LOCAL default_transaction_read_only = on")
+            except Exception:  # pragma: no cover - non-Postgres or unsupported
+                pass
+        yield conn
+    finally:
+        try:
+            await conn.close()
         except Exception:  # pragma: no cover - defensive
             pass
 

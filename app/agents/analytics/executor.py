@@ -36,6 +36,7 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -287,6 +288,33 @@ class AnalyticsExecutor:
             limit_applied=limit_applied,
             warnings=warnings,
             meta=meta,
+        )
+
+    async def execute_async(
+        self,
+        plan: Mapping[str, Any] | Any,
+        *,
+        max_rows: int | None = None,
+        timeout_s: int | None = None,
+        readonly: bool = True,
+        include_explain: bool = False,
+        dry_run: bool = False,
+    ) -> ExecutorResult:
+        """Asynchronous wrapper for :meth:`execute`.
+
+        Delegates synchronous execution to a worker thread using
+        :func:`asyncio.to_thread`, allowing async callers to avoid blocking the
+        event loop while preserving existing behavior and safety guarantees.
+        """
+
+        return await asyncio.to_thread(
+            self.execute,
+            plan,
+            max_rows=max_rows,
+            timeout_s=timeout_s,
+            readonly=readonly,
+            include_explain=include_explain,
+            dry_run=dry_run,
         )
 
 

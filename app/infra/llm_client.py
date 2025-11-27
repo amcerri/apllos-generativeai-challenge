@@ -35,12 +35,12 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
 import logging
 import os
 import re
-import time
 from typing import Any, Mapping
 
 # Load .env early to ensure OPENAI_API_KEY is visible even if singleton initializes first
@@ -190,7 +190,6 @@ class LLMClient:
             return None
 
         model = model or self.model
-        last_exception = None
         retries = self.max_retries if max_retries is None else max(0, int(max_retries))
 
         for attempt in range(retries + 1):
@@ -250,18 +249,13 @@ class LLMClient:
                 )
 
             except Exception as exc:
-                last_exception = exc
                 self.log.warning(
                     "LLM request failed",
                     extra={"attempt": attempt + 1, "error": str(exc), "error_type": type(exc).__name__},
                 )
 
-                if attempt < retries:
-                    delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    self.log.info("Retrying LLM request", extra={"delay": delay})
-                    time.sleep(delay)
-                else:
-                    self.log.error("All LLM retry attempts failed", extra={"error": str(exc)})
+                if attempt >= retries:
+                    self.log.warning("All LLM retry attempts failed", extra={"error": str(exc)})
 
         return None
 
@@ -309,7 +303,6 @@ class LLMClient:
             return None
 
         model = model or self.model
-        last_exception = None
         retries = self.max_retries if max_retries is None else max(0, int(max_retries))
 
         # Normalize tool_choice
@@ -383,18 +376,13 @@ class LLMClient:
                 )
 
             except Exception as exc:
-                last_exception = exc
                 self.log.warning(
                     "LLM tool calling request failed",
                     extra={"attempt": attempt + 1, "error": str(exc), "error_type": type(exc).__name__},
                 )
 
-                if attempt < retries:
-                    delay = self.retry_delay * (2 ** attempt)
-                    self.log.info("Retrying LLM tool calling request", extra={"delay": delay})
-                    time.sleep(delay)
-                else:
-                    self.log.error("All LLM tool calling retry attempts failed", extra={"error": str(exc)})
+                if attempt >= retries:
+                    self.log.warning("All LLM tool calling retry attempts failed", extra={"error": str(exc)})
 
         return None
 
@@ -422,6 +410,104 @@ class LLMClient:
         except Exception as exc:
             self.log.warning("Embedding request failed", extra={"error": str(exc)})
             return None
+
+    # ------------------------------------------------------------------
+    # Async wrappers for non-blocking usage
+    # ------------------------------------------------------------------
+
+    async def chat_completion_async(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
+        *,
+        max_retries: int | None = None,
+    ) -> LLMResponse | None:
+        """Async wrapper for `chat_completion` using a thread executor.
+
+        This method preserves the existing sync semantics of `chat_completion`
+        while allowing callers in async contexts to avoid blocking the event
+        loop. The underlying OpenAI client remains synchronous; calls are
+        executed in a worker thread via `asyncio.to_thread`.
+
+        Parameters
+        ----------
+        messages:
+            List of message dictionaries with 'role' and 'content' keys.
+        model:
+            Model to use. Defaults to client's default model.
+        temperature:
+            Sampling temperature (0.0 to 2.0).
+        max_tokens:
+            Maximum tokens to generate.
+        response_format:
+            Response format configuration (e.g., JSON schema).
+        max_retries:
+            Override default max retries for this call.
+
+        Returns
+        -------
+        LLMResponse | None
+            Structured response or None if all retries failed.
+        """
+
+        return await asyncio.to_thread(
+            self.chat_completion,
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            response_format,
+            max_retries=max_retries,
+        )
+
+    async def chat_completion_with_tools_async(
+        self,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int | None = None,
+        tool_choice: str | dict[str, Any] = "auto",
+        max_retries: int | None = None,
+    ) -> LLMResponse | None:
+        """Async wrapper for `chat_completion_with_tools` using a thread executor.
+
+        Parameters mirror the synchronous version; execution is delegated to a
+        worker thread so that async callers do not block the event loop.
+        """
+
+        return await asyncio.to_thread(
+            self.chat_completion_with_tools,
+            messages,
+            tools,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            max_retries=max_retries,
+        )
+
+    async def get_embeddings_async(self, *, text: str, model: str | None = None) -> list[float] | None:
+        """Async wrapper for `get_embeddings` using a thread executor.
+
+        Parameters
+        ----------
+        text:
+            Input text to embed.
+        model:
+            Embedding model identifier.
+
+        Returns
+        -------
+        list[float] | None
+            Embedding vector or None if provider is unavailable.
+        """
+
+        return await asyncio.to_thread(self.get_embeddings, text=text, model=model)
 
     def extract_json(
         self,
