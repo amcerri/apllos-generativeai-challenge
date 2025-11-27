@@ -4,7 +4,7 @@ This document explains the overall system architecture and how LangGraph orchest
 
 ## High-Level Architecture
 
-The project is built on a multi-agent architecture that combines LLM-first decision making with deterministic fallbacks. The system is designed for high availability, safety, and intelligent routing.
+The project is built on a multi-agent architecture that combines LLM-first decision making with deterministic fallbacks. The system is designed for high availability, safety, intelligent routing, and an end-to-end async I/O model (FastAPI → LangGraph → agents → LLM/DB), using `async/await` and `asyncio.to_thread` to avoid blocking the event loop.
 
 ### Core Components
 
@@ -30,7 +30,7 @@ See project [README.md](../README.md) for a detailed mermaid diagram.
 
 - Typed `GraphState` with per-key channels for safe fan-out in Studio.
 - **Conversation Memory**: `GraphState` includes `conversation_history`, `last_agent`, and `last_answer` for context-aware routing and natural follow-up conversations.
-- Nodes:
+- Nodes (all I/O-bound nodes are exposed as `async def` in the LangGraph definition):
   - `route`: LLM classifier (or heuristic fallback) + allowlist injection + conversation context integration.
   - `supervisor`: deterministic guardrails; single-pass fallback between analytics/knowledge/triage; commerce guard.
   - Analytics: `analytics.plan` → `analytics.exec` → `analytics.normalize`.
@@ -72,7 +72,7 @@ See project [README.md](../README.md) for a detailed mermaid diagram.
 
 ## API Layer ([app/api/server.py](../app/api/server.py))
 
-- FastAPI app with `/`, `/health`, `/ready`, `/ok` endpoints; mounts LangGraph server at `/graph`.
+- FastAPI app with `/`, `/health`, `/ready`, `/ok` endpoints (async handlers), and mounts the LangGraph server at `/graph`.
 - Metrics mount at `/metrics` when Prometheus client is available.
 - Graceful fallbacks when optional dependencies are absent.
 

@@ -24,28 +24,35 @@ The LLM Client is the central component for all OpenAI interactions, providing a
 - **OpenAI Integration**: Backed by `openai` library (optional dependency)
 - **Tool Calling**: Efficient structured outputs using OpenAI's tool calling API with JSON Schema fallback
 - **Cost Tracking**: Automatic cost calculation and metrics for all LLM interactions
-- **Retry Logic**: Exponential backoff for transient failures
+- **Retry Logic**: Bounded number of retry attempts for transient failures (no blocking sleeps on the event loop)
 - **Timeout Handling**: Configurable timeouts for all operations
 - **JSON Extraction**: Tolerant parsing with regex fallback
 - **Error Recovery**: Graceful degradation when OpenAI is unavailable
 
 ### Core Methods
 
-- **`LLMClient.chat_completion`**: Wraps OpenAI Chat Completions API
+- **`LLMClient.chat_completion`**: Wraps OpenAI Chat Completions API (synchronous)
   - Returns structured `LLMResponse` with metadata
   - Supports streaming and non-streaming modes
   - Handles rate limiting and quota errors
   - Implements exponential backoff retry logic
   - Automatically tracks costs for all interactions
 
-- **`LLMClient.chat_completion_with_tools`**: Tool calling for structured outputs
+- **`LLMClient.chat_completion_async`**: Asynchronous variant that delegates to `chat_completion` via `asyncio.to_thread`
+  - Mirrors the synchronous method signature
+  - Enables usage in `async` contexts without blocking the event loop
+
+- **`LLMClient.chat_completion_with_tools`**: Tool calling for structured outputs (synchronous)
   - Uses OpenAI's tool calling API for token-efficient structured outputs
   - Converts JSON schemas to tool definitions automatically
   - Falls back to JSON Schema mode if tool calling fails
   - Extracts tool call arguments as response text
   - Reduces token usage compared to JSON Schema mode
 
-- **`LLMClient.get_embeddings`**: Fetches vector embeddings
+- **`LLMClient.chat_completion_with_tools_async`**: Asynchronous variant that delegates to `chat_completion_with_tools` via `asyncio.to_thread`
+  - Designed for async LangGraph nodes and other non-blocking call sites
+
+- **`LLMClient.get_embeddings`**: Fetches vector embeddings (synchronous)
   - Uses `text-embedding-3-small` by default
   - Supports batch processing for efficiency
   - Fallback to deterministic hashing when unavailable
@@ -81,9 +88,14 @@ response = client.chat_completion(
 
 ## Database ([app/infra/db.py](../app/infra/db.py))
 
-- Cached SQLAlchemy engine via `get_engine()` with read-only connection options for Postgres.
-- `open_connection(readonly=True)`: context manager that sets `default_transaction_read_only` when supported.
-- Handles Docker hostname translation (`@db:` → `@host.docker.internal:`) and `postgresql+psycopg://` normalization.
+- **Sync engine helpers**
+  - Cached SQLAlchemy engine via `get_engine()` with read-only connection options for Postgres.
+  - `open_connection(readonly=True)`: context manager that sets `default_transaction_read_only` when supported.
+  - Handles Docker hostname translation (`@db:` → `@host.docker.internal:`) and `postgresql+psycopg://` normalization.
+- **Async engine helpers**
+  - `get_async_engine(...)`: cached async SQLAlchemy engine using asyncpg driver when available.
+  - `async_open_connection(readonly=True)`: async context manager that applies `SET LOCAL default_transaction_read_only = on` when supported.
+  - Synchronous URLs (`postgresql://`, `postgresql+psycopg://`) are normalized to the async dialect (`postgresql+asyncpg://`) for use with the async engine.
 
 ## Logging ([app/infra/logging.py](../app/infra/logging.py))
 

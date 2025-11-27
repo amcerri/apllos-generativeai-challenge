@@ -516,12 +516,27 @@ class AnalyticsPlanner:
                 template = f.read()
         except Exception as exc:
             self.log.warning(f"Could not load prompt file {prompt_file}: {exc}")
-            # Minimal fallback prompt
-            template = """You are an Analytics SQL Planner. Generate safe PostgreSQL SELECT queries.
+            # Minimal fallback prompt with explicit JSON contract
+            template = """You are an Analytics SQL Planner. Generate safe PostgreSQL SELECT queries using ONLY allowlisted tables and columns.
+
 ALLOWLIST (JSON)
 <<<ALLOWLIST_JSON>>>
 
-Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolean, "params": {}, "warnings": []}"""
+Your output MUST be a single JSON object (no Markdown, no prose) with the following shape:
+{
+  "sql": "SELECT ...",
+  "params": {},
+  "reason": "short English summary of what the query does",
+  "limit_applied": true | false,
+  "warnings": ["optional_warning_1", "..."]
+}
+
+Rules:
+- SELECT-only (no DDL/DML, no CALL/DO).
+- Never use SELECT *; always enumerate columns.
+- Use ONLY tables/columns present in the allowlist JSON.
+- Add LIMIT ONLY when explicitly requested by the user (e.g. \"top 5\", \"limit 10\").
+- Do NOT add implicit time filters; use all data unless the user specifies a period."""
         
         # Inject allowlist
         allowlist_json = json.dumps(dict(allowlist), indent=2)
@@ -577,6 +592,18 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
         # Fix window function GROUP BY issues
         sql = self._fix_window_function_groupby(sql, logger)
         
+        # Fix problematic aliases (dots, reserved words) that can break SQL
+        plan_tmp = PlannerPlan(
+            sql=sql,
+            params=params,
+            reason=reason,
+            limit_applied=limit_applied,
+            warnings=warnings,
+        )
+        plan_tmp = self._fix_alias_issues(plan_tmp, logger)
+        sql = plan_tmp.sql
+        warnings = plan_tmp.warnings
+        
         # Basic SQL safety checks
         sql_lower = sql.lower()
         
@@ -600,30 +627,90 @@ Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolea
         )
     
     def _fix_alias_issues(self, plan: PlannerPlan, logger: Any) -> PlannerPlan:
-        """Fix alias issues in SQL (remove dots from aliases)."""
+        """Fix alias issues in SQL to improve compatibility.
+
+        Handles:
+        - Aliases containing dots (e.g., ``AS analytics.customers`` → ``AS customers``)
+        - Aliases that collide with SQL reserved words (e.g., ``order_reviews or`` → ``order_reviews reviews``)
+        """
         import re
         
         original_sql = plan.sql
+        fixed_sql = original_sql
+        warnings = list(plan.warnings)
         
-        # Find and fix aliases with dots (e.g., "AS analytics.customers" -> "AS customers")
-        # Pattern: AS followed by schema.table_name
-        fixed_sql = re.sub(
+        # 1) Fix aliases with dots (e.g., "AS analytics.customers" -> "AS customers")
+        fixed_sql_dots = re.sub(
             r'\bAS\s+([a-zA-Z_][a-zA-Z0-9_]*\.[a-zA-Z_][a-zA-Z0-9_]*)\b',
-            lambda m: f"AS {m.group(1).split('.')[-1]}",  # Keep only the part after the dot
-            original_sql,
-            flags=re.IGNORECASE
+            lambda m: f"AS {m.group(1).split('.')[-1]}",
+            fixed_sql,
+            flags=re.IGNORECASE,
         )
+        if fixed_sql_dots != fixed_sql:
+            logger.warning(
+                "Fixed alias with dots in SQL",
+                extra={"before": fixed_sql[:120], "after": fixed_sql_dots[:120]},
+            )
+            fixed_sql = fixed_sql_dots
+            warnings.append("fixed_alias_dots")
+        
+        # 2) Fix aliases that use reserved words (e.g., "JOIN ... or" -> "JOIN ... reviews")
+        reserved_aliases = {
+            "or": "reviews",
+            "and": "and_alias",
+            "not": "not_alias",
+            "in": "in_alias",
+            "is": "is_alias",
+            "on": "on_alias",
+            "by": "by_alias",
+            "to": "to_alias",
+            "for": "for_alias",
+            "of": "of_alias",
+            "with": "with_alias",
+            "from": "from_alias",
+        }
+        
+        def _replace_reserved_aliases(sql: str) -> str:
+            updated_sql = sql
+            for bad, good in reserved_aliases.items():
+                # Match FROM/JOIN ... <bad_alias>
+                pattern = rf"\b(FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_\.]*)\s+{bad}\b"
+                repl_alias = good
+                # Replace alias definition
+                updated_sql_new = re.sub(
+                    pattern,
+                    rf"\1 \2 {repl_alias}",
+                    updated_sql,
+                    flags=re.IGNORECASE,
+                )
+                if updated_sql_new != updated_sql:
+                    # Replace references "bad." -> "good."
+                    updated_sql_new = re.sub(
+                        rf"\b{bad}\.",
+                        f"{repl_alias}.",
+                        updated_sql_new,
+                        flags=re.IGNORECASE,
+                    )
+                    updated_sql = updated_sql_new
+            return updated_sql
+        
+        fixed_sql_reserved = _replace_reserved_aliases(fixed_sql)
+        if fixed_sql_reserved != fixed_sql:
+            logger.warning(
+                "Fixed reserved-word aliases in SQL",
+                extra={"before": fixed_sql[:120], "after": fixed_sql_reserved[:120]},
+            )
+            fixed_sql = fixed_sql_reserved
+            warnings.append("fixed_alias_reserved")
         
         if fixed_sql != original_sql:
-            logger.warning(f"Fixed alias issues in SQL: {original_sql[:100]}... -> {fixed_sql[:100]}...")
             return PlannerPlan(
                 sql=fixed_sql,
                 params=plan.params,
                 reason=plan.reason,
                 limit_applied=plan.limit_applied,
-                warnings=plan.warnings + ["fixed_alias_dots"]
+                warnings=warnings,
             )
-        
         return plan
 
     def _fix_schema_prefixes(self, sql: str) -> str:

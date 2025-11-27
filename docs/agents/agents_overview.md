@@ -146,7 +146,7 @@ analytics:
 ```yaml
 knowledge:
   retrieval:
-    top_k: 5
+    top_k: 7
     min_score: 0.7
     dedupe: true
   ranker:

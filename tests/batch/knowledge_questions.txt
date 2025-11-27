@@ -1,0 +1,32 @@
+# Strategic & Business Planning
+Quais são as principais diferenças entre marketplace e loja própria para um e-commerce iniciante?
+Quais métricas de performance são essenciais para avaliar o sucesso de uma estratégia data-driven?
+Como estruturar um funil de conversão otimizado para diferentes perfis de cliente?
+
+# International & Expansion
+Quais são os principais desafios regulatórios para expandir um e-commerce brasileiro para mercados internacionais?
+Como adaptar a estratégia de precificação para diferentes moedas e mercados internacionais?
+
+# Logistics & Operations
+Qual a importância das embalagens na experiência do cliente e como isso impacta o NPS?
+Como otimizar a logística reversa para reduzir custos operacionais e melhorar a sustentabilidade?
+Quais são as melhores práticas para gestão de estoque em e-commerce sazonal?
+
+# Technology & Digital Strategy
+Como implementar uma estratégia omnichannel efetiva integrando online e offline?
+Quais tecnologias emergentes podem revolucionar a experiência de compra online nos próximos 5 anos?
+Como usar inteligência artificial para personalização de produtos e recomendações?
+
+# Customer Experience & Retention
+Qual a relação entre tempo de entrega e taxa de recompra em e-commerce?
+Como desenvolver um programa de fidelidade que realmente engaje clientes millennials e Gen Z?
+Quais estratégias de pós-venda são mais eficazes para transformar compradores em defensores da marca?
+
+# Legal & Compliance
+Como garantir compliance total com LGPD em operações de e-commerce que coletam dados comportamentais?
+Quais são as obrigações legais específicas para e-commerce que vendem produtos importados?
+
+# Financial & Growth
+Como estruturar um modelo de precificação dinâmica baseado em demanda e concorrência?
+Quais indicadores financeiros são críticos para avaliar a viabilidade de expansão geográfica?
+Como calcular o LTV (Lifetime Value) de clientes em diferentes segmentos de e-commerce?

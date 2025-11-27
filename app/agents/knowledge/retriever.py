@@ -39,6 +39,7 @@ falls back to a deterministic local hasher (sufficient for tests, not for prod).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -178,10 +179,10 @@ class KnowledgeRetriever:
         # Get configuration values with fallbacks
         try:
             retrieval_cfg = getattr(getattr(self._config, "knowledge"), "retrieval")  # type: ignore[attr-defined]
-            default_top_k = int(getattr(retrieval_cfg, "top_k", 5))
+            default_top_k = int(getattr(retrieval_cfg, "top_k", 7))
             default_min_score = float(getattr(retrieval_cfg, "min_score", 0.6))
         except Exception:
-            default_top_k = 5
+            default_top_k = 7
             default_min_score = 0.6
 
         top_k_i = max(1, int(top_k or default_top_k))
@@ -243,6 +244,29 @@ class KnowledgeRetriever:
                 used_filters=dict(filters or {}),
                 no_context=(len(hits2) == 0),
             )
+
+    async def retrieve_async(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        min_score: float | None = None,
+        filters: Mapping[str, Any] | None = None,
+    ) -> RetrievalResult:
+        """Asynchronous wrapper for :meth:`retrieve`.
+
+        Executes the synchronous retrieval logic in a worker thread via
+        :func:`asyncio.to_thread`, so that async LangGraph nodes can call the
+        retriever without blocking the event loop.
+        """
+
+        return await asyncio.to_thread(
+            self.retrieve,
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            filters=filters,
+        )
 
 
 # ---------------------------------------------------------------------------

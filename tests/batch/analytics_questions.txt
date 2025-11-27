@@ -1,0 +1,29 @@
+  # Revenue & Financial Analysis
+  Qual é a receita média por pedido nos últimos 6 meses, segmentada por estado do cliente?
+  Identifique os top 10 produtos que geram maior margem de contribuição considerando preço e frete
+  Qual é a correlação entre valor do frete e taxa de cancelamento de pedidos por região?
+  Compare a performance de receita entre diferentes métodos de pagamento nos últimos 12 meses
+
+  # Customer Behavior & Segmentation
+  Qual é o perfil demográfico dos clientes com maior valor de pedido médio?
+  Identifique padrões sazonais de compra por categoria de produto ao longo do ano
+  Qual é a distribuição de clientes por frequência de compra e como isso varia por estado?
+  Analise o comportamento de recompra: quantos clientes fizeram mais de 3 pedidos?
+
+  # Operational Efficiency
+  Qual é o tempo médio entre aprovação do pagamento e entrega, por transportadora?
+  Identifique gargalos operacionais analisando pedidos com maior tempo de processamento
+  Qual é a taxa de pedidos entregues no prazo estimado, segmentada por região?
+  Compare a eficiência logística entre diferentes faixas de CEP de origem dos vendedores
+  
+  # Product & Category Performance
+  Quais categorias de produtos têm maior crescimento de vendas trimestre a trimestre?
+  Identifique produtos com alta demanda mas baixa satisfação do cliente (score de review)
+  Qual é a penetração de cada categoria de produto por estado brasileiro?
+  Analise a concentração de vendas: quantos vendedores representam 80% da receita?
+  
+  # Advanced Business Intelligence
+  Calcule o churn rate de clientes por coorte de primeira compra (mês/ano)
+  Qual é o impacto do número de parcelas no valor médio do pedido e na taxa de aprovação?
+  Identifique oportunidades de cross-selling analisando produtos frequentemente comprados juntos
+  Qual é a elasticidade-preço da demanda para as principais categorias de produtos?

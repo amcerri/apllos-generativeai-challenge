@@ -26,6 +26,7 @@ Usage
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Any, Annotated
 try:
@@ -403,7 +404,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
         sg = StateGraph(GraphState)  # typed state with channels
 
         # -- Node definitions (return deltas only) ---------------------------
-        def node_route(state: GraphState) -> dict[str, Any]:
+        async def node_route(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             q = str(state.get("query", "")).strip()
@@ -435,9 +436,13 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             original_query = q
             try:
                 from app.utils.anaphora import resolve_anaphora
+                # Pure-Python operation; safe to run inline in async context.
                 q = resolve_anaphora(q, conversation_history, last_answer)
                 if q != original_query:
-                    log.info("Anaphora/follow-up resolved", extra={"original": original_query[:50], "resolved": q[:50]})
+                    log.info(
+                        "Anaphora/follow-up resolved",
+                        extra={"original": original_query[:50], "resolved": q[:50]},
+                    )
             except Exception as e:
                 log.debug("Anaphora resolution failed", extra={"error": str(e)})
             
@@ -445,17 +450,23 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             relevant_context = None
             try:
                 from app.utils.conversation_search import ConversationHistorySearcher
+
                 history_searcher = ConversationHistorySearcher()
-                relevant_context = history_searcher.get_relevant_context(
+                # Conversation search may call embeddings/LLM; execute in a worker
+                # thread to avoid blocking the event loop.
+                relevant_context = await asyncio.to_thread(
+                    history_searcher.get_relevant_context,
                     current_query=q,
                     conversation_history=conversation_history,
-                    last_answer=last_answer
+                    last_answer=last_answer,
                 )
                 if relevant_context:
-                    log.info("Context retrieved", 
-                            is_relevant=relevant_context.get("is_relevant", False),
-                            reason=relevant_context.get("reason", ""),
-                            has_summary=bool(relevant_context.get("context_summary")))
+                    log.info(
+                        "Context retrieved",
+                        is_relevant=relevant_context.get("is_relevant", False),
+                        reason=relevant_context.get("reason", ""),
+                        has_summary=bool(relevant_context.get("context_summary")),
+                    )
             except Exception as e:
                 log.warning("Context search failed", extra={"error": str(e)})
             
@@ -526,7 +537,9 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             with start_span("node.route"):
                 # Classify while RAG probe runs in parallel
                 # Pass conversation context to classifier
-                dec = classifier.classify(
+                # Classification may invoke LLM; execute in worker thread.
+                dec = await asyncio.to_thread(
+                    classifier.classify,
                     q,
                     allowlist=allowlist,
                     rag_hits=0,  # Will update after RAG probe completes
@@ -534,7 +547,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     has_attachment=bool(attachment),
                     conversation_history=conversation_history,
                     last_answer=last_answer,
-                    relevant_context=relevant_context
+                    relevant_context=relevant_context,
                 )
                 
                 # Wait for RAG probe to complete (with timeout)
@@ -551,7 +564,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                                 dec_dict = dec if isinstance(dec, dict) else (dec.__dict__ if hasattr(dec, '__dict__') else {})
                                 if dec_dict.get("agent") == "triage" and rag_hits > 0:
                                     # Re-classify with RAG evidence to potentially route to knowledge
-                                    dec = classifier.classify(
+                                    dec = await asyncio.to_thread(
+                                        classifier.classify,
                                         q,
                                         allowlist=allowlist,
                                         rag_hits=rag_hits,
@@ -559,7 +573,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                                         has_attachment=bool(attachment),
                                         conversation_history=conversation_history,
                                         last_answer=last_answer,
-                                        relevant_context=relevant_context
+                                        relevant_context=relevant_context,
                                     )
                             except Exception:
                                 pass  # Use original decision if re-classification fails
@@ -614,12 +628,16 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     "columns": list(dec_dict.get("columns", [])),
                     "signals": merged_signals,
                     "routing_ctx": routing_ctx,
+                    # Clear previous answer at the start of a new run to avoid
+                    # accidentally reusing stale answers when downstream nodes
+                    # fail to produce a new one.
+                    "answer": None,
                 }
             _inc_counter("requests_total", {"agent": "router", "node": "route"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "route"})
             return out
 
-        def node_supervisor(state: GraphState) -> dict[str, Any]:
+        async def node_supervisor(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.supervisor"):
@@ -671,7 +689,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             return out
 
         # Analytics pipeline
-        def node_an_plan(state: GraphState) -> dict[str, Any]:
+        async def node_an_plan(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.analytics.plan"):
@@ -689,7 +707,9 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         "geolocation": ["geolocation_zip_code_prefix", "geolocation_lat", "geolocation_lng", "geolocation_city", "geolocation_state"],
                         "product_category_translation": ["product_category_name", "product_category_name_english"]
                     }
-                plan = analytics_planner.plan(
+                # Planner may use LLM; execute in worker thread.
+                plan = await asyncio.to_thread(
+                    analytics_planner.plan,
                     query=str(state.get("query", "")),
                     allowlist=allowlist,
                 )
@@ -698,7 +718,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "analytics.plan"})
             return out
 
-        def node_an_exec(state: GraphState) -> dict[str, Any]:
+        async def node_an_exec(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.analytics.exec"):
@@ -744,13 +764,17 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 except Exception:
                     dry_run = False
 
-                rows = analytics_executor.execute(plan_dict, dry_run=dry_run, include_explain=True)
+                rows = await analytics_executor.execute_async(
+                    plan_dict,
+                    dry_run=dry_run,
+                    include_explain=True,
+                )
                 out["analytics_rows"] = rows
                 _inc_counter("requests_total", {"agent": "analytics", "node": "exec"})
                 _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "analytics.exec"})
                 return out
 
-        def node_an_norm(state: GraphState) -> dict[str, Any]:
+        async def node_an_norm(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.analytics.normalize"):
@@ -773,10 +797,12 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 else:
                     result_dict = result or {}
                 
-                normalized = analytics_norm.normalize(
+                # Normalizer may perform LLM calls; execute in worker thread.
+                normalized = await asyncio.to_thread(
+                    analytics_norm.normalize,
                     plan=plan_dict,
                     result=result_dict,
-                    question=str(state.get("query", ""))
+                    question=str(state.get("query", "")),
                 )
                 out = {"answer": normalized}
             _inc_counter("requests_total", {"agent": "analytics", "node": "normalize"})
@@ -784,32 +810,44 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             return out
 
         # Knowledge pipeline
-        def node_kn_retrieve(state: GraphState) -> dict[str, Any]:
+        async def node_kn_retrieve(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.knowledge.retrieve"):
-                result = retriever.retrieve(query=str(state.get("query", "")), top_k=state.get("k", 6), min_score=0.01)
+                result = await retriever.retrieve_async(
+                    query=str(state.get("query", "")),
+                    top_k=state.get("k", 6),
+                    min_score=0.01,
+                )
                 out = {"hits": result.hits}
             _inc_counter("requests_total", {"agent": "knowledge", "node": "retrieve"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "knowledge.retrieve"})
             return out
 
-        def node_kn_rank(state: GraphState) -> dict[str, Any]:
+        async def node_kn_rank(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.knowledge.rank"):
-                result = ranker.rank(query=str(state.get("query", "")), hits=state.get("hits") or [])
+                # Ranker typically uses LLM; execute in worker thread.
+                result = await asyncio.to_thread(
+                    ranker.rank,
+                    query=str(state.get("query", "")),
+                    hits=state.get("hits") or [],
+                )
                 out = {"ranked": result.hits}
             _inc_counter("requests_total", {"agent": "knowledge", "node": "rank"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "knowledge.rank"})
             return out
 
-        def node_kn_answer(state: GraphState) -> dict[str, Any]:
+        async def node_kn_answer(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.knowledge.answer"):
-                ans = answerer.answer(
-                    query=str(state.get("query", "")), ranked=state.get("ranked") or []
+                # Answerer uses LLM; execute in worker thread.
+                ans = await asyncio.to_thread(
+                    answerer.answer,
+                    query=str(state.get("query", "")),
+                    ranked=state.get("ranked") or [],
                 )
                 cites = ans.get("citations") if isinstance(ans, dict) else None
                 out: dict[str, Any] = {"answer": ans}
@@ -820,7 +858,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 return out
 
         # Commerce pipeline
-        def node_co_process_doc(state: GraphState) -> dict[str, Any]:
+        async def node_co_process_doc(state: GraphState) -> dict[str, Any]:
             """Process attachment and extract text."""
             import time as _t
             _t0 = _t.perf_counter()
@@ -863,13 +901,17 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         return {"processed_document": {"text": "", "success": False, "warnings": ["unsupported_mime"]}}
                 except Exception:
                     pass
-                result = document_processor.process_attachment(attachment)
+                # Document processing may touch filesystem/LLM; execute in worker thread.
+                result = await asyncio.to_thread(
+                    document_processor.process_attachment,
+                    attachment,
+                )
                 out = {"processed_document": result}
             _inc_counter("requests_total", {"agent": "commerce", "node": "process_doc"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "commerce.process_doc"})
             return out
 
-        def node_co_extract_llm(state: GraphState) -> dict[str, Any]:
+        async def node_co_extract_llm(state: GraphState) -> dict[str, Any]:
             """Extract structured data using LLM."""
             import time as _t
             _t0 = _t.perf_counter()
@@ -881,8 +923,12 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 if not text or not processed.get("success", False):
                     return {"processed_document": processed}
                 
-                # Extract using LLM
-                document = llm_extractor.extract(text=text, metadata=metadata)
+                # Extract using LLM (run in worker thread).
+                document = await asyncio.to_thread(
+                    llm_extractor.extract,
+                    text=text,
+                    metadata=metadata,
+                )
                 
                 # Update processed document with extraction result
                 processed["document"] = document
@@ -893,7 +939,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
 
 
 
-        def node_co_summarize(state: GraphState) -> dict[str, Any]:
+        async def node_co_summarize(state: GraphState) -> dict[str, Any]:
             """Summarize processed document."""
             import time as _t
             _t0 = _t.perf_counter()
@@ -904,8 +950,8 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                 if not document:
                     return {"answer": {"text": "❌ Erro ao processar documento.", "meta": {"error": "no_document"}}}
                 
-                # Generate summary
-                ans = summarizer.summarize(document)
+                # Generate summary via LLM (run in worker thread).
+                ans = await asyncio.to_thread(summarizer.summarize, document)
                 
                 # Add processing info to metadata
                 if isinstance(ans, dict) and "meta" in ans:
@@ -918,18 +964,23 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             return out
 
         # Triage
-        def node_tr_handle(state: GraphState) -> dict[str, Any]:
+        async def node_tr_handle(state: GraphState) -> dict[str, Any]:
             import time as _t
             _t0 = _t.perf_counter()
             with start_span("node.triage.handle"):
-                ans = triage.handle(query=str(state.get("query", "")), signals=state.get("signals"))
+                # Triage handler typically uses LLM; execute in worker thread.
+                ans = await asyncio.to_thread(
+                    triage.handle,
+                    query=str(state.get("query", "")),
+                    signals=state.get("signals"),
+                )
                 out = {"answer": ans}
             _inc_counter("requests_total", {"agent": "triage", "node": "handle"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "triage.handle"})
             return out
 
         # Conversation history update
-        def node_update_history(state: GraphState) -> dict[str, Any]:
+        async def node_update_history(state: GraphState) -> dict[str, Any]:
             """Update conversation history with current query and answer.
             
             Adds the current user query and assistant answer to the conversation
@@ -940,7 +991,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             _t0 = _t.perf_counter()
             with start_span("node.update_history"):
                 query = str(state.get("query", "")).strip()
-                answer = state.get("answer") or {}
+                answer = state.get("answer")
                 agent = state.get("agent") or "unknown"
                 conversation_history = list(state.get("conversation_history") or [])
                 
@@ -961,12 +1012,25 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         }
                     )
                 
-                # Add assistant answer
-                answer_text = answer.get("text", "") if isinstance(answer, dict) else str(answer)
-                if answer_text:
+                # Add assistant answer only when there is a new, non-empty answer.
+                has_answer_text = False
+                if isinstance(answer, dict):
+                    answer_text = str(answer.get("text", "")).strip()
+                    has_answer_text = bool(answer_text)
+                elif answer is not None:
+                    answer_text = str(answer).strip()
+                    has_answer_text = bool(answer_text)
+                else:
+                    answer_text = ""
+
+                if has_answer_text:
                     # Check if answer was already added (avoid duplicates)
                     last_assistant_msg = conversation_history[-1] if conversation_history else None
-                    if not (last_assistant_msg and last_assistant_msg.get("role") == "assistant" and last_assistant_msg.get("content") == answer_text):
+                    if not (
+                        last_assistant_msg
+                        and last_assistant_msg.get("role") == "assistant"
+                        and str(last_assistant_msg.get("content", "")).strip() == answer_text
+                    ):
                         conversation_history.append(
                             {
                                 "role": "assistant",
@@ -975,12 +1039,23 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                                 "timestamp": _t.time(),
                             }
                         )
-                
+                    last_answer_value = answer if isinstance(answer, dict) else {"text": answer_text}
+                else:
+                    # No new answer for this run: keep previous last_answer as-is.
+                    last_answer_value = state.get("last_answer")
+                    try:
+                        _inc_counter(
+                            "no_answer_runs_total",
+                            {"agent": str(agent)},
+                        )
+                    except Exception:
+                        pass
+
                 # Update last_agent and last_answer
                 out = {
                     "conversation_history": conversation_history,
                     "last_agent": agent,
-                    "last_answer": answer if isinstance(answer, dict) else {"text": str(answer)},
+                    "last_answer": last_answer_value,
                 }
             _inc_counter("requests_total", {"agent": "system", "node": "update_history"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "update_history"})

@@ -232,8 +232,9 @@ def _answer_no_context_ptbr(query: str) -> dict[str, Any]:
     t = (query or "").strip()
     text = (
         "Não encontrei base suficiente nos documentos para responder com segurança. "
-        "Você pode: (1) anexar o material relevante (PDF/TXT), (2) reformular com mais detalhes, "
-        "ou (3) perguntar algo mais específico."
+        "Você pode reformular com mais detalhes, fazer uma pergunta mais específica "
+        "sobre o contexto de e-commerce ou, se for uma dúvida sobre dados operacionais, "
+        "pedir uma análise numérica (por exemplo, de pedidos, faturamento ou entregas)."
     )
     return {
         "text": text,
@@ -575,13 +576,12 @@ def _postprocess_answer(text: str, cap_chars: int) -> str:
 
 
 def _suggest_followups(query: str) -> list[str]:
-    # Provide objective follow‑up questions in pt‑BR
-    base = [
-        "Pode fornecer mais detalhes?",
-        "Tem algum documento específico para anexar?",
-        "Gostaria de perguntar algo mais específico?",
+    # Provide objective follow‑up questions in pt‑BR, sem depender de anexos.
+    return [
+        "Pode detalhar melhor o cenário (por exemplo: tipo de produto, canal, público)?",
+        "Quer que eu foque em conceitos, processos ou impactos em métricas do e-commerce?",
+        "Tem alguma métrica ou indicador específico que você queira analisar?",
     ]
-    return base
 
 
 def _smart_shorten(text: str, cap_chars: int) -> str:

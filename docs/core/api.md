@@ -26,17 +26,18 @@ FastAPI Application
 ## Endpoints
 
 - `GET /` (landing): returns basic links to `/docs`, `/openapi.json`, `/graph`, `/health`, `/ready`.
-- `GET /health`: liveness.
-- `GET /ready`: readiness.
-- `GET /ok`: extended health: DB connectivity and checkpointer availability.
+- `GET /health`: liveness (async handler, immediate return, no external I/O).
+- `GET /ready`: readiness (async handler, checks only basic service readiness).
+- `GET /ok`: extended health (async): DB connectivity and checkpointer availability, using threadpool checks to avoid blocking the event loop.
 - `GET /graph/...`: LangGraph Server (threads, runs, state) for Studio.
 - `GET /metrics`: Prometheus scrape endpoint (optional).
 
 ## Extended Health (`/ok`)
 
-- DB: uses `app.infra.db.open_connection()` and `SELECT 1`.
-- Checkpointer: uses `app.infra.checkpointer.get_checkpointer()` and `is_noop()`.
-- Response example: `{ "status": "ok", "db": "ok|down", "checkpointer": "ok|noop" }`.
+- Implementation: handler `async def ok()` in `app/api/server.py`.
+- DB: uses `app.infra.db.open_connection()` and `SELECT 1`, executed in a threadpool via `asyncio.to_thread` to avoid blocking.
+- Checkpointer: uses `app.infra.checkpointer.get_checkpointer()` and `is_noop()`, also executed in a threadpool.
+- Example response: `{ "status": "ok", "db": "ok|down", "checkpointer": "ok|noop" }`.
 
 ## CORS
 
