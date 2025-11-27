@@ -245,24 +245,21 @@ def _compose_text_ptbr(query: str, agent: str, *, signals: list[str] | None = No
         return _greeting_with_capabilities()
 
     # --- Detect out-of-scope topics -----------------------------------------
-    # Check signals first (from router), then detect from query
+    # Check signals first (from router), then fall back to local detection
     sigs = set(signals or [])
     oos_topic = None
     if "out_of_scope" in sigs:
-        # Router already detected out-of-scope, find the topic type
+        # Router already detected out-of-scope; try to read the topic label
         for sig in sigs:
-            if sig in ("weather", "news", "financial_markets", "code_generation", "sports_entertainment"):
+            if sig != "out_of_scope":
                 oos_topic = sig
                 break
-        # If no specific topic found, try to detect from query
-        if not oos_topic:
-            oos_topic = _detect_out_of_scope(q)
-    else:
-        # No signal from router, detect from query
+    if not oos_topic:
+        # No explicit topic from router, detect from query as a best-effort fallback.
         oos_topic = _detect_out_of_scope(q)
     
     if oos_topic:
-        # Map signal names to human-readable topic names
+        # Map signal names to human-readable topic names when using standard labels.
         topic_map = {
             "weather": "previsão do tempo/meteorologia",
             "news": "notícias em tempo real",
@@ -273,7 +270,7 @@ def _compose_text_ptbr(query: str, agent: str, *, signals: list[str] | None = No
         topic_display = topic_map.get(oos_topic, oos_topic)
         
         # Prefer a humanized LLM message; fallback to a concise fixed text
-        human = _human_oos_message(topic_display)
+        human = _human_oos_message(q, topic_display)
         fallback = f"No momento não ofereço {topic_display}. Sugiro consultar um serviço especializado."
         msg = human or fallback
         return msg + "\n\n" + _capabilities_block() + "\n\nComo posso ajudar?"
@@ -378,17 +375,43 @@ def _greeting_with_capabilities() -> str:
 
 
 def _detect_out_of_scope(text: str) -> str | None:
-    t = (text or "").lower()
+    t = (text or "").lower().strip()
+    if not t:
+        return None
+
+    ecommerce_terms = (
+        "e-commerce",
+        "ecommerce",
+        "loja virtual",
+        "loja online",
+        "marketplace",
+        "pedido",
+        "pedidos",
+        "carrinho",
+        "checkout",
+        "cliente",
+        "clientes",
+        "entrega",
+        "frete",
+        "venda",
+        "vendas",
+        "faturamento",
+    )
+
+    def _has_ecommerce_signals() -> bool:
+        return any(term in t for term in ecommerce_terms)
+
     weather = ("previsão do tempo", "previsao do tempo", "meteorologia", "clima", "tempo em ")
     news = ("notícias", "noticias", "news")
     markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
     code = ("programar em", "escreva um código", "write code")
     sports = ("futebol", "jogo", "basquete", "vôlei", "volei", "nba", "fifa", "champions", "copa do mundo")
-    if any(k in t for k in weather):
+
+    if any(k in t for k in weather) and not _has_ecommerce_signals():
         return "previsão do tempo/meteorologia"
-    if any(k in t for k in news):
+    if any(k in t for k in news) and not _has_ecommerce_signals():
         return "notícias em tempo real"
-    if any(k in t for k in markets):
+    if any(k in t for k in markets) and not _has_ecommerce_signals():
         return "cotações/mercado financeiro em tempo real"
     if any(k in t for k in code):
         return "geração de código fora do contexto do projeto"
@@ -607,7 +630,7 @@ Tem alguma pergunta conceitual sobre e-commerce?"""
 # ---------------------------------------------------------------------------
 
 
-def _human_oos_message(topic: str) -> str | None:
+def _human_oos_message(query: str, topic: str) -> str | None:
     """Return a brief, empathetic PT-BR message for out-of-scope requests using LLM.
 
     Falls back to None if LLM is unavailable or errors, so callers can use a fixed string.
@@ -619,13 +642,23 @@ def _human_oos_message(topic: str) -> str | None:
             return None
 
         system = (
-            "Você é um assistente educado em pt-BR. Dê uma única resposta curta e humana,"
-            " reconhecendo gentilmente que o pedido está fora do escopo e sugerindo consultar"
-            " um site/app especializado. Sem listas, sem markdown, 1-2 frases, tom profissional."
+            "Você é um assistente educado em pt-BR. Dê uma única resposta curta e humana, "
+            "reconhecendo gentilmente que o pedido está fora do escopo do sistema atual e sugerindo "
+            "consultar um site/app/serviço especializado. A resposta deve levar em conta o pedido "
+            "real do usuário e o tópico de fora de escopo identificado.\n\n"
+            "Regras de estilo:\n"
+            "- Responder em pt-BR.\n"
+            "- Sem listas, sem markdown, 1–2 frases no máximo.\n"
+            "- Tom profissional, empático e direto.\n"
+            "- Não prometa funcionalidades que o sistema não possui.\n"
         )
         user = (
-            f"Pedido fora de escopo detectado: '{topic}'.\n"
-            "Responda em pt-BR de forma breve, clara e empática."
+            "Pedido original do usuário (fora de escopo):\n"
+            f"{(query or '').strip()}\n\n"
+            f"Tópico de fora de escopo identificado: {topic or 'genérico'}.\n\n"
+            "Responda de forma breve, clara e empática, explicando por que não pode atender "
+            "esse tipo de pedido e sugerindo que o usuário consulte um serviço especializado "
+            "(por exemplo, site de meteorologia, portal de notícias, corretora, etc.)."
         )
         resp = client.chat_completion(
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],

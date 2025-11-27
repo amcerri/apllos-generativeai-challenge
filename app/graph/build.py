@@ -628,6 +628,10 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                     "columns": list(dec_dict.get("columns", [])),
                     "signals": merged_signals,
                     "routing_ctx": routing_ctx,
+                    # Clear previous answer at the start of a new run to avoid
+                    # accidentally reusing stale answers when downstream nodes
+                    # fail to produce a new one.
+                    "answer": None,
                 }
             _inc_counter("requests_total", {"agent": "router", "node": "route"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "route"})
@@ -987,7 +991,7 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
             _t0 = _t.perf_counter()
             with start_span("node.update_history"):
                 query = str(state.get("query", "")).strip()
-                answer = state.get("answer") or {}
+                answer = state.get("answer")
                 agent = state.get("agent") or "unknown"
                 conversation_history = list(state.get("conversation_history") or [])
                 
@@ -1008,12 +1012,25 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                         }
                     )
                 
-                # Add assistant answer
-                answer_text = answer.get("text", "") if isinstance(answer, dict) else str(answer)
-                if answer_text:
+                # Add assistant answer only when there is a new, non-empty answer.
+                has_answer_text = False
+                if isinstance(answer, dict):
+                    answer_text = str(answer.get("text", "")).strip()
+                    has_answer_text = bool(answer_text)
+                elif answer is not None:
+                    answer_text = str(answer).strip()
+                    has_answer_text = bool(answer_text)
+                else:
+                    answer_text = ""
+
+                if has_answer_text:
                     # Check if answer was already added (avoid duplicates)
                     last_assistant_msg = conversation_history[-1] if conversation_history else None
-                    if not (last_assistant_msg and last_assistant_msg.get("role") == "assistant" and last_assistant_msg.get("content") == answer_text):
+                    if not (
+                        last_assistant_msg
+                        and last_assistant_msg.get("role") == "assistant"
+                        and str(last_assistant_msg.get("content", "")).strip() == answer_text
+                    ):
                         conversation_history.append(
                             {
                                 "role": "assistant",
@@ -1022,12 +1039,23 @@ def build_graph(*, require_sql_approval: bool = True, allowlist: dict[str, Any] 
                                 "timestamp": _t.time(),
                             }
                         )
-                
+                    last_answer_value = answer if isinstance(answer, dict) else {"text": answer_text}
+                else:
+                    # No new answer for this run: keep previous last_answer as-is.
+                    last_answer_value = state.get("last_answer")
+                    try:
+                        _inc_counter(
+                            "no_answer_runs_total",
+                            {"agent": str(agent)},
+                        )
+                    except Exception:
+                        pass
+
                 # Update last_agent and last_answer
                 out = {
                     "conversation_history": conversation_history,
                     "last_agent": agent,
-                    "last_answer": answer if isinstance(answer, dict) else {"text": str(answer)},
+                    "last_answer": last_answer_value,
                 }
             _inc_counter("requests_total", {"agent": "system", "node": "update_history"})
             _observe_hist("node_latency_ms", (_t.perf_counter() - _t0) * 1000.0, {"node": "update_history"})

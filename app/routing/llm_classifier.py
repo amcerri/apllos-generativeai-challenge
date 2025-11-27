@@ -335,19 +335,30 @@ class LLMClassifier:
                     self._cache.set(message, allowlist or {}, decision)
                 return self._return_final(decision)
             
-            # Detect out-of-scope topics before LLM classification
-            oos_topic = self._detect_out_of_scope(message)
-            if oos_topic:
+            # Detect out-of-scope topics before LLM routing.
+            # Prefer semantic LLM-based detection and fall back to conservative
+            # keyword signals only when necessary.
+            is_oos, oos_topic = self._semantic_out_of_scope(message)
+            if not is_oos:
+                oos_topic = self._detect_out_of_scope(message)
+                is_oos = bool(oos_topic)
+
+            if is_oos:
+                topic_label = oos_topic or "other"
                 decision = {
                     "agent": "triage",
                     "confidence": 1.0,
-                    "reason": f"out_of_scope_{oos_topic}",
+                    "reason": f"out_of_scope_{topic_label}",
                     "tables": [],
                     "columns": [],
-                    "signals": ["out_of_scope", oos_topic],
+                    "signals": ["out_of_scope", topic_label],
                     "thread_id": thread_id,
                 }
                 decision = self._apply_confidence_calibration(decision)
+                try:
+                    _inc_counter("router_out_of_scope_total", {"topic": topic_label})
+                except Exception:
+                    pass
                 if self._cache:
                     self._cache.set(message, allowlist or {}, decision)
                 return self._return_final(decision)
@@ -628,40 +639,163 @@ class LLMClassifier:
         return None
 
     def _detect_out_of_scope(self, query: str) -> str | None:
-        """Detect if query is about topics outside system capabilities.
-        
-        Parameters
-        ----------
-        query:
-            User query text.
-            
-        Returns
-        -------
-        str | None
-            Out-of-scope topic type or None if query is in scope.
+        """Detect if query is about topics clearly outside system capabilities.
+
+        The detection is conservative and avoids flagging valid e-commerce
+        questions that merely mention out-of-scope terms (for example, climate
+        impact on sales).
         """
         q = (query or "").lower().strip()
         if not q:
             return None
-        
-        weather = ("previsão do tempo", "previsao do tempo", "meteorologia", "clima", "tempo em ", "temperatura")
+
+        # Strong in-scope signals for e-commerce/business questions.
+        ecommerce_terms = (
+            "e-commerce",
+            "ecommerce",
+            "loja virtual",
+            "loja online",
+            "marketplace",
+            "pedido",
+            "pedidos",
+            "carrinho",
+            "checkout",
+            "cliente",
+            "clientes",
+            "entrega",
+            "frete",
+            "venda",
+            "vendas",
+            "faturamento",
+        )
+
+        def _has_ecommerce_signals() -> bool:
+            return any(t in q for t in ecommerce_terms)
+
+        weather = (
+            "previsão do tempo",
+            "previsao do tempo",
+            "meteorologia",
+            "clima",
+            "tempo em ",
+            "temperatura",
+        )
         news = ("notícias", "noticias", "news")
         markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
         code = ("programar em", "escreva um código", "write code")
-        sports = ("futebol", "jogo", "basquete", "vôlei", "volei", "nba", "fifa", "champions", "copa do mundo")
-        
-        if any(k in q for k in weather):
+        sports = (
+            "futebol",
+            "jogo",
+            "basquete",
+            "vôlei",
+            "volei",
+            "nba",
+            "fifa",
+            "champions",
+            "copa do mundo",
+        )
+
+        # Weather/news/markets are out-of-scope only when there is no strong
+        # e-commerce signal in the same query.
+        if any(k in q for k in weather) and not _has_ecommerce_signals():
             return "weather"
-        if any(k in q for k in news):
+        if any(k in q for k in news) and not _has_ecommerce_signals():
             return "news"
-        if any(k in q for k in markets):
+        if any(k in q for k in markets) and not _has_ecommerce_signals():
             return "financial_markets"
         if any(k in q for k in code):
             return "code_generation"
         if any(k in q for k in sports):
             return "sports_entertainment"
-        
+
         return None
+
+    def _semantic_out_of_scope(self, query: str) -> tuple[bool, str | None]:
+        """Use an LLM to decide whether *query* is out of scope and which topic it matches.
+
+        This helper is intentionally conservative and is used before keyword-based
+        detection. When the LLM backend is unavailable, it falls back to
+        non-semantic behaviour by returning (False, None).
+        """
+        q = (query or "").strip()
+        if not q:
+            return False, None
+
+        try:
+            from app.infra.llm_client import get_llm_client  # local import to avoid cycles
+        except Exception:
+            return False, None
+
+        client = get_llm_client()
+        if not client.is_available():
+            return False, None
+
+        system = (
+            "You are a router that checks if a user question is outside the assistant's scope.\n"
+            "The assistant specializes in e-commerce analytics, knowledge about e-commerce "
+            "processes and concepts, and commerce document processing (invoices, POs, etc.).\n\n"
+            "Your task:\n"
+            "- Decide if the question is clearly about topics the assistant cannot handle directly "
+            "(for example, real-time weather, breaking news, live financial quotes, generic sports).\n"
+            "- If it is out of scope, assign a short topic label.\n\n"
+            "Important rules:\n"
+            "- If the question mixes an out-of-scope topic with a clear e-commerce or business goal "
+            "(for example, 'impact of weather on sales'), treat it as in scope.\n"
+            "- Only mark as out_of_scope when the main intent is outside the assistant capabilities.\n"
+            "- Always return a single JSON object matching the schema."
+        )
+
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "is_out_of_scope": {"type": "boolean"},
+                "topic": {
+                    "type": "string",
+                    "description": "Short topic label such as 'weather', 'news', 'financial_markets', 'sports_entertainment', 'code_generation', or 'other'.",
+                },
+            },
+            "required": ["is_out_of_scope", "topic"],
+            "additionalProperties": False,
+        }
+
+        try:
+            resp = client.chat_completion(
+                messages=[
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Classify the following user question:\n\n"
+                            f"{q}\n\n"
+                            'Return ONLY a JSON object like {"is_out_of_scope": true/false, "topic": "weather|news|financial_markets|sports_entertainment|code_generation|other"}.'
+                        ),
+                    },
+                ],
+                model=getattr(client, "model", "gpt-4o-mini"),
+                temperature=0.0,
+                max_tokens=160,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "OutOfScopeDecision",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                },
+                max_retries=0,
+            )
+            content = (resp.text if resp else "").strip()
+            data = client.extract_json(content, schema=dict(schema))
+            if not isinstance(data, dict):
+                return False, None
+            is_oos = bool(data.get("is_out_of_scope", False))
+            topic_raw = str(data.get("topic") or "").strip()
+            if not is_oos:
+                return False, None
+            topic = topic_raw or "other"
+            return True, topic
+        except Exception:
+            return False, None
 
     def _return_final(self, decision: dict[str, Any]) -> Any:
         """Record metrics and coerce the RouterDecision for return."""

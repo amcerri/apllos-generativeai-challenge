@@ -404,6 +404,24 @@ def _format_markdown(text: str) -> str:
     """Convert basic markdown to HTML for PDF rendering."""
     import re
 
+    # Normalize and remove markdown dividers that can confuse the ReportLab
+    # mini-HTML parser (for example, horizontal rules and table separator rows).
+    # We keep the surrounding content and just drop the visual divider lines.
+    lines = text.splitlines()
+    cleaned_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # Horizontal rules: --- or *** or ___ (with optional surrounding spaces)
+        if re.fullmatch(r"[-*_]{3,}", stripped):
+            cleaned_lines.append("")  # preserve a blank line instead of the rule
+            continue
+        # Markdown table separator rows: | --- | --- |, :---, ---:, :---:
+        if re.fullmatch(r"\|?\s*[:\-]+(\s*\|\s*[:\-]+)*\s*\|?", stripped):
+            cleaned_lines.append("")  # drop table separator, keep header/data rows
+            continue
+        cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines)
+
     # Bold: **text** -> <b>text</b>
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     # Italic: *text* -> <i>text</i> (but not if it's part of **text**)

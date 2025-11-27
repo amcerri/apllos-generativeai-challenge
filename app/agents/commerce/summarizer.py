@@ -319,10 +319,65 @@ def _format_field_value(value: Any, symbol: str = "") -> str:
         return f"{value:,.2f}"
     if isinstance(value, str):
         return value.strip()
-    if isinstance(value, (list, dict)):
-        if len(value) == 0:
+    if isinstance(value, dict):
+        if not value:
             return ""
-        return str(value)
+        # Common address-like structures: render as a single human-friendly line.
+        lower_keys = {str(k).lower(): k for k in value.keys()}
+        addr_keys = {"street", "number", "city", "state", "zip", "zipcode", "zip_code"}
+        if addr_keys.issubset(set(lower_keys.keys())):
+            street = value.get(lower_keys["street"], "")
+            number = value.get(lower_keys["number"], "")
+            city = value.get(lower_keys["city"], "")
+            state = value.get(lower_keys["state"], "")
+            zipcode_key = next(k for k in ("zip", "zipcode", "zip_code") if k in lower_keys)
+            zipcode = value.get(lower_keys[zipcode_key], "")
+            parts = [
+                str(street).strip(),
+                str(number).strip(),
+                f"{city}".strip(),
+                f"{state}".strip(),
+                f"{zipcode}".strip(),
+            ]
+            # Compose as "Rua X, 123 - São Paulo/SP - 01234-567"
+            line_main = ", ".join(p for p in parts[:2] if p)
+            city_state = " / ".join(p for p in parts[2:4] if p)
+            tail = parts[4]
+            segments = [seg for seg in (line_main, city_state, tail) if seg]
+            return " - ".join(segments)
+
+        # Generic dict: "key: value; key2: value2"
+        parts = []
+        for k, v in value.items():
+            if not _has_value(v):
+                continue
+            parts.append(f"{k}: {v}")
+        return "; ".join(parts)
+    if isinstance(value, list):
+        if not value:
+            return ""
+        # List of dicts with description/amount, typical for discounts/taxes.
+        if all(isinstance(item, dict) for item in value):
+            rendered: list[str] = []
+            for item in value:
+                desc = item.get("description") or item.get("label") or ""
+                amt = item.get("amount")
+                if amt is not None and symbol:
+                    amt_text = _fmt_money(amt, symbol)
+                elif amt is not None:
+                    amt_text = f"{amt}"
+                else:
+                    amt_text = ""
+                if desc and amt_text:
+                    rendered.append(f"{desc}: {amt_text}")
+                elif desc:
+                    rendered.append(str(desc))
+                elif amt_text:
+                    rendered.append(amt_text)
+            if rendered:
+                return "; ".join(rendered)
+        # Fallback: simple comma-separated list
+        return ", ".join(str(x) for x in value)
     return str(value)
 
 
