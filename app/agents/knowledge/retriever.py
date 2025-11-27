@@ -179,10 +179,10 @@ class KnowledgeRetriever:
         # Get configuration values with fallbacks
         try:
             retrieval_cfg = getattr(getattr(self._config, "knowledge"), "retrieval")  # type: ignore[attr-defined]
-            default_top_k = int(getattr(retrieval_cfg, "top_k", 5))
+            default_top_k = int(getattr(retrieval_cfg, "top_k", 7))
             default_min_score = float(getattr(retrieval_cfg, "min_score", 0.6))
         except Exception:
-            default_top_k = 5
+            default_top_k = 7
             default_min_score = 0.6
 
         top_k_i = max(1, int(top_k or default_top_k))
