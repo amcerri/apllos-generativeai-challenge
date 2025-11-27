@@ -755,13 +755,15 @@ class LLMClassifier:
                 content = system_path.read_text(encoding="utf-8")
             else:
                 content = (
-                    "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
-                    "Also extract any tables/columns present in the message according to the provided allowlist."
+                    "You are a routing classifier. Classify the user's message into one of: analytics, knowledge, commerce, triage, "
+                    "and extract any tables/columns present in the message according to the provided allowlist. "
+                    "Return ONLY a single JSON object with fields {\"agent\", \"confidence\", \"reason\", \"tables\", \"columns\", \"signals\", \"thread_id\"}."
                 )
         except Exception:
             content = (
-                "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
-                "Also extract any tables/columns present in the message according to the provided allowlist."
+                "You are a routing classifier. Classify the user's message into one of: analytics, knowledge, commerce, triage, "
+                "and extract any tables/columns present in the message according to the provided allowlist. "
+                "Return ONLY a single JSON object with fields {\"agent\", \"confidence\", \"reason\", \"tables\", \"columns\", \"signals\", \"thread_id\"}."
             )
         
         # Inject evidence-based context

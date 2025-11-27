@@ -159,8 +159,10 @@ You will receive evidence about available resources:
 
 ## OUTPUT FORMAT
 
-Return **only** a JSON object:
-```json
+- Return **only** a single JSON object (no Markdown fences, no extra text before or after).
+- Do **not** include ```json or any other code fences in the response.
+
+The JSON object **must** match this shape:
 {
   "agent": "analytics|knowledge|commerce|triage",
   "confidence": 0.0-1.0,
@@ -170,7 +172,6 @@ Return **only** a JSON object:
   "signals": ["signal1", "signal2"],
   "thread_id": null
 }
-```
 
 ## SIGNALS (Evidence-Based)
 

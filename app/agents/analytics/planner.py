@@ -516,12 +516,27 @@ class AnalyticsPlanner:
                 template = f.read()
         except Exception as exc:
             self.log.warning(f"Could not load prompt file {prompt_file}: {exc}")
-            # Minimal fallback prompt
-            template = """You are an Analytics SQL Planner. Generate safe PostgreSQL SELECT queries.
+            # Minimal fallback prompt with explicit JSON contract
+            template = """You are an Analytics SQL Planner. Generate safe PostgreSQL SELECT queries using ONLY allowlisted tables and columns.
+
 ALLOWLIST (JSON)
 <<<ALLOWLIST_JSON>>>
 
-Return JSON with: {"sql": "SELECT ...", "reason": "...", "limit_applied": boolean, "params": {}, "warnings": []}"""
+Your output MUST be a single JSON object (no Markdown, no prose) with the following shape:
+{
+  "sql": "SELECT ...",
+  "params": {},
+  "reason": "short English summary of what the query does",
+  "limit_applied": true | false,
+  "warnings": ["optional_warning_1", "..."]
+}
+
+Rules:
+- SELECT-only (no DDL/DML, no CALL/DO).
+- Never use SELECT *; always enumerate columns.
+- Use ONLY tables/columns present in the allowlist JSON.
+- Add LIMIT ONLY when explicitly requested by the user (e.g. \"top 5\", \"limit 10\").
+- Do NOT add implicit time filters; use all data unless the user specifies a period."""
         
         # Inject allowlist
         allowlist_json = json.dumps(dict(allowlist), indent=2)
