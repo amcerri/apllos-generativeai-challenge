@@ -39,6 +39,7 @@ falls back to a deterministic local hasher (sufficient for tests, not for prod).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -178,10 +179,10 @@ class KnowledgeRetriever:
         # Get configuration values with fallbacks
         try:
             retrieval_cfg = getattr(getattr(self._config, "knowledge"), "retrieval")  # type: ignore[attr-defined]
-            default_top_k = int(getattr(retrieval_cfg, "top_k", 5))
+            default_top_k = int(getattr(retrieval_cfg, "top_k", 7))
             default_min_score = float(getattr(retrieval_cfg, "min_score", 0.6))
         except Exception:
-            default_top_k = 5
+            default_top_k = 7
             default_min_score = 0.6
 
         top_k_i = max(1, int(top_k or default_top_k))
@@ -244,6 +245,29 @@ class KnowledgeRetriever:
                 no_context=(len(hits2) == 0),
             )
 
+    async def retrieve_async(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        min_score: float | None = None,
+        filters: Mapping[str, Any] | None = None,
+    ) -> RetrievalResult:
+        """Asynchronous wrapper for :meth:`retrieve`.
+
+        Executes the synchronous retrieval logic in a worker thread via
+        :func:`asyncio.to_thread`, so that async LangGraph nodes can call the
+        retriever without blocking the event loop.
+        """
+
+        return await asyncio.to_thread(
+            self.retrieve,
+            query,
+            top_k=top_k,
+            min_score=min_score,
+            filters=filters,
+        )
+
 
 # ---------------------------------------------------------------------------
 # DB / Embeddings / Filters helpers
@@ -277,17 +301,43 @@ def _execute(engine: Engine, sql: str, params: Mapping[str, Any]) -> list[dict[s
 
 
 def _embed_query(text: str, *, model: str) -> Sequence[float]:
+    # Check embedding cache first
+    try:
+        from app.infra.cache import EmbeddingCache
+        
+        # Use singleton embedding cache instance
+        if not hasattr(_embed_query, "_embedding_cache"):
+            _embed_query._embedding_cache = EmbeddingCache(ttl_seconds=86400, max_size=5000)  # type: ignore[attr-defined]
+        
+        cache = _embed_query._embedding_cache  # type: ignore[attr-defined]
+        cached = cache.get(text, model)
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
+    
     # Prefer centralized client if available; fallback to local hashing
+    vec: list[float] | None = None
     try:
         from app.infra.llm_client import get_llm_client
         client = get_llm_client()
-        vec = client.get_embeddings(text=text, model=model) if client else None
-        # client.get_embeddings returns list[list[float]]; we need the first vector
-        if vec and isinstance(vec, list):
-            first = vec[0] if (len(vec) > 0 and isinstance(vec[0], list)) else vec
-            return first  # type: ignore[return-value]
+        vec_result = client.get_embeddings(text=text, model=model) if client else None
+        # client.get_embeddings returns list[float]
+        if vec_result and isinstance(vec_result, list):
+            vec = vec_result[0] if (len(vec_result) > 0 and isinstance(vec_result[0], list)) else vec_result  # type: ignore[assignment]
     except Exception:
         pass
+    
+    # Cache and return embedding if available
+    if vec is not None:
+        try:
+            if hasattr(_embed_query, "_embedding_cache"):
+                cache = _embed_query._embedding_cache  # type: ignore[attr-defined]
+                cache.set(text, model, vec)
+        except Exception:
+            pass
+        return vec
+    
     # Deterministic local fallback (bag-of-words hash)
     return _hash_embed(text)
 

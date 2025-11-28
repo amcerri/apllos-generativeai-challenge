@@ -106,7 +106,31 @@ metrics.histogram("request_duration_seconds", {"agent": "analytics"}).observe(1.
 metrics.gauge("active_connections").set(42)
 ```
 
-### 2. Custom Metrics
+### 2. LLM Cost and Token Metrics
+**Purpose**: Track LLM API costs and token usage for cost optimization
+
+**LLM Metrics**:
+- **`llm_cost_usd_total{model}`**: Cumulative LLM API cost in USD, labeled by model
+- **`llm_tokens_total{model,type}`**: Token usage histogram, labeled by model and type (prompt/completion/total)
+
+**Implementation**:
+```python
+from app.infra.metrics import inc_counter, observe_histogram
+
+# Cost tracking (automatically done by LLMClient)
+# Metrics are recorded automatically for all LLM interactions
+
+# Manual token tracking (if needed)
+observe_histogram("llm_tokens_total", value=1000, labels={"model": "gpt-4o-mini", "type": "prompt"})
+observe_histogram("llm_tokens_total", value=500, labels={"model": "gpt-4o-mini", "type": "completion"})
+```
+
+**Cost Calculation**:
+- Costs are calculated based on OpenAI's current pricing per million tokens
+- Supports all OpenAI models (gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-4, gpt-3.5-turbo, embeddings)
+- Costs are tracked per model and aggregated in Prometheus
+
+### 3. Custom Metrics
 **Purpose**: Define custom metrics for business logic
 
 **Custom Metrics**:

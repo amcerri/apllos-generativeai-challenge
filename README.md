@@ -27,6 +27,8 @@ The Apllos Generative AI Challenge Assistant is a multi-agent system designed fo
 ### Key Features
 
 - **Multi-Agent Orchestration**: LLM-based routing with supervisor guardrails
+- **Performance Optimization**: Semantic caching for routing, embeddings, and responses; tool calling for efficient structured outputs
+- **Cost Tracking**: Automatic LLM cost calculation and monitoring with Prometheus metrics
 - **Analytics**: SQL generation with allowlist validation, read-only execution, and data balancing
 - **Knowledge RAG**: Vector-based document retrieval with cross-validation and citations
 - **Document Processing**: Multi-format support (PDF/DOCX/TXT/OCR) with structured extraction
@@ -158,7 +160,7 @@ flowchart TB
 
 - **Planner**: NL → safe SQL (allowlist, no DDL/DML, prefix fix) with Chain-of-Thought reasoning
 - **Executor**: read‑only, timeout, row cap (with GROUP BY heuristic) and window functions support
-- **Normalizer**: LLM-first intelligent data balancing (complete data vs. analytical insights) with configurable thresholds
+- **Normalizer**: Expert-like multi-stage analysis (descriptive, interpretative, actionable insights) with semantic query analysis for intelligent data display decisions and advanced pattern detection (statistical, business, anomalies)
 
 ### Knowledge (RAG)
 

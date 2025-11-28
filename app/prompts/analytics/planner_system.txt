@@ -75,7 +75,13 @@ Heuristics & patterns
 - **Seller queries**: Always JOIN through order_items to access seller_id (orders → order_items → sellers).
 - **Cancellation analysis**: Use `CASE WHEN order_status LIKE '%cancel%' THEN 1 END` instead of assuming exact status values.
 - **Revenue calculations**: Always use SUM(price + freight_value) or similar, never assume zero values are correct.
-- **Temporal queries**: When user mentions "últimos X meses/dias/anos", ALWAYS add WHERE clause with appropriate date filter (e.g., WHERE order_purchase_timestamp >= CURRENT_DATE - INTERVAL 'X months').
+- **Temporal queries**: 
+  - When user mentions "últimos X meses/dias/anos" (last X months/days/years), add WHERE clause with date filter (e.g., WHERE order_purchase_timestamp >= CURRENT_DATE - INTERVAL 'X months').
+  - **CRITICAL**: When user says "últimos X meses/dias/anos em que tivemos vendas/dados" (last X months/days/years in which we had sales/data), this means "the most recent X periods that contain data", NOT "the last X calendar periods". For this case:
+    * Use a subquery or CTE to find the most recent periods with data
+    * Order by timestamp DESC and take the first X distinct periods
+    * Example: "últimos 6 meses em que tivemos vendas" → Get the 6 most recent months that have sales data, not the last 6 calendar months
+    * Use: `WITH recent_periods AS (SELECT DISTINCT date_trunc('month', order_purchase_timestamp) AS period FROM orders ORDER BY period DESC LIMIT 6) SELECT ... FROM orders WHERE date_trunc('month', order_purchase_timestamp) IN (SELECT period FROM recent_periods)`
 - **Frequency analysis**: For "frequência de compra", calculate per-customer metrics using subqueries or window functions, not simple GROUP BY state.
 - **Carrier/Transportadora**: There is NO carrier table. If asked about "transportadora", use seller information as proxy and clarify in warnings.
 - **Percentage analysis**: For "X% da receita" questions, calculate cumulative percentages using window functions or CTEs.

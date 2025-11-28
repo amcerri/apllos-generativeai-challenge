@@ -70,11 +70,12 @@ help: ## Show this help message
 	@echo "  dirs          - Create required directories"
 	@echo ""
 	@echo "DOCKER MANAGEMENT:"
-	@echo "  docker-build  - Build application Docker image"
-	@echo "  docker-stop   - Stop all containers"
-	@echo "  docker-remove - Remove all containers"
-	@echo "  docker-clean  - Remove containers + images + volumes"
-	@echo "  docker-reset  - Complete Docker reset (stop + remove + clean)"
+	@echo "  docker-build        - Build application Docker image"
+	@echo "  docker-stop         - Stop all containers"
+	@echo "  docker-remove       - Remove all containers"
+	@echo "  docker-clean        - Remove containers + images + volumes (uses prune)"
+	@echo "  docker-clean-project - Clean ONLY project-specific resources (safe, no prune)"
+	@echo "  docker-reset        - Complete Docker reset (stop + remove + clean)"
 	@echo ""
 	@echo "DATABASE MANAGEMENT:"
 	@echo "  db-start      - Start PostgreSQL container"
@@ -264,6 +265,80 @@ docker-clean: ## Remove containers + images + volumes
 	@$(DOCKER) volume rm $(PROJECT)_postgres_data 2>/dev/null || true
 	@$(DOCKER) volume prune -f
 	@echo "Docker resources cleaned."
+
+.PHONY: docker-clean-project
+docker-clean-project: ## Clean project-specific Docker resources (containers, images, volumes, builds) without affecting other Docker resources
+	@echo "Cleaning project-specific Docker resources..."
+	@echo "============================================="
+	@echo ""
+	@echo "Step 1: Stopping project containers..."
+	@$(COMPOSE) down 2>/dev/null || true
+	@for container in $$($(DOCKER) ps --format "{{.Names}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai|^apllos-app" || true); do \
+		$(DOCKER) stop "$$container" 2>/dev/null || true; \
+	done
+	@echo "Containers stopped."
+	@echo ""
+	@echo "Step 2: Removing project containers..."
+	@$(COMPOSE) down --remove-orphans 2>/dev/null || true
+	@for container in $$($(DOCKER) ps -a --format "{{.Names}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai|^apllos-app" || true); do \
+		$(DOCKER) rm -f "$$container" 2>/dev/null || true; \
+	done
+	@echo "Containers removed."
+	@echo ""
+	@echo "Step 3: Removing project images..."
+	@removed_images=0; \
+	for img in $$($(DOCKER) images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai|^apllos/app" || true); do \
+		if $(DOCKER) rmi -f "$$img" 2>/dev/null; then \
+			removed_images=$$((removed_images + 1)); \
+			echo "  Removed: $$img"; \
+		fi; \
+	done; \
+	if [ $$removed_images -eq 0 ]; then \
+		echo "  No project images found to remove."; \
+	else \
+		echo "  Removed $$removed_images image(s)."; \
+	fi
+	@echo ""
+	@echo "Step 4: Removing project volumes..."
+	@for vol in $$($(DOCKER) volume ls --format "{{.Name}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai" || true); do \
+		$(DOCKER) volume rm -f "$$vol" 2>/dev/null || true; \
+	done
+	@echo "Volumes removed."
+	@echo ""
+	@echo "Step 5: Removing build cache..."
+	@echo "  (Note: Docker doesn't tag builds by project)"
+	@echo "  Verifying no project images remain before aggressive cleanup..."
+	@remaining_images=$$($(DOCKER) images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai|^apllos/app" | wc -l | tr -d ' '); \
+	if [ "$$remaining_images" = "0" ]; then \
+		echo "  No project images found - performing aggressive build cache cleanup..."; \
+		echo "  Cleaning all builders (including unused builds)..."; \
+		for builder in $$($(DOCKER) buildx ls --format "{{.Name}}" 2>/dev/null | grep -v "^NAME" || echo "default"); do \
+			echo "    Cleaning builder: $$builder"; \
+			$(DOCKER) buildx prune -f --all --builder "$$builder" 2>/dev/null || true; \
+		done; \
+		$(DOCKER) buildx prune -f --all 2>/dev/null || true; \
+		$(DOCKER) builder prune -f --all 2>/dev/null || true; \
+		echo "  Build cache cleaned (aggressive mode)."; \
+	else \
+		echo "  Warning: $$remaining_images project image(s) still exist - using safe cleanup only"; \
+		echo "  Cleaning all builders (unused builds only)..."; \
+		for builder in $$($(DOCKER) buildx ls --format "{{.Name}}" 2>/dev/null | grep -v "^NAME" || echo "default"); do \
+			echo "    Cleaning builder: $$builder"; \
+			$(DOCKER) buildx prune -f --builder "$$builder" 2>/dev/null || true; \
+		done; \
+		$(DOCKER) buildx prune -f 2>/dev/null || true; \
+		$(DOCKER) builder prune -f 2>/dev/null || true; \
+		echo "  Build cache cleaned (safe mode)."; \
+	fi
+	@echo ""
+	@echo "Step 6: Removing project networks..."
+	@for net in $$($(DOCKER) network ls --format "{{.Name}}" 2>/dev/null | grep -E "^$(PROJECT)|^apllos-generativeai" || true); do \
+		$(DOCKER) network rm "$$net" 2>/dev/null || true; \
+	done
+	@echo "Networks removed."
+	@echo ""
+	@echo "✅ Project-specific Docker resources cleaned successfully!"
+	@echo "   (Other Docker resources remain untouched)"
 
 .PHONY: docker-reset
 docker-reset: ## Complete Docker reset (stop + remove + clean)

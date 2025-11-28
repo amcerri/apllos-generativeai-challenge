@@ -59,6 +59,7 @@ api = [
 frontend = [
   "chainlit>=1.0.0",
   "asyncpg>=0.29.0",  # Required by Chainlit's data layer even if not used
+  "reportlab>=4.0.0",  # PDF generation for conversation export
 ]
 dev = [
   "ruff>=0.4.0",

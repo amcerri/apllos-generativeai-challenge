@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -103,15 +103,16 @@ class JSONLLMBackend(Protocol):
 
 
 class OpenAIJSONBackend:
-    """Backend using centralized LLM client with JSON Schema response formatting."""
+    """Backend using centralized LLM client with tool calling (preferred) or JSON Schema fallback."""
 
-    def __init__(self, *, model: str) -> None:
+    def __init__(self, *, model: str, use_tool_calling: bool = True) -> None:
         from app.infra.llm_client import get_llm_client
 
         self._client = get_llm_client()
         if not self._client.is_available():
             raise RuntimeError("LLM client not available")
         self._default_model = model
+        self._use_tool_calling = use_tool_calling
 
     def generate_json(
         self,
@@ -124,11 +125,89 @@ class OpenAIJSONBackend:
         max_output_tokens: int | None = None,
     ) -> Mapping[str, Any]:
         model_name = model or self._default_model
-        resp = self._client.chat_completion(
-            messages=[{"role": "system", "content": system}, *messages],
+
+        # Prefer tool calling for token efficiency
+        if self._use_tool_calling:
+            try:
+                return self._generate_with_tools(
+                    system=system,
+                    messages=messages,
+                    json_schema=json_schema,
+                    model=model_name,
+                    temperature=temperature,
+                    max_tokens=max_output_tokens,
+                )
+            except Exception as exc:
+                # Fallback to JSON Schema if tool calling fails
+                self._log.warning("Tool calling failed, falling back to JSON Schema", extra={"error": str(exc)})
+
+        # Fallback to JSON Schema
+        return self._generate_with_json_schema(
+            system=system,
+            messages=messages,
+            json_schema=json_schema,
             model=model_name,
             temperature=temperature,
             max_tokens=max_output_tokens,
+        )
+
+    def _generate_with_tools(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using tool calling (more token-efficient)."""
+        # Convert JSON schema to tool definition
+        schema_name = str(json_schema.get("title", "RouterDecision"))[:32] or "RouterDecision"
+        tool = {
+            "type": "function",
+            "function": {
+                "name": schema_name,
+                "description": json_schema.get("description", "Generate structured output"),
+                "parameters": json_schema,
+            },
+        }
+
+        resp = self._client.chat_completion_with_tools(
+            messages=[{"role": "system", "content": system}, *messages],
+            tools=[tool],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tool_choice="required",
+            max_retries=0,
+        )
+
+        if not resp or not resp.text:
+            raise RuntimeError("tool calling returned empty response")
+
+        # Parse tool call arguments as JSON
+        data = self._client.extract_json(resp.text, schema=dict(json_schema))
+        if data is None:
+            raise RuntimeError("tool calling returned non-JSON content")
+        return data
+
+    def _generate_with_json_schema(
+        self,
+        *,
+        system: str,
+        messages: list[dict[str, str]],
+        json_schema: Mapping[str, Any],
+        model: str,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Mapping[str, Any]:
+        """Generate JSON using JSON Schema (fallback)."""
+        resp = self._client.chat_completion(
+            messages=[{"role": "system", "content": system}, *messages],
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -144,6 +223,16 @@ class OpenAIJSONBackend:
         if data is None:
             raise RuntimeError("backend returned non-JSON content")
         return data
+
+    @property
+    def _log(self):
+        """Get logger for this backend."""
+        try:
+            from app.infra.logging import get_logger
+            return get_logger(__name__)
+        except Exception:
+            import logging
+            return logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +253,7 @@ class LLMClassifier:
         temperature: float = 0.0,
         max_output_tokens: int | None = 512,
         base_dir: Path | None = None,
+        enable_cache: bool = True,
     ) -> None:
         self.log = get_logger(__name__)
         self.temperature = float(temperature)
@@ -187,6 +277,16 @@ class LLMClassifier:
                     "LLM backend unavailable; falling back to heuristics", exc_info=exc
                 )
                 self._backend = None
+        
+        # Initialize routing cache
+        self._cache = None
+        if enable_cache:
+            try:
+                from app.infra.cache import RoutingCache
+                self._cache = RoutingCache(ttl_seconds=3600, max_size=1000)
+            except Exception as exc:
+                self.log.warning("Routing cache unavailable", exc_info=exc)
+                self._cache = None
 
     # Public API -------------------------------------------------------------
     def classify(
@@ -199,6 +299,9 @@ class LLMClassifier:
         rag_hits: int = 0,
         rag_min_score: float | None = None,
         has_attachment: bool = False,
+        conversation_history: Sequence[dict[str, Any]] | None = None,
+        last_answer: Mapping[str, Any] | None = None,
+        relevant_context: Mapping[str, Any] | None = None,
     ) -> Any:
         """Return a RouterDecision (dataclass or plain dict) for *message*.
 
@@ -207,12 +310,65 @@ class LLMClassifier:
         """
 
         with start_span("routing.classify"):
+            # Check cache first
+            if self._cache:
+                cached = self._cache.get(message, allowlist or {})
+                if cached:
+                    self.log.debug("Using cached routing decision")
+                    cached["thread_id"] = thread_id
+                    return self._return_final(cached)
+            
+            # Detect meta questions before LLM classification
+            meta_type = self._detect_meta_question(message)
+            if meta_type:
+                decision = {
+                    "agent": "triage",
+                    "confidence": 1.0,
+                    "reason": f"meta_question_{meta_type}",
+                    "tables": [],
+                    "columns": [],
+                    "signals": ["meta_question", meta_type],
+                    "thread_id": thread_id,
+                }
+                decision = self._apply_confidence_calibration(decision)
+                if self._cache:
+                    self._cache.set(message, allowlist or {}, decision)
+                return self._return_final(decision)
+            
+            # Detect out-of-scope topics before LLM routing.
+            # Prefer semantic LLM-based detection and fall back to conservative
+            # keyword signals only when necessary.
+            is_oos, oos_topic = self._semantic_out_of_scope(message)
+            if not is_oos:
+                oos_topic = self._detect_out_of_scope(message)
+                is_oos = bool(oos_topic)
+
+            if is_oos:
+                topic_label = oos_topic or "other"
+                decision = {
+                    "agent": "triage",
+                    "confidence": 1.0,
+                    "reason": f"out_of_scope_{topic_label}",
+                    "tables": [],
+                    "columns": [],
+                    "signals": ["out_of_scope", topic_label],
+                    "thread_id": thread_id,
+                }
+                decision = self._apply_confidence_calibration(decision)
+                try:
+                    _inc_counter("router_out_of_scope_total", {"topic": topic_label})
+                except Exception:
+                    pass
+                if self._cache:
+                    self._cache.set(message, allowlist or {}, decision)
+                return self._return_final(decision)
             try:
                 system = self._load_system_prompt(
                     allowlist or {},
                     rag_hits=rag_hits,
                     rag_min_score=rag_min_score,
-                    has_attachment=has_attachment
+                    has_attachment=has_attachment,
+                    relevant_context=relevant_context
                 )
                 schema = _routerdecision_json_schema()
                 if self._backend is None:
@@ -267,6 +423,8 @@ class LLMClassifier:
                             chosen["signals"] = list({*chosen.get("signals", []), "ensemble_majority"})
                             # Apply optional confidence calibration
                             chosen = self._apply_confidence_calibration(chosen)
+                            if self._cache:
+                                self._cache.set(message, allowlist or {}, chosen)
                             return self._return_final(chosen)
 
                         # Tie-breaker using scorer
@@ -275,6 +433,8 @@ class LLMClassifier:
                                 scorer_dec = self._score_agents(message, candidates=[d["decision"] for d in votes])
                                 scorer_dec["signals"] = list({*scorer_dec.get("signals", []), "ensemble_scorer"})
                                 scorer_dec = self._apply_confidence_calibration(scorer_dec)
+                                if self._cache:
+                                    self._cache.set(message, allowlist or {}, scorer_dec)
                                 return self._return_final(scorer_dec)
                             except Exception as _se:
                                 # Conservative fallback: if no majority and scorer failed,
@@ -296,11 +456,15 @@ class LLMClassifier:
                                 if best_conf < (conf_min + 0.05):
                                     tri = {"agent": "triage", "confidence": max(best_conf, conf_min), "reason": "ensemble_tie_low_confidence", "tables": [], "columns": [], "signals": ["ensemble_tie", "low_confidence"], "thread_id": thread_id}
                                     tri = self._apply_confidence_calibration(tri)
+                                    if self._cache:
+                                        self._cache.set(message, allowlist or {}, tri)
                                     return self._return_final(tri)
                                 # otherwise, return first but mark tie
                                 first = dict(votes[0]["decision"])  # copy
                                 first.setdefault("signals", []).append("ensemble_tie")
                                 first = self._apply_confidence_calibration(first)
+                                if self._cache:
+                                    self._cache.set(message, allowlist or {}, first)
                                 return self._return_final(first)
 
                     # If ensemble produced nothing valid, fall back to single-shot below
@@ -326,6 +490,8 @@ class LLMClassifier:
                     decision = _normalize_router_decision(raw, thread_id=thread_id)
                     if self._validate_decision(decision, message):
                         decision = self._apply_confidence_calibration(decision)
+                        if self._cache:
+                            self._cache.set(message, allowlist or {}, decision)
                         return self._return_final(decision)
                     else:
                         self.log.info("LLM decision invalid, using heuristic", extra={"llm_decision": decision})
@@ -336,6 +502,8 @@ class LLMClassifier:
                     self.log.info("LLM failed, using heuristic", extra={"reason": str(llm_exc)})
                     decision = self._heuristic_decide(message, allowlist or {}, thread_id=thread_id, locale=locale)
                     decision = self._apply_confidence_calibration(decision)
+                    if self._cache:
+                        self._cache.set(message, allowlist or {}, decision)
                     return self._return_final(decision)
             except Exception as exc:
                 self.log.info("classifier fallback engaged", extra={"reason": str(exc)})
@@ -343,6 +511,8 @@ class LLMClassifier:
                     message, allowlist or {}, thread_id=thread_id, locale=locale
                 )
             decision = self._apply_confidence_calibration(decision)
+            if self._cache:
+                self._cache.set(message, allowlist or {}, decision)
             return self._return_final(decision)
 
     # ---------------------------------------------------------------------
@@ -427,6 +597,206 @@ class LLMClassifier:
         out["confidence"] = calibrated
         return out
 
+    def _detect_meta_question(self, query: str) -> str | None:
+        """Detect if query is a meta question about system capabilities or usage.
+
+        Parameters
+        ----------
+        query:
+            User query text.
+
+        Returns
+        -------
+        str | None
+            Meta question type ("capabilities" or "usage") or None if not a meta question.
+        """
+        q = (query or "").lower().strip()
+        if not q:
+            return None
+
+        capabilities_patterns = [
+            r'^(quais|o que|what)\s+(são|sao|sua|suas|você|voce|voces|vocês)\s+(funcionalidade|capacidade|pode|consegue|faz)',
+            r'^(quais|o que|what)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+            r'^(como|how)\s+(você|voce|voces|vocês|eu)\s+(pode|consegue|faço|fazer|uso|usar)',
+            r'^(me\s+)?(mostre|mostra|explique|explica|diga|diz)\s+(o\s+)?(que|quais)\s+(você|voce|voces|vocês)\s+(pode|consegue|faz)',
+            r'^(help|ajuda|ajude|socorro)',
+        ]
+
+        for pattern in capabilities_patterns:
+            if re.search(pattern, q, re.IGNORECASE):
+                return "capabilities"
+
+        usage_patterns = [
+            r'^(como|how)\s+(faço|fazer|uso|usar|consulto|consultar|busco|buscar)\s+(pedido|dados|informação|informacao|documento)',
+            r'^(como|how)\s+(faço|fazer|uso|usar)\s+(para|pra)\s+(consultar|buscar|analisar|extrair)',
+            r'^(como|how)\s+(consultar|buscar|analisar|extrair)\s+(pedido|dados|informação|informacao|documento)',
+        ]
+
+        for pattern in usage_patterns:
+            if re.search(pattern, q, re.IGNORECASE):
+                return "usage"
+
+        return None
+
+    def _detect_out_of_scope(self, query: str) -> str | None:
+        """Detect if query is about topics clearly outside system capabilities.
+
+        The detection is conservative and avoids flagging valid e-commerce
+        questions that merely mention out-of-scope terms (for example, climate
+        impact on sales).
+        """
+        q = (query or "").lower().strip()
+        if not q:
+            return None
+
+        # Strong in-scope signals for e-commerce/business questions.
+        ecommerce_terms = (
+            "e-commerce",
+            "ecommerce",
+            "loja virtual",
+            "loja online",
+            "marketplace",
+            "pedido",
+            "pedidos",
+            "carrinho",
+            "checkout",
+            "cliente",
+            "clientes",
+            "entrega",
+            "frete",
+            "venda",
+            "vendas",
+            "faturamento",
+        )
+
+        def _has_ecommerce_signals() -> bool:
+            return any(t in q for t in ecommerce_terms)
+
+        weather = (
+            "previsão do tempo",
+            "previsao do tempo",
+            "meteorologia",
+            "clima",
+            "tempo em ",
+            "temperatura",
+        )
+        news = ("notícias", "noticias", "news")
+        markets = ("bolsa de valores", "ações", "dólar", "euro", "stock", "forex")
+        code = ("programar em", "escreva um código", "write code")
+        sports = (
+            "futebol",
+            "jogo",
+            "basquete",
+            "vôlei",
+            "volei",
+            "nba",
+            "fifa",
+            "champions",
+            "copa do mundo",
+        )
+
+        # Weather/news/markets are out-of-scope only when there is no strong
+        # e-commerce signal in the same query.
+        if any(k in q for k in weather) and not _has_ecommerce_signals():
+            return "weather"
+        if any(k in q for k in news) and not _has_ecommerce_signals():
+            return "news"
+        if any(k in q for k in markets) and not _has_ecommerce_signals():
+            return "financial_markets"
+        if any(k in q for k in code):
+            return "code_generation"
+        if any(k in q for k in sports):
+            return "sports_entertainment"
+
+        return None
+
+    def _semantic_out_of_scope(self, query: str) -> tuple[bool, str | None]:
+        """Use an LLM to decide whether *query* is out of scope and which topic it matches.
+
+        This helper is intentionally conservative and is used before keyword-based
+        detection. When the LLM backend is unavailable, it falls back to
+        non-semantic behaviour by returning (False, None).
+        """
+        q = (query or "").strip()
+        if not q:
+            return False, None
+
+        try:
+            from app.infra.llm_client import get_llm_client  # local import to avoid cycles
+        except Exception:
+            return False, None
+
+        client = get_llm_client()
+        if not client.is_available():
+            return False, None
+
+        system = (
+            "You are a router that checks if a user question is outside the assistant's scope.\n"
+            "The assistant specializes in e-commerce analytics, knowledge about e-commerce "
+            "processes and concepts, and commerce document processing (invoices, POs, etc.).\n\n"
+            "Your task:\n"
+            "- Decide if the question is clearly about topics the assistant cannot handle directly "
+            "(for example, real-time weather, breaking news, live financial quotes, generic sports).\n"
+            "- If it is out of scope, assign a short topic label.\n\n"
+            "Important rules:\n"
+            "- If the question mixes an out-of-scope topic with a clear e-commerce or business goal "
+            "(for example, 'impact of weather on sales'), treat it as in scope.\n"
+            "- Only mark as out_of_scope when the main intent is outside the assistant capabilities.\n"
+            "- Always return a single JSON object matching the schema."
+        )
+
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {
+                "is_out_of_scope": {"type": "boolean"},
+                "topic": {
+                    "type": "string",
+                    "description": "Short topic label such as 'weather', 'news', 'financial_markets', 'sports_entertainment', 'code_generation', or 'other'.",
+                },
+            },
+            "required": ["is_out_of_scope", "topic"],
+            "additionalProperties": False,
+        }
+
+        try:
+            resp = client.chat_completion(
+                messages=[
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Classify the following user question:\n\n"
+                            f"{q}\n\n"
+                            'Return ONLY a JSON object like {"is_out_of_scope": true/false, "topic": "weather|news|financial_markets|sports_entertainment|code_generation|other"}.'
+                        ),
+                    },
+                ],
+                model=getattr(client, "model", "gpt-4o-mini"),
+                temperature=0.0,
+                max_tokens=160,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "OutOfScopeDecision",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                },
+                max_retries=0,
+            )
+            content = (resp.text if resp else "").strip()
+            data = client.extract_json(content, schema=dict(schema))
+            if not isinstance(data, dict):
+                return False, None
+            is_oos = bool(data.get("is_out_of_scope", False))
+            topic_raw = str(data.get("topic") or "").strip()
+            if not is_oos:
+                return False, None
+            topic = topic_raw or "other"
+            return True, topic
+        except Exception:
+            return False, None
+
     def _return_final(self, decision: dict[str, Any]) -> Any:
         """Record metrics and coerce the RouterDecision for return."""
         try:
@@ -449,8 +819,14 @@ class LLMClassifier:
         # should have caught (greetings, meta questions, etc.)
             
         # 2. Document processing MUST go to commerce
+        # Only detect as document processing if verb is used WITH document-related context
         doc_processing_verbs = ["processe", "analise", "extraia", "processar", "analisar", "extrair"]
-        is_doc_processing = any(verb in message_lower for verb in doc_processing_verbs)
+        doc_context_keywords = ["documento", "fatura", "nota fiscal", "pedido", "invoice", "contract", "anexo", "arquivo", "pdf", "docx"]
+        has_doc_verb = any(verb in message_lower for verb in doc_processing_verbs)
+        has_doc_context = any(keyword in message_lower for keyword in doc_context_keywords)
+        # Only consider as document processing if verb AND document context are present
+        # OR if there's an explicit attachment mention
+        is_doc_processing = has_doc_verb and (has_doc_context or "anex" in message_lower or "attach" in message_lower)
         if is_doc_processing and agent != "commerce":
             self.log.warning("LLM misclassified document processing", 
                            extra={"message": message, "agent": agent, "should_be": "commerce"})
@@ -502,7 +878,8 @@ class LLMClassifier:
         allowlist: Mapping[str, Iterable[str]], 
         rag_hits: int = 0,
         rag_min_score: float | None = None,
-        has_attachment: bool = False
+        has_attachment: bool = False,
+        relevant_context: Mapping[str, Any] | None = None
     ) -> str:
         # Try to load from prompts file; fallback to embedded minimal prompt
         try:
@@ -512,13 +889,15 @@ class LLMClassifier:
                 content = system_path.read_text(encoding="utf-8")
             else:
                 content = (
-                    "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
-                    "Also extract any tables/columns present in the message according to the provided allowlist."
+                    "You are a routing classifier. Classify the user's message into one of: analytics, knowledge, commerce, triage, "
+                    "and extract any tables/columns present in the message according to the provided allowlist. "
+                    "Return ONLY a single JSON object with fields {\"agent\", \"confidence\", \"reason\", \"tables\", \"columns\", \"signals\", \"thread_id\"}."
                 )
         except Exception:
             content = (
-                "You are a router. Classify the user's message into one of: analytics, knowledge, commerce, triage. "
-                "Also extract any tables/columns present in the message according to the provided allowlist."
+                "You are a routing classifier. Classify the user's message into one of: analytics, knowledge, commerce, triage, "
+                "and extract any tables/columns present in the message according to the provided allowlist. "
+                "Return ONLY a single JSON object with fields {\"agent\", \"confidence\", \"reason\", \"tables\", \"columns\", \"signals\", \"thread_id\"}."
             )
         
         # Inject evidence-based context
@@ -545,7 +924,31 @@ ATTACHMENT EVIDENCE:
 - Commerce requires file attachment
 """
         
-        injected = content + "\nALLOWLIST_JSON=" + allowlist_json + evidence_context
+        # Add conversation context if available and relevant
+        context_section = ""
+        if relevant_context and relevant_context.get("is_relevant", False):
+            context_summary = relevant_context.get("context_summary", "")
+            context_section = f"""
+
+## CONVERSATION CONTEXT (Validated as Relevant)
+
+{context_summary}
+
+**IMPORTANTE**: Este contexto foi validado como relevante para a query atual.
+Use este contexto para entender referências a mensagens anteriores e manter continuidade.
+Se a query claramente inicia um novo tópico, ignore este contexto e route normalmente.
+"""
+        elif relevant_context and not relevant_context.get("is_relevant", False):
+            context_section = """
+
+## CONVERSATION CONTEXT (Not Relevant - New Topic Detected)
+
+**IMPORTANTE**: A query atual representa uma mudança de tópico ou não está
+relacionada ao histórico recente. Processe esta query isoladamente, sem
+considerar contexto anterior. Route baseado apenas na query atual.
+"""
+        
+        injected = content + "\nALLOWLIST_JSON=" + allowlist_json + evidence_context + context_section
         return injected
 
     def _load_examples(self) -> list[dict[str, str]]:

@@ -4,7 +4,7 @@ This document explains the overall system architecture and how LangGraph orchest
 
 ## High-Level Architecture
 
-The project is built on a multi-agent architecture that combines LLM-first decision making with deterministic fallbacks. The system is designed for high availability, safety, and intelligent routing.
+The project is built on a multi-agent architecture that combines LLM-first decision making with deterministic fallbacks. The system is designed for high availability, safety, intelligent routing, and an end-to-end async I/O model (FastAPI → LangGraph → agents → LLM/DB), using `async/await` and `asyncio.to_thread` to avoid blocking the event loop.
 
 ### Core Components
 
@@ -29,15 +29,17 @@ See project [README.md](../README.md) for a detailed mermaid diagram.
 ## Graph Overview ([app/graph/build.py](../app/graph/build.py))
 
 - Typed `GraphState` with per-key channels for safe fan-out in Studio.
-- Nodes:
-  - `route`: LLM classifier (or heuristic fallback) + allowlist injection.
+- **Conversation Memory**: `GraphState` includes `conversation_history`, `last_agent`, and `last_answer` for context-aware routing and natural follow-up conversations.
+- Nodes (all I/O-bound nodes are exposed as `async def` in the LangGraph definition):
+  - `route`: LLM classifier (or heuristic fallback) + allowlist injection + conversation context integration.
   - `supervisor`: deterministic guardrails; single-pass fallback between analytics/knowledge/triage; commerce guard.
   - Analytics: `analytics.plan` → `analytics.exec` → `analytics.normalize`.
   - Knowledge: `knowledge.retrieve` → `knowledge.rank` → `knowledge.answer`.
   - Commerce: `commerce.process_doc` → `commerce.extract_llm` → `commerce.summarize`.
   - Triage: `triage.handle`.
+  - `update_history`: Updates conversation history after each agent response.
 - Human-in-the-loop: optional SQL approval gate emitted before execution (`make_sql_gate`).
-- Checkpointer: compiled graph optionally uses PostgresSaver; falls back to no-op.
+- Checkpointer: compiled graph optionally uses PostgresSaver; falls back to no-op. Automatically persists conversation history.
 
 ### Routing
 
@@ -70,7 +72,7 @@ See project [README.md](../README.md) for a detailed mermaid diagram.
 
 ## API Layer ([app/api/server.py](../app/api/server.py))
 
-- FastAPI app with `/`, `/health`, `/ready`, `/ok` endpoints; mounts LangGraph server at `/graph`.
+- FastAPI app with `/`, `/health`, `/ready`, `/ok` endpoints (async handlers), and mounts the LangGraph server at `/graph`.
 - Metrics mount at `/metrics` when Prometheus client is available.
 - Graceful fallbacks when optional dependencies are absent.
 
